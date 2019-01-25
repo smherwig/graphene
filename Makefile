@@ -8,6 +8,7 @@ $(targets):
 	$(MAKE) -C Pal $@
 	$(MAKE) -C LibOS $@
 	$(MAKE) -C Runtime $@
+	$(MAKE) -C bearssl-0.6 $@
 
 .PHONY: install
 install:
