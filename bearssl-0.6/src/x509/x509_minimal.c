@@ -200,6 +200,11 @@ void br_x509_minimal_run(void *t0ctx);
  *  then validation is reported as failed.
  */
 
+#if BR_GRAPHENE 
+/* from Pal/src/pal.h */
+unsigned long DkSystemTimeQuery(void);
+
+#else
 #if BR_USE_UNIX_TIME
 #include <time.h>
 #endif
@@ -207,6 +212,7 @@ void br_x509_minimal_run(void *t0ctx);
 #if BR_USE_WIN32_TIME
 #include <windows.h>
 #endif
+#endif /* BR_GRAPHENE */
 
 /*
  * The T0 compiler will produce these prototypes declarations in the
@@ -1400,6 +1406,12 @@ br_x509_minimal_run(void *t0ctx)
 				/* get-system-date */
 
 	if (CTX->days == 0 && CTX->seconds == 0) {
+#if BR_GRAPHENE
+        /* DkSystemTimeQuery returns microsecs since epoch */
+        unsigned long x = DkSystemTimeQuery() / 1000000;
+		T0_PUSH((uint32_t)(x / 86400) + 719528);
+		T0_PUSH((uint32_t)(x % 86400));
+#else
 #if BR_USE_UNIX_TIME
 		time_t x = time(NULL);
 
@@ -1419,6 +1431,7 @@ br_x509_minimal_run(void *t0ctx)
 		CTX->err = BR_ERR_X509_TIME_UNKNOWN;
 		T0_CO();
 #endif
+#endif /* BR_GRAPHENE */
 	} else {
 		T0_PUSH(CTX->days);
 		T0_PUSH(CTX->seconds);

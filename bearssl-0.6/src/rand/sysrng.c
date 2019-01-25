@@ -22,8 +22,26 @@
  * SOFTWARE.
  */
 
+
 #define BR_ENABLE_INTRINSICS   1
 #include "inner.h"
+
+#if BR_GRAPHENE
+/* from shim_utils.h */
+void getrand(void *buffer, size_t size);
+
+static int
+seeder_graphene(const br_prng_class **ctx)
+{
+	unsigned char tmp[32];
+
+    getrand(tmp, sizeof(tmp));
+		
+    (*ctx)->update(ctx, tmp, sizeof(tmp));
+	return 1;
+}
+
+#else
 
 #if BR_USE_URANDOM
 #include <sys/types.h>
@@ -38,7 +56,7 @@
 #pragma comment(lib, "advapi32")
 #endif
 
-#if BR_RDRAND
+#if BR_RDRAND 
 BR_TARGETS_X86_UP
 BR_TARGET("rdrnd")
 static int
@@ -138,11 +156,18 @@ seeder_win32(const br_prng_class **ctx)
 	return 0;
 }
 #endif
+#endif  /* BR_GRAPHENE */
 
 /* see bearssl_rand.h */
 br_prng_seeder
 br_prng_seeder_system(const char **name)
 {
+#if BR_GRAPHENE
+    if (name != NULL) {
+        *name = "graphene";
+    }
+    return &seeder_graphene;
+#else
 #if BR_RDRAND
 	if (rdrand_supported()) {
 		if (name != NULL) {
@@ -166,4 +191,6 @@ br_prng_seeder_system(const char **name)
 		*name = "none";
 	}
 	return 0;
+#endif /* BR_GRAPHENE */
 }
+

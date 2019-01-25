@@ -32,7 +32,8 @@ include mk/Defaults.mk
 P = /
 
 # Default configuration is 'Unix' (native build on a Unix-like system).
-CONF = Unix
+#CONF = Unix
+CONF = Graphene
 
 include conf/$(CONF).mk
 include mk/Rules.mk
