@@ -53,6 +53,8 @@ enum shim_handle_type {
     TYPE_FUTEX,
     TYPE_STR,
     TYPE_EPOLL,
+    TYPE_NEXTFS,
+    TYPE_MDISH,
 };
 
 struct shim_handle;
@@ -321,6 +323,16 @@ struct shim_epoll_handle {
     AEVENTTYPE          event;
 };
 
+struct shim_nextfs_handle {
+    uint32_t    fd;
+};
+
+struct shim_mdish_handle {
+    uint32_t    fd;
+    void        *shm;
+    size_t      shmsize;
+};
+
 struct shim_mount;
 struct shim_qstr;
 struct shim_dentry;
@@ -358,6 +370,8 @@ struct shim_handle {
         struct shim_futex_handle  futex;
         struct shim_str_handle    str;
         struct shim_epoll_handle  epoll;
+        struct shim_nextfs_handle nextfs;
+        struct shim_mdish_handle  mdish;
     } info;
 
     int                 flags;

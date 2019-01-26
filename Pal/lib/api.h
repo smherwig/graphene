@@ -114,6 +114,30 @@ uint16_t __ntohs (uint16_t x);
 
 extern const char * const * sys_errlist_internal;
 
+/*****************************************
+ * SMHERWIG: START FROM MUSLIBC
+ ****************************************/
+
+/* ctypes */
+int islower(int c);
+int isupper(int c);
+int tolower(int c);
+int toupper(int c);
+
+/* string */
+void * memrchr(const void *m, int c, size_t n);
+int strcasecmp(const char *_l, const char *_r);
+char * strdup(const char *s);
+int strncasecmp(const char *_l, const char *_r, size_t n);
+int strncmp(const char *_l, const char *_r, size_t n);
+char *strndup(const char *s, size_t n);
+char *strrchr(const char *s, int c);
+
+/*****************************************
+ * SMHERWIG: END FROM MUSLIBC
+ ****************************************/
+
+
 /* Graphene functions */
 
 int get_norm_path (const char * path, char * buf, int offset, int size);

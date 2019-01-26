@@ -20,7 +20,7 @@ else
 CFLAGS += -I$(target)
 endif
 
-subdirs = string stdlib network graphene util crypto
+subdirs = string stdlib network graphene util crypto ctype
 headers = api.h pal_crypto.h
 
 # Choose Crypto provider among (mbedtls|wolfssl)

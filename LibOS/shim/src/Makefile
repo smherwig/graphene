@@ -13,6 +13,7 @@ CFLAGS	= -Wall -fPIC -std=gnu99 -fgnu89-inline -Winline -Wwrite-strings \
 	  -fmerge-all-constants -Wstrict-prototypes \
 	  -Werror=implicit-function-declaration \
 	  -fno-stack-protector -fno-builtin -Wno-inline \
+	  -I../../../bearssl-0.6/inc \
 	  -I../include -I../../../Pal/lib -I../../../Pal/include/pal
 
 EXTRAFLAGS = -Wextra -Wno-unused-parameter -Wno-sign-compare
@@ -37,7 +38,7 @@ files_to_build = libsysdb.a libsysdb.so libsysdb_debug.so
 files_to_install = $(addprefix $(RUNTIME_DIR)/,$(files_to_build))
 
 defs	= -DIN_SHIM
-fs	= chroot str pipe socket proc dev
+fs	= chroot str pipe socket proc dev nextfs mdish
 ipcns	= pid sysv
 objs	= $(addprefix bookkeep/shim_,handle vma thread signal) \
 	  $(patsubst %.c,%,$(wildcard utils/*.c)) \
@@ -49,9 +50,10 @@ objs	= $(addprefix bookkeep/shim_,handle vma thread signal) \
 	  $(addprefix shim_,init table syscalls checkpoint random malloc \
 	  async parser debug) syscallas start \
 	  $(patsubst %.c,%,$(wildcard sys/*.c))
+bearssl_lib = ../../../bearssl-0.6/build/libbearssl.a
 graphene_lib = .lib/graphene-lib.a
 pal_lib = $(RUNTIME_DIR)/libpal-$(PAL_HOST).so
-headers = ../include/*.h ../../../Pal/lib/*.h ../../../Pal/include/pal/*.h
+headers = ../../../bearssl-0.6/inc/*.h ../include/*.h ../../../Pal/lib/*.h ../../../Pal/include/pal/*.h
 
 all: $(files_to_build) $(files_to_install)
 
@@ -71,14 +73,14 @@ $(files_to_install): $(RUNTIME_DIR)/%: %
 
 ifeq ($(findstring x86_64,$(SYS))$(findstring linux,$(SYS)),x86_64linux)
 libsysdb.so: $(addsuffix .o,$(objs)) $(filter %.map %.lds,$(LDFLAGS)) \
-	     $(graphene_lib) $(pal_lib)
+	     $(bearssl_lib) $(graphene_lib) $(pal_lib)
 	@echo [ $@ ]
 	$(LD) $(LDFLAGS) -o $@ $(filter-out %.map %.lds,$^) -soname $@ \
 		-e shim_start
 
 libsysdb_debug.so: $(addsuffix .o,$(filter-out syscallas,$(objs))) \
 		   $(filter %.map %.lds,$($LDFLAGS-debug)) \
-		   $(graphene_lib) $(pal_lib)
+		   $(bearssl_lib) $(graphene_lib) $(pal_lib)
 	@echo [ $@ ]
 	$(LD) $(LDFLAGS-debug) -o $@ $(filter-out %.map %.lds,$^) -soname $@ \
 		-e shim_start

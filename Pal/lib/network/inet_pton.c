@@ -69,11 +69,6 @@ int inet_pton4 (const char *src, int len, void *dstp)
     return (1);
 }
 
-static int tolower (char c)
-{
-  return c >= 'A' && c < 'Z' ? c + ('a' - 'A') : c;
-}
-
 /* int inet_pton6(src, dst)
  *    convert presentation level address to network order binary form.
  * return:

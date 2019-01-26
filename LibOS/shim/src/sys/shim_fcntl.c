@@ -41,6 +41,7 @@ int shim_do_fcntl (int fd, int cmd, unsigned long arg)
 {
     struct shim_handle_map * handle_map = get_cur_handle_map(NULL);
     int flags;
+    struct flock *flock = NULL;
     int ret = -ENOSYS;
 
     struct shim_handle * hdl = get_fd_handle(fd, &flags, handle_map);
@@ -168,7 +169,12 @@ int shim_do_fcntl (int fd, int cmd, unsigned long arg)
          *   EACCES or EAGAIN.
          */
         case F_SETLK:
-            ret = -ENOSYS;
+            if (hdl->fs && hdl->fs->fs_ops && hdl->fs->fs_ops->advlock) {
+                flock = (struct flock *)arg;
+                ret = hdl->fs->fs_ops->advlock(hdl, cmd, flock);
+            } else {
+                ret = -ENOSYS;
+            }
             break;
 
         /* F_SETLKW (struct flock *)
@@ -179,7 +185,12 @@ int shim_do_fcntl (int fd, int cmd, unsigned long arg)
          *   set to EINTR; see signal(7)).
          */
         case F_SETLKW:
-            ret = -ENOSYS;
+            if (hdl->fs && hdl->fs->fs_ops && hdl->fs->fs_ops->advlock) {
+                flock = (struct flock *)arg;
+                ret = hdl->fs->fs_ops->advlock(hdl, cmd, flock);
+            } else {
+                ret = -ENOSYS;
+            }
             break;
 
         /* F_GETLK (struct flock *)
