@@ -587,17 +587,65 @@ static void parse_open_flags (const char * type, va_list * ap)
         PUTS("|O_APPEND");
         flags &= ~O_APPEND;
     }
+    if (flags & O_CLOEXEC) {
+        PUTS("|O_CLOEXEC");
+        flags &= ~O_CLOEXEC;
+    }
     if (flags & O_CREAT) {
         PUTS("|O_CREAT");
         flags &= ~O_CREAT;
     }
-    if (flags & O_TRUNC) {
-        PUTS("|O_TRUNC");
-        flags &= ~O_TRUNC;
+    if (flags & O_DIRECT) {
+        PUTS("|O_DIRECT");
+        flags &= ~O_DIRECT;
+    }
+    if (flags & O_DIRECTORY) {
+        PUTS("|O_DIRECTORY");
+        flags &= ~O_DIRECTORY;
+    }
+    if (flags & O_DSYNC) {
+        PUTS("|O_DSYNC");
+        flags &= ~O_DSYNC;
     }
     if (flags & O_EXCL) {
         PUTS("|O_EXCL");
         flags &= ~O_EXCL;
+    }
+    if (flags & O_LARGEFILE) {
+        PUTS("|O_LARGEFILE");
+        flags &= ~O_LARGEFILE;
+    }
+    if (flags & O_NOATIME) {
+        PUTS("|O_NOATIME");
+        flags &= ~O_NOATIME;
+    }
+    if (flags & O_NOCTTY) {
+        PUTS("|O_NOCTTY");
+        flags &= ~O_NOCTTY;
+    }
+    if (flags & O_NOFOLLOW) {
+        PUTS("|O_NOFOLLOW");
+        flags &= ~O_NOFOLLOW;
+    }
+    if (flags & O_NONBLOCK) {
+        PUTS("|O_NONBLOCK");
+        flags &= ~O_NONBLOCK;
+    }
+    if (flags & O_PATH) {
+        PUTS("|O_PATH");
+        flags &= ~O_PATH;
+    }
+    if (flags & O_SYNC) {
+        PUTS("|O_SYNC");
+        flags &= ~O_SYNC;
+    }
+    if (flags & O_TMPFILE) {
+        PUTS("|O_TMPFILE");
+        flags &= ~O_TMPFILE;
+    }
+    if (flags & O_TRUNC) {
+        PUTS("|O_TRUNC");
+        flags &= ~O_TRUNC;
     }
 
     if (flags)
@@ -813,7 +861,7 @@ const char *const siglist[NUM_KNOWN_SIGS + 1] =
 
 static void parse_signum (const char * type, va_list * ap)
 {
-    int signum = va_arg(*ap, int);
+    unsigned int signum = va_arg(*ap, unsigned int);
 
     if (signum >= 0 && signum <= NUM_KNOWN_SIGS)
         PUTS(signal_name(signum));
