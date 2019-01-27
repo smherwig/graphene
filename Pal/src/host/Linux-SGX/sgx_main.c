@@ -606,10 +606,20 @@ void getrand (void * buffer, size_t size)
     }
 }
 
+/* SMHERWIG -- hardcoding for now */
+#if 0   
 static void create_instance (struct pal_sec * pal_sec)
 {
     unsigned int id;
     getrand(&id, sizeof(id));
+    snprintf(pal_sec->pipe_prefix, sizeof(pal_sec->pipe_prefix),
+             "/graphene/%x/", id);
+    pal_sec->instance_id = id;
+}
+#endif
+static void create_instance (struct pal_sec * pal_sec)
+{
+    unsigned int id = 0x123456;
     snprintf(pal_sec->pipe_prefix, sizeof(pal_sec->pipe_prefix),
              "/graphene/%x/", id);
     pal_sec->instance_id = id;
