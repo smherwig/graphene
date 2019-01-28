@@ -1246,13 +1246,20 @@ static int chroot_rename (struct shim_dentry * old, struct shim_dentry * new)
     }
 
     new->mode = new_data->mode = old_data->mode;
+
+#if 0
+SMHERWIG: was
     old->mode = NO_MODE;
     old_data->mode = 0;
+#endif
 
     DkObjectClose(pal_hdl);
 
+#if 0
+SMHERWIG: wass
     atomic_inc(&old_data->version);
     atomic_set(&old_data->size, 0);
+#endif
     atomic_inc(&new_data->version);
 
     return 0;

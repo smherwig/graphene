@@ -642,6 +642,15 @@ static int do_rename (struct shim_dentry * old_dent,
     if ((ret = dentry_open(old_hdl, old_dent, O_RDONLY)) < 0)
         goto out_hdl;
 
+    /*  
+     * SMHERWIG - the next line is a hack -- I have to
+     * figure out what a better solution is.  Without this,
+     * the call at the bottom of the function to close_handle(old_hdl)
+     * will trigger a fatal error because close_heandle tries
+     * to decref old_hdl->opened below 0.
+     */
+    REF_INC(old_hdl->opened);
+
     old_opened = true;
 
     if (!(new_hdl = get_new_handle())) {
@@ -651,6 +660,15 @@ static int do_rename (struct shim_dentry * old_dent,
 
     if ((ret = dentry_open(new_hdl, new_dent, O_WRONLY|O_CREAT)) < 0)
         goto out_hdl;
+
+    /*  
+     * SMHERWIG - the next line is a hack -- I have to
+     * figure out what a better solution is.  Without this,
+     * the call at the bottom of the function to close_handle(new_hdl)
+     * will trigger a fatal error because close_heandle tries
+     * to decref new_hdl->opened below 0.
+     */
+    REF_INC(new_hdl->opened);
 
     new_opened = true;
     off_t old_offset = 0, new_offset = 0;
