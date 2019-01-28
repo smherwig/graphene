@@ -56,6 +56,9 @@
 
 #define MAX_EPOLL_FDS       1024
 
+// SMHERWIG
+#define PAL_MAGIC_LAZY_HANDLE   ((void *)0xAABBCCDD)
+
 struct shim_mount epoll_builtin_fs;
 
 /* shim_epoll_fds are linked as a list (by the list field), 
@@ -121,7 +124,13 @@ static void update_epoll (struct shim_epoll_handle * epoll)
               tmp->handle, tmp->pal_handle, epoll);
 
         epoll->pal_fds[npals] = tmp->fd;
+#if 0
+        SMHERWIG: was
         epoll->pal_handles[npals] = tmp->pal_handle;
+#endif
+        // SMHERWIG START
+        epoll->pal_handles[npals] = tmp->handle->pal_handle;
+        // SMHERWIG END
         npals++;
         if (tmp->handle->acc_mode & MAY_READ)
             epoll->nread++;
@@ -202,12 +211,26 @@ int shim_do_epoll_ctl (int epfd, int op, int fd,
                 ret = -EBADF;
                 goto out;
             }
+            // SMHERWIG: was
+#if 0
             if ((hdl->type != TYPE_PIPE && hdl->type != TYPE_SOCK) ||
                 !hdl->pal_handle) {
                 ret = -EPERM;
                 put_handle(hdl);
                 goto out;
             }
+#endif
+            // SMHERWIG START
+            if (hdl->type != TYPE_PIPE && hdl->type != TYPE_SOCK) {
+                ret = -EPERM;
+                put_handle(hdl);
+                goto out;
+            }
+
+            if (hdl->pal_handle == NULL)
+                hdl->pal_handle = PAL_MAGIC_LAZY_HANDLE;
+            // SMHERWIG END
+
             if (epoll->nfds == MAX_EPOLL_FDS) {
                 ret = -ENOSPC;
                 put_handle(hdl);
@@ -287,6 +310,50 @@ out:
     return ret;
 }
 
+/* 
+ * SMHERWIG added 
+ *
+ * This function looks for fd descriptors that have not yet been associated
+ * with a pal_handle because the instantiation of the pal_handle occurs
+ * lazily.  In particular, Graphene's socket(2) implementation does not create
+ * a pal_handle; creation is deferred until the application calls either
+ * bind(2) or connect(2).  The bug this introduces is that an application may
+ * implement a non-blocking connect by first calling socket(2), then adding
+ * the socket to epoll, and then entering the epoll event loop one or more
+ * times to achieve the connection.
+ *
+ * In such cases, instead of setting the pal_handle to NULL, we set it to
+ * PAL_MAGIC_LAZY_HANDLE, which is simply a hard-coded number that is
+ * unlikely to be the address of a real pal_handle.
+ */
+static int
+wait_magic_lazy_handles(struct shim_epoll_handle *epoll,
+        struct __kernel_epoll_event *events, int maxevents)
+{
+    int nevents = 0;
+    struct shim_epoll_fd * epoll_fd = NULL;
+
+    listp_for_each_entry(epoll_fd, &epoll->fds, list) {
+        if (nevents == maxevents)
+            break;
+
+        if (epoll_fd->pal_handle != PAL_MAGIC_LAZY_HANDLE)
+            continue;
+
+        epoll_fd->revents |= (EPOLLIN | EPOLLOUT);
+        if (epoll_fd->events & epoll_fd->revents) {
+            events[nevents].events = epoll_fd->events & epoll_fd->revents;
+            events[nevents].data = epoll_fd->data;
+            nevents++;
+            // SMHERWIG -- what is the purpose of this line?
+            epoll_fd->revents &= ~epoll_fd->events;
+        }
+    }
+
+    return (nevents);
+}
+
+
 int shim_do_epoll_wait (int epfd, struct __kernel_epoll_event * events,
                         int maxevents, int timeout)
 {
@@ -307,6 +374,19 @@ int shim_do_epoll_wait (int epfd, struct __kernel_epoll_event * events,
 
     lock(epoll_hdl->lock);
 retry:
+
+    /* SMHERWIG start 
+     * 
+     * The call to update_epoll is need to update epoll's lists of handles,
+     * since between calls to epoll_wait(2), the lazy pal_handle may have
+     * been instantiated.
+     */
+    update_epoll(epoll);
+    nevents = wait_magic_lazy_handles(epoll, events, maxevents);
+    if (nevents > 0)
+        goto done;
+    /* SMHERWIG end */
+
     if (!(npals = epoll->npals))
         goto reply;
 
@@ -372,6 +452,7 @@ reply:
                     (epoll_fd->events|EPOLLERR|EPOLLHUP) & epoll_fd->revents;
             events[nevents].data = epoll_fd->data;
             nevents++;
+            // SMHERWIG -- what is the purpose of this line?
             epoll_fd->revents &= ~epoll_fd->events;
         }
 
@@ -380,6 +461,7 @@ reply:
     if (need_update)
         update_epoll(epoll);
 
+done:   // SMHERWIG -- added 'done' label.
     unlock(epoll_hdl->lock);
     ret = nevents;
     put_handle(epoll_hdl);
