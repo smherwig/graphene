@@ -36,8 +36,8 @@
 #include <rho_log.h>
 #include <rho_mem.h>
 #include <rho_shim_dentry.h>
-#include <rho_ssl.h>
 #include <rho_sock.h>
+#include <rho_ssl.h>
 
 #define URI_MAX_SIZE    STR_SIZE
 
@@ -104,12 +104,6 @@
 #define NEXTFS_OP_NEW_FDTABLE           42
 
 
-#if 0
-struct nextfs_mount_data {
-    PAL_HANDLE  palh;
-};
-#endif
-
 struct nextfs_mount_data {
     char    url[512];       /* URL for server */
     uint64_t ident;     /* auth cookie for child */
@@ -120,10 +114,6 @@ struct nextfs_client {
     struct rho_buf *buf;
     char *url;      /* URL for server */
 };
-
-#if 0
-static const char * nextfs_openflags_to_str(int flags);
-#endif
 
 static void nextfs_marshal_str(struct rho_buf *buf, const char *s);
 static void nextfs_pmarshal_hdr(struct rho_buf *buf, uint32_t op,
@@ -196,43 +186,6 @@ nextfs_mount_data_print(const struct nextfs_mount_data *mdata)
             mdata->url, (unsigned long long)mdata->ident);
 }
 
-
-#if 0
-/*
- * A slighty awkward conversion; we want the
- * following mapping, but are looser in what we
- * accept:
- *
- * O_RDONLY                     -> r
- * O_WRONLY|O_CREAT|O_TRUNC     -> w
- * O_WRONLY|O_CREAT|O_APPEND    -> a
- * O_RDWR                       -> r+
- * O_RDWR|O_CREAT|O_TRUNC       -> w+
- * O_RDWR|O_CREAT|O_APPEND      -> a+
- */
-static const char *
-nextfs_openflags_to_str(int flags)
-{
-    debug("nextfs_openflags_to_str(flags=%d)\n", flags);
-
-    if (flags & O_WRONLY) {
-        if (flags & O_APPEND)
-            return "a";
-        else
-            return "w";
-    } else if (flags & O_RDWR) {
-        if (flags & O_APPEND)
-            return "a+";
-        else if (flags & O_TRUNC)
-            return "w+";
-        else
-            return "r+";
-    } else {
-        return "r";
-    }
-}
-#endif
-
 static void
 nextfs_marshal_str(struct rho_buf *buf, const char *s)
 {
@@ -259,37 +212,30 @@ static struct nextfs_client *
 nextfs_client_open(const char *url)
 {
     struct nextfs_client *client = NULL;
-#if 0
     struct rho_ssl_params *params = NULL;
     struct rho_ssl_ctx *ctx = NULL;
-#endif
+    char cafile[CONFIG_MAX] = { 0 };
+    ssize_t len = 0;
 
     debug("> nextfs_client_open(url=%s)\n", url);
-    debug("> DH_SIZE=%d\n", DH_SIZE);
 
     client = rhoL_zalloc(sizeof(*client));
     client->buf = rho_buf_create();
     client->url = rhoL_strdup(url);
     client->sock = rho_sock_open_url(url);
 
-#if 0
-    /* TODO: ssl wrap  */
-    params = rho_ssl_params_create();
-    rho_ssl_params_set_mode(params, RHO_SSL_MODE_CLIENT);
-    rho_ssl_params_set_protocol(params, RHO_SSL_PROTOCOL_TLSv1_2);
-
-    debug("rho_ssl_params_set_ca_file\n");
-    rho_ssl_params_set_ca_file(params, "/etc/root.crt");
-
-    debug("rho_ssl_ctx_create\n");
-    ctx = rho_ssl_ctx_create(params);
-
-    debug("rho_ssl_wrap\n");
-    rho_ssl_wrap(client->sock, ctx);
-
-    debug("rho_ssl_params_destroy\n");
-    //rho_ssl_params_destroy(params);
-#endif
+    len = get_config(root_config, "phoenix.cafile", cafile, sizeof(cafile));
+    if (len > 0) {
+        debug("nextfs client using TLS; cafile=\"%s\"\n", cafile);
+        params = rho_ssl_params_create();
+        rho_ssl_params_set_mode(params, RHO_SSL_MODE_CLIENT);
+        rho_ssl_params_set_protocol(params, RHO_SSL_PROTOCOL_TLSv1_2);
+        //rho_ssl_params_set_ca_file(params, "/etc/root.crt");
+        rho_ssl_params_set_ca_file(params, cafile);
+        ctx = rho_ssl_ctx_create(params);
+        rho_ssl_wrap(client->sock, ctx);
+        //rho_ssl_params_destroy(params);
+    }
 
     debug("< nextfs_client_open\n");
     return (client);
@@ -359,35 +305,6 @@ done:
     debug("< nextfs_client_request\n");
     return (error);
 }
-
-/************************/
-
-#if 0
-static int
-nextfs_mount(const char *uri, const char *root, void **mount_data)
-{
-    int error = 0;
-    struct nextfs_mount_data *data = NULL;
-    PAL_HANDLE palh = NULL;
-
-    debug("> nextfs_mount(uri=%s, root=%s, mount_data=*)\n", uri, root);
-
-    palh = DkStreamOpen("pipe:84", 0, 0, 0, 0);
-    if (palh == NULL) {
-        debug("opening unix domain socket returned NULL\n");
-        error = -EINVAL;
-        goto fail;
-    }
-
-    data = malloc(sizeof(*data));
-    data->palh = palh;
-    *mount_data = data;
-
-fail:
-    debug("< nextfs_mount\n");
-    return (error);
-}
-#endif
 
 /********************************* 
  * FILE/FILESYSTEM OPERATIONS
@@ -1002,7 +919,8 @@ done:
     return (sizeof(struct nextfs_mount_data));
 }
 
-/* POSTPONE: NEED
+/* 
+ * POSTPONE: NEED
  *
  * Not clear to be the memory management for this function:
  * should the parent's g_client be free'd.  Should hte

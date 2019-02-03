@@ -35,6 +35,7 @@
 #include <rho_queue.h>
 #include <rho_shim_dentry.h>
 #include <rho_sock.h>
+#include <rho_ssl.h>
 #include <rho_str.h>
 
 #define URI_MAX_SIZE    STR_SIZE
@@ -64,12 +65,6 @@
 
 #define MDISH_LOCKOP_LOCK       1
 #define MDISH_LOCKOP_UNLOCK     2
-
-#if 0
-struct mdish_mount_data {
-    PAL_HANDLE  palh;
-};
-#endif
 
 struct mdish_segment {
     char name[MDISH_MAX_NAME_LENGTH + 1];
@@ -264,7 +259,6 @@ done:
     return (seg);
 }
 
-
 /********************************* 
  * SEGMENT
  *********************************/
@@ -353,6 +347,10 @@ static struct mdish_client *
 mdish_client_open(const char *url)
 {
     struct mdish_client *client = NULL;
+    struct rho_ssl_params *params = NULL;
+    struct rho_ssl_ctx *ctx = NULL;
+    char cafile[CONFIG_MAX] = { 0 };
+    ssize_t len = 0;
 
     debug("> mdish_client_open(url=%s)\n", url);
 
@@ -360,6 +358,19 @@ mdish_client_open(const char *url)
     client->buf = rho_buf_create();
     client->url = rhoL_strdup(url);
     client->sock = rho_sock_open_url(url);
+
+    len = get_config(root_config, "phoenix.cafile", cafile, sizeof(cafile));
+    if (len > 0) {
+        debug("mdish client using TLS; cafile=\"%s\"\n", cafile);
+        params = rho_ssl_params_create();
+        rho_ssl_params_set_mode(params, RHO_SSL_MODE_CLIENT);
+        rho_ssl_params_set_protocol(params, RHO_SSL_PROTOCOL_TLSv1_2);
+        //rho_ssl_params_set_ca_file(params, "/etc/root.crt");
+        rho_ssl_params_set_ca_file(params, cafile);
+        ctx = rho_ssl_ctx_create(params);
+        rho_ssl_wrap(client->sock, ctx);
+        //rho_ssl_params_destroy(params);
+    }
 
     debug("< mdish_client_open\n");
     return (client);
@@ -435,35 +446,6 @@ done:
     debug("< mdish_client_request\n");
     return (error);
 }
-
-/************************/
-
-#if 0
-static int
-mdish_mount(const char *uri, const char *root, void **mount_data)
-{
-    int error = 0;
-    struct mdish_mount_data *data = NULL;
-    PAL_HANDLE palh = NULL;
-
-    debug("> mdish_mount(uri=%s, root=%s, mount_data=*)\n", uri, root);
-
-    palh = DkStreamOpen("pipe:84", 0, 0, 0, 0);
-    if (palh == NULL) {
-        debug("opening unix domain socket returned NULL\n");
-        error = -EINVAL;
-        goto fail;
-    }
-
-    data = malloc(sizeof(*data));
-    data->palh = palh;
-    *mount_data = data;
-
-fail:
-    debug("< mdish_mount\n");
-    return (error);
-}
-#endif
 
 /********************************* 
  * FILE/FILESYSTEM OPERATIONS
