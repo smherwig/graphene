@@ -129,8 +129,6 @@ tnt_client_create(const char *url, unsigned char *rsa_n, size_t rsa_n_len,
 {
     struct tnt_client *client = NULL;
 
-    debug("> tnt_client_create(url=\"%s\")\n", url);
-
     client = rhoL_zalloc(sizeof(*client));
     client->buf = rho_buf_create();
     client->sock = rho_sock_open_url(url);
@@ -258,7 +256,8 @@ tnt_client_request(struct tnt_client *client)
     uint8_t sig[TNT_SIG_LEN] = { 0 };
 
     nonce = rho_rand_u64();
-    debug("timeclient nonce=%llu\n", (unsigned long long)nonce);
+
+    debug("requesting time server\n");
     
     rho_buf_clear(buf);
     rho_buf_writeu64be(buf, nonce);
@@ -273,19 +272,14 @@ tnt_client_request(struct tnt_client *client)
     if (n <= 0)
         goto done;
 
-    debug("timeserver response is %ld bytes\n", (long)n);
     rho_buf_rewind(buf);
 
     /* header */
     rho_buf_readu32be(buf, &status);
     rho_buf_readu32be(buf, &bodylen);
 
-    debug("timeserver status=%u, bodylen=%u\n", (unsigned)status,
-            (unsigned)bodylen);
-
     /* body */
     rho_buf_readu64be(buf, &nonce_resp);
-    debug("timeserver nonce=%llu\n", (unsigned long long)nonce_resp);
     rho_buf_readu64be(buf, &sec);
     rho_buf_readu32be(buf, &usec);
 
@@ -294,7 +288,6 @@ tnt_client_request(struct tnt_client *client)
 
     /* signature */
     rho_buf_readu32be(buf, &sigsize);
-    debug("timeserver sigsize=%u\n", (unsigned)sigsize);
     rho_buf_read(buf, sig, sigsize);
 
     if (nonce != nonce_resp)
