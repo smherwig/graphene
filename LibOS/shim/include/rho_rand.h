@@ -12,12 +12,14 @@
 
 RHO_DECLS_BEGIN
 
-void rho_rand_randombytes(uint8_t *buf, size_t size);
+void rho_rand_bytes(uint8_t *buf, size_t size);
 
-uint8_t rho_rand_uint8(void);
-uint16_t rho_rand_uint16(void);
-uint32_t rho_rand_uint32(void);
-uint64_t rho_rand_uint64(void);
+uint8_t rho_rand_u8(void);
+uint16_t rho_rand_u16(void);
+uint32_t rho_rand_u32(void);
+uint64_t rho_rand_u64(void);
+
+uint32_t rho_rand_uniform_u32(uint32_t a, uint32_t b);
 
 RHO_DECLS_END
 
