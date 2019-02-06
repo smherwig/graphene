@@ -16,15 +16,19 @@ void
 rho_ssl_params_destroy(struct rho_ssl_params *params)
 {
     params->refcnt--;
-    if (params->refcnt == 0) {
-        if (params->key_file != NULL)
-            rhoL_free(params->key_file);
-        if (params->cert_file != NULL)
-            rhoL_free(params->cert_file);
-        if (params->ca_file != NULL)
-            rhoL_free(params->ca_file);
-        rhoL_free(params);
-    }
+    if (params->refcnt != 0)
+        return;
+   
+    if (params->key_file != NULL)
+        rhoL_free(params->key_file);
+    if (params->cert_file != NULL)
+        rhoL_free(params->cert_file);
+    if (params->ca_file != NULL)
+        rhoL_free(params->ca_file);
+    if (params->ca_der != NULL)
+        rhoL_free(params->ca_der);
+        
+    rhoL_free(params);
 }
 
 void
@@ -64,6 +68,14 @@ void
 rho_ssl_params_set_ca_file(struct rho_ssl_params *params, const char *path)
 {
     params->ca_file = rhoL_strdup(path);
+}
+
+void
+rho_ssl_params_set_ca_der(struct rho_ssl_params *params, unsigned char *ca_der,
+        size_t ca_der_len)
+{
+    params->ca_der = rhoL_memdup(ca_der, ca_der_len);
+    params->ca_der_len = ca_der_len;
 }
 
 void

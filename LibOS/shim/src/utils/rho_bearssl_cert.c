@@ -13,14 +13,13 @@
 #include <rho_bearssl_common.h>
 #include <rho_bearssl_pem.h>
 
-
 /*
- * Get the certificate(s) from a file. This accepts both a single
+ * Get the certificate(s) from a buffer. This accepts both a single
  * DER-encoded certificate, and a text file that contains
  * PEM-encoded certificates (and possibly other objects, which are
  * then ignored).
  *
- * On decoding error, or if the file turns out to contain no certificate
+ * On decoding error, or if the buffer turns out to contain no certificate
  * at all, then an error message is printed and NULL is returned.
  *
  * The returned array, and all referenced buffers, are allocated with
@@ -30,28 +29,15 @@
  * is written into '*num'.
  */
 br_x509_certificate *
-rho_bearssl_certs_from_file(const char *fname, size_t *num)
+rho_bearssl_certs_from_cbuf(unsigned char *buf, size_t len, size_t *num)
 {
 	RHO_VECTOR(,br_x509_certificate) cert_list = RHO_VECTOR_INIT;
-	unsigned char *buf;
-	size_t len;
 	struct rho_pem *pos;
 	size_t u, num_pos;
 	br_x509_certificate *xcs;
 	br_x509_certificate dummy;
 
 	*num = 0;
-
-	/*
-	 * TODO: reading the whole file is crude; we could parse them
-	 * in a streamed fashion. But it does not matter much in practice.
-	 */
-    debug("rho_file_readall\n");
-    if (rho_file_readall(fname, &buf, &len) == -1) {
-        debug("rho_file_readall failed\n");
-		return NULL;
-    }
-    debug("rho_file_readall succeeded, len=%lu\n", (unsigned long)len);
     rho_hexdump(buf, len, "root.crt");
 
 	/*
@@ -95,7 +81,7 @@ rho_bearssl_certs_from_file(const char *fname, size_t *num)
 	rhoL_free(pos);
 
 	if (RHO_VECTOR_LEN(cert_list) == 0) {
-        rho_warn("ERROR: no certificate in file '%s'\n", fname);
+        rho_warn("ERROR: no certificate found in cbuf\n");
 		return NULL;
 	}
 	*num = RHO_VECTOR_LEN(cert_list);
@@ -104,7 +90,43 @@ rho_bearssl_certs_from_file(const char *fname, size_t *num)
 	RHO_VECTOR_ADD(cert_list, dummy);
 	xcs = RHO_VECTOR_TOARRAY(cert_list);
 	RHO_VECTOR_CLEAR(cert_list);
-	return xcs;
+	return (xcs);
+}
+
+/*
+ * Get the certificate(s) from a file. This accepts both a single
+ * DER-encoded certificate, and a text file that contains
+ * PEM-encoded certificates (and possibly other objects, which are
+ * then ignored).
+ *
+ * On decoding error, or if the file turns out to contain no certificate
+ * at all, then an error message is printed and NULL is returned.
+ *
+ * The returned array, and all referenced buffers, are allocated with
+ * xmalloc() and must be released by the caller. The returned array
+ * ends with a dummy entry whose 'data' field is NULL.
+ * The number of decoded certificates (not counting the dummy entry)
+ * is written into '*num'.
+ */
+br_x509_certificate *
+rho_bearssl_certs_from_file(const char *fname, size_t *num)
+{
+	unsigned char *buf;
+	size_t len;
+	br_x509_certificate *xcs;
+
+	/*
+	 * TODO: reading the whole file is crude; we could parse them
+	 * in a streamed fashion. But it does not matter much in practice.
+	 */
+    debug("rho_file_readall\n");
+    if (rho_file_readall(fname, &buf, &len) == -1) {
+        debug("rho_file_readall failed\n");
+		return NULL;
+    }
+    debug("rho_file_readall succeeded, len=%lu\n", (unsigned long)len);
+    xcs = rho_bearssl_certs_from_cbuf(buf, len, num);
+	return (xcs);
 }
 
 /*

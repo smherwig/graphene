@@ -14,6 +14,9 @@ RHO_DECLS_BEGIN
 /* Type for a vector of trust anchors (aka CAs) */
 RHO_VECTOR(rho_bearssl_ta_list, br_x509_trust_anchor);
 
+size_t rho_bearssl_ta_list_from_cbuf(struct rho_bearssl_ta_list *dst,
+        unsigned char *buf, size_t len);
+
 size_t rho_bearssl_ta_list_from_file(struct rho_bearssl_ta_list *dst,
         const char *fname);
 

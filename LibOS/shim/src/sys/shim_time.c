@@ -35,6 +35,7 @@
 
 #include <bearssl.h>
 
+#include <rho_binascii.h>
 #include <rho_buf.h>
 #include <rho_crypto.h>
 #include <rho_log.h>
@@ -69,8 +70,6 @@ struct tnt_client {
     uint32_t rate;        /* the % of times to get time from timeserver */ 
 };
 
-static size_t hextobin(unsigned char *dst, const char *src);
-
 static struct tnt_client * tnt_client_create(const char *url,
         unsigned char *rsa_n, size_t rsa_n_len, unsigned char *rsa_e,
         size_t rsa_e_len, uint32_t rate);
@@ -91,37 +90,6 @@ static long get_time_usec(void);
 static bool did_read_config = false;
 static struct tnt_client *g_tnt_client = NULL;
 
-static size_t
-hextobin(unsigned char *dst, const char *src)
-{
-    size_t num; 
-    unsigned acc; 
-    int z;
-
-    num = 0; 
-    z = 0; 
-    acc = 0; 
-    while (*src != 0) { 
-        int c = *src ++;
-        if (c >= '0' && c <= '9') {
-            c -= '0'; 
-        } else if (c >= 'A' && c <= 'F') {
-            c -= ('A' - 10); 
-        } else if (c >= 'a' && c <= 'f') {
-            c -= ('a' - 10); 
-        } else {
-            continue;
-        }
-        if (z) {
-            *dst ++ = (acc << 4) + c; 
-            num ++;
-        } else {
-            acc = c; 
-        }
-        z = !z;
-    }    
-    return num; 
-}
 
 static struct tnt_client *
 tnt_client_create(const char *url, unsigned char *rsa_n, size_t rsa_n_len,
@@ -162,13 +130,13 @@ tnt_client_from_config(void)
     len = get_config(root_config, "timeserver.rsa_n", cfgval, sizeof(cfgval));
     if (len <= 0)
         goto done;
-    rsa_n_len = hextobin(rsa_n, cfgval);
+    rsa_n_len = rho_binascii_hex2bin(rsa_n, cfgval);
 
     rho_memzero(cfgval, sizeof(cfgval));
     len = get_config(root_config, "timeserver.rsa_e", cfgval, sizeof(cfgval));
     if (len <= 0)
         goto done;
-    rsa_e_len = hextobin(rsa_e, cfgval);
+    rsa_e_len = rho_binascii_hex2bin(rsa_e, cfgval);
 
     rho_memzero(cfgval, sizeof(cfgval));
     len = get_config(root_config, "timeserver.rate", cfgval, sizeof(cfgval));

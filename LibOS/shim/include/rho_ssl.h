@@ -40,6 +40,8 @@ struct rho_ssl_params {
     char *key_file;
     char *cert_file;
     char *ca_file;
+    unsigned char *ca_der;
+    size_t ca_der_len;
     bool verify;
     int refcnt;
 };
@@ -71,6 +73,9 @@ void rho_ssl_params_set_certificate_file(struct rho_ssl_params *params,
 
 void rho_ssl_params_set_ca_file(struct rho_ssl_params *params,
         const char *path);
+
+void rho_ssl_params_set_ca_der(struct rho_ssl_params *params,
+        unsigned char *ca_der, size_t ca_der_len);
 
 void rho_ssl_params_set_verify(struct rho_ssl_params *params, bool verify);
 

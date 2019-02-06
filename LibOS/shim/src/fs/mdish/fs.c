@@ -29,10 +29,12 @@
 #include <inttypes.h>
 #include <string.h>
 
+#include <rho_binascii.h>
 #include <rho_buf.h>
 #include <rho_log.h>
 #include <rho_mem.h>
 #include <rho_queue.h>
+#include <rho_rand.h>
 #include <rho_shim_dentry.h>
 #include <rho_sock.h>
 #include <rho_ssl.h>
@@ -66,6 +68,13 @@
 #define MDISH_LOCKOP_LOCK       1
 #define MDISH_LOCKOP_UNLOCK     2
 
+struct mdish_client {
+    struct rho_sock *sock;
+    struct rho_buf *buf;
+    char *url;      /* URL for server */
+    uint32_t    debug_cookie;
+};
+
 struct mdish_segment {
     char name[MDISH_MAX_NAME_LENGTH + 1];
     void *addr;
@@ -80,25 +89,24 @@ struct mdish_segment {
  * would require additional work to reconstitute during
  * migration/fork.
  */
-struct mdish_mount_data {
-    char    url[512];           /* URL for server */
+struct mdish_mdata {
+    char url[512];           /* URL for server */
     uint64_t ident;             /* auth cookie for child */
+    unsigned char ca_der[4096];
+    size_t  ca_der_len;
     uint32_t segments_bitmap;
     struct mdish_segment segments[32];
+    struct mdish_client *client;
 };
 
-struct mdish_client {
-    struct rho_sock *sock;
-    struct rho_buf *buf;
-    char *url;      /* URL for server */
-};
 
-static struct mdish_mount_data * mdish_mount_data_create(const char *uri);
-static void mdish_mount_data_print(const struct mdish_mount_data *mdata);
-static struct mdish_segment * mdish_mount_data_new_segment(
-        struct mdish_mount_data *mdata, const char *name);
-static struct mdish_segment * mdish_mount_data_segment_by_name(
-        struct mdish_mount_data *mdata, const char *name);
+static struct mdish_mdata * mdish_mdata_create(const char *uri,
+        unsigned char *ca_der, size_t ca_der_len);
+static void mdish_mdata_print(const struct mdish_mdata *mdata);
+static struct mdish_segment * mdish_mdata_new_segment(
+        struct mdish_mdata *mdata, const char *name);
+static struct mdish_segment * mdish_mdata_segment_by_name(
+        struct mdish_mdata *mdata, const char *name);
 
 static int mdish_segment_initialize(struct mdish_segment *seg, void **addr,
         size_t size);
@@ -111,7 +119,9 @@ static void mdish_pmarshal_hdr(struct rho_buf *buf, uint32_t op,
 static void mdish_demarshal_hdr(struct rho_buf *buf, uint32_t *status,
         uint32_t *bodylen);
 
-static struct mdish_client * mdish_client_open(const char *url);
+static struct mdish_client * mdish_client_open(const char *url,
+        unsigned char *ca_der, size_t ca_der_len);
+
 static void mdish_client_close(struct mdish_client *client);
 static int mdish_client_request(struct mdish_client *client,
         uint32_t *status, uint32_t *bodylen);
@@ -163,9 +173,6 @@ static int mdish_rename(struct shim_dentry *old, struct shim_dentry *new);
 static int mdish_readdir(struct shim_dentry *dent,
         struct shim_dirent **dirent);
 
-static struct mdish_client *g_client = NULL;
-static struct mdish_mount_data *g_mount_data = NULL;
-
 /********************************* 
  * SEGMENTS BITMAP
  *********************************/
@@ -200,32 +207,37 @@ mdish_segments_bitmap_ffc(uint32_t bitmap)
 /********************************* 
  * MOUNT DATA
  *********************************/
-static struct mdish_mount_data *
-mdish_mount_data_create(const char *uri)
+static struct mdish_mdata *
+mdish_mdata_create(const char *uri, unsigned char *ca_der,
+        size_t ca_der_len)
 {
-    struct mdish_mount_data *mdata = NULL;
+    struct mdish_mdata *mdata = NULL;
     
-    debug("> mdish_mount_data_create\n");
+    debug("> mdish_mdata_create\n");
 
-    mdata = rhoL_zalloc(sizeof(struct mdish_mount_data));
+    mdata = rhoL_zalloc(sizeof(struct mdish_mdata));
     memcpy(mdata->url, uri, strlen(uri));
+    if (ca_der != NULL) {
+        memcpy(mdata->ca_der, ca_der, ca_der_len);
+        mdata->ca_der_len = ca_der_len;
+    }
 
-    debug("< mdish_mount_data_create\n");
+    debug("< mdish_mdata_create\n");
     return (mdata);
 }
 
 static void
-mdish_mount_data_print(const struct mdish_mount_data *mdata)
+mdish_mdata_print(const struct mdish_mdata *mdata)
 {
-    debug("mdish_mount_data = {url: %s, ident:%llu}\n",
-            mdata->url, (unsigned long long)mdata->ident);
+    debug("mdish_mdata = {url: %s, ident:%llu, ca_der[0]:%02x, ca_der_len:%u}\n",
+            mdata->url, (unsigned long long)mdata->ident, mdata->ca_der[0],
+            mdata->ca_der_len);
 }
 
 /* TODO: for munmap, need mdish_mount_dat_segment_by_addr() */
 
 static struct mdish_segment *
-mdish_mount_data_new_segment(struct mdish_mount_data *mdata,
-        const char *name)
+mdish_mdata_new_segment(struct mdish_mdata *mdata, const char *name)
 {
     int i = 0;
     struct mdish_segment *seg = NULL;
@@ -239,7 +251,7 @@ mdish_mount_data_new_segment(struct mdish_mount_data *mdata,
 }
 
 static struct mdish_segment *
-mdish_mount_data_segment_by_name(struct mdish_mount_data *mdata,
+mdish_mdata_segment_by_name(struct mdish_mdata *mdata,
         const char *name)
 {
     int i = 0;
@@ -300,10 +312,10 @@ mdish_shim_handle_to_segment(const struct shim_handle *hdl)
 {
     struct mdish_segment *seg = NULL;
     char name[MDISH_MAX_NAME_LENGTH + 1] = { 0 };
-
+    struct mdish_mdata *mdata = hdl->fs->data;
 
     rho_shim_dentry_relpath(hdl->dentry, name, sizeof(name));
-    seg = mdish_mount_data_segment_by_name(g_mount_data, name);
+    seg = mdish_mdata_segment_by_name(mdata, name);
     debug("> mdish_shim_handle_to_segment(path=%s) -> %p\n", name, seg);
     if (seg != NULL) {
         debug("< mdish_shim_handle_to_segment: (name=\"%s\", addr=%p, size=%lu)\n",
@@ -344,13 +356,11 @@ mdish_demarshal_hdr(struct rho_buf *buf, uint32_t *status, uint32_t *bodylen)
 }
 
 static struct mdish_client *
-mdish_client_open(const char *url)
+mdish_client_open(const char *url, unsigned char *ca_der, size_t ca_der_len)
 {
     struct mdish_client *client = NULL;
     struct rho_ssl_params *params = NULL;
     struct rho_ssl_ctx *ctx = NULL;
-    char cafile[CONFIG_MAX] = { 0 };
-    ssize_t len = 0;
 
     debug("> mdish_client_open(url=%s)\n", url);
 
@@ -358,15 +368,14 @@ mdish_client_open(const char *url)
     client->buf = rho_buf_create();
     client->url = rhoL_strdup(url);
     client->sock = rho_sock_open_url(url);
+    client->debug_cookie = rho_rand_u32();
 
-    len = get_config(root_config, "phoenix.cafile", cafile, sizeof(cafile));
-    if (len > 0) {
-        debug("mdish client using TLS; cafile=\"%s\"\n", cafile);
+    if (ca_der != NULL) {
+        debug("mdish client using TLS\n");
         params = rho_ssl_params_create();
         rho_ssl_params_set_mode(params, RHO_SSL_MODE_CLIENT);
         rho_ssl_params_set_protocol(params, RHO_SSL_PROTOCOL_TLSv1_2);
-        //rho_ssl_params_set_ca_file(params, "/etc/root.crt");
-        rho_ssl_params_set_ca_file(params, cafile);
+        rho_ssl_params_set_ca_der(params, ca_der, ca_der_len);
         ctx = rho_ssl_ctx_create(params);
         rho_ssl_wrap(client->sock, ctx);
         //rho_ssl_params_destroy(params);
@@ -379,7 +388,7 @@ mdish_client_open(const char *url)
 static void
 mdish_client_close(struct mdish_client *client)
 {
-    debug("> mdish_client_close\n");
+    debug("> mdish_client_close(url=\"%s\")\n", client->url);
 
     rho_sock_destroy(client->sock);
     rhoL_free(client->url);
@@ -405,7 +414,8 @@ mdish_client_request(struct mdish_client *client,
     struct rho_sock *sock = client->sock;
     struct rho_buf *buf = client->buf;
 
-    debug("> mdish_client_request (buf_length(buf)=%lu, buf_tell=%ld, raw=%p\n",
+    debug("> mdish_client_request debug_cookie=%lu, (buf_length(buf)=%lu, buf_tell=%ld, raw=%p\n",
+            (unsigned long)client->debug_cookie,
             (unsigned long)rho_buf_length(buf), 
             (long)rho_buf_tell(buf),
             rho_buf_raw(buf, 0, SEEK_SET));
@@ -462,8 +472,6 @@ done:
  *
  * uri is the host URI for the resource to be "mounted", and
  * root is the guest mountpoint.
- *
- * Note that you're g_client is more or less acting as the mount_data.
  */
 static int
 mdish_mount(const char *uri, const char *root, void **mount_data)
@@ -471,14 +479,24 @@ mdish_mount(const char *uri, const char *root, void **mount_data)
     int error = 0;
     uint32_t status = 0;
     uint32_t bodylen = 0;
+    char ca_hex[CONFIG_MAX] = { 0 };
+    unsigned char *ca_der = NULL;
+    ssize_t len = 0;
+    struct mdish_mdata *mdata = NULL;
+    struct mdish_client *client = NULL;
 
     debug("> mdish_mount(uri=%s, root=%s, mount_data=*)\n", uri, root);
 
-    g_client = mdish_client_open(uri);
-
-    rho_buf_rewind(g_client->buf);
-    mdish_pmarshal_hdr(g_client->buf, MDISH_OP_NEW_FDTABLE, 0);
-    error = mdish_client_request(g_client, &status, &bodylen);
+    len = get_config(root_config, "phoenix.ca_der", ca_hex, sizeof(ca_hex));
+    if (len > 0) {
+        debug("READ phoenix.ca_der (size=%ld)\n", len);
+        ca_der = rhoL_malloc(len / 2);
+        rho_binascii_hex2bin(ca_der, ca_hex);
+    }
+    client = mdish_client_open(uri, ca_der, len / 2);
+    rho_buf_rewind(client->buf);
+    mdish_pmarshal_hdr(client->buf, MDISH_OP_NEW_FDTABLE, 0);
+    error = mdish_client_request(client, &status, &bodylen);
     if (error != 0) {
         error = -ERPC;
         goto done;
@@ -489,12 +507,16 @@ mdish_mount(const char *uri, const char *root, void **mount_data)
         goto done;
     }
 
-    g_mount_data = mdish_mount_data_create(uri);
-    *mount_data = g_mount_data;
+    mdata = mdish_mdata_create(uri, ca_der, len / 2);
+    mdata->client = client;
+    *mount_data = mdata;
+    debug("setting mdish mount data (%p)\n", mdata);
 
 done:
     /* TODO: need to propagate an error if we can't open the client */
-    rho_buf_clear(g_client->buf);
+    rho_buf_clear(client->buf);
+    if (ca_der != NULL)
+        rhoL_free(ca_der);
     debug("< mdish_mount\n");
     return (error);
 }
@@ -514,7 +536,9 @@ mdish_close(struct shim_handle *hdl)
     int error = 0;
     uint32_t bodylen = 0;
     uint32_t status = 0;
-    struct rho_buf *buf = g_client->buf;
+    struct mdish_mdata *mdata = hdl->fs->data;
+    struct mdish_client *client = mdata->client;
+    struct rho_buf *buf = client->buf;
     uint32_t mdish_fd = 0;
 
     mdish_fd = hdl->info.mdish.fd;
@@ -529,7 +553,7 @@ mdish_close(struct shim_handle *hdl)
     mdish_pmarshal_hdr(buf, MDISH_OP_FILE_CLOSE, bodylen);
 
     /* make request */
-    error = mdish_client_request(g_client, &status, &bodylen);
+    error = mdish_client_request(client, &status, &bodylen);
     if (error != 0) {
         error = -ERPC;
         goto done;
@@ -571,7 +595,9 @@ mdish_mmap(struct shim_handle *hdl, void **addr, size_t size,
     int error = 0;
     uint32_t bodylen = 0;
     uint32_t status = 0;
-    struct rho_buf *buf = g_client->buf;
+    struct mdish_mdata *mdata = hdl->fs->data;
+    struct mdish_client *client = mdata->client;
+    struct rho_buf *buf = client->buf;
     uint32_t mdish_fd = 0;
     char name[MDISH_MAX_NAME_LENGTH + 1] = { 0 };
     struct mdish_segment *seg = NULL;
@@ -596,7 +622,7 @@ mdish_mmap(struct shim_handle *hdl, void **addr, size_t size,
     mdish_pmarshal_hdr(buf, MDISH_OP_MMAP, bodylen);
 
     /* make request */
-    error = mdish_client_request(g_client, &status, &bodylen);
+    error = mdish_client_request(client, &status, &bodylen);
     if (error != 0) {
         error = -ERPC;
         goto done;
@@ -613,7 +639,7 @@ mdish_mmap(struct shim_handle *hdl, void **addr, size_t size,
     }
 
     rho_buf_readu32be(buf, &mdish_sd);
-    seg = mdish_mount_data_new_segment(g_mount_data, name);
+    seg = mdish_mdata_new_segment(mdata, name);
     error = mdish_segment_initialize(seg, addr, size);
 
 done:
@@ -717,13 +743,21 @@ mdish_advlock_lock(struct shim_handle *hdl, struct flock *flock)
     int error = 0;
     uint32_t bodylen = 0;
     uint32_t status = 0;
-    struct rho_buf *buf = g_client->buf;
+    struct mdish_mdata *mdata = NULL;
+    struct mdish_client *client = NULL;
+    struct rho_buf *buf = NULL;
     uint32_t mdish_fd = 0;
     struct mdish_segment *seg = NULL;
 
     mdish_fd = hdl->info.mdish.fd;
-    debug("> mdish_advlock_lock(fd=%u)\n", mdish_fd);
+    debug("> mdish_advlock_lock(fd=%u, hdl=%p, hdl->fs=%p, hdl->fs->data=%p)\n",
+            mdish_fd, hdl, hdl->fs, hdl->fs->data);
     seg = mdish_shim_handle_to_segment(hdl);
+
+    mdata = hdl->fs->data;
+    client = mdata->client;
+    debug("mdish_advlock_lock: client=(%p)\n", client);
+    buf = client->buf;
 
 again:
     rho_buf_clear(buf);
@@ -737,7 +771,7 @@ again:
     mdish_pmarshal_hdr(buf, MDISH_OP_FILE_ADVLOCK, bodylen);
 
     /* make request */
-    error = mdish_client_request(g_client, &status, &bodylen);
+    error = mdish_client_request(client, &status, &bodylen);
     debug("unlock {error=%d, status=%lu, bodylen=%lu}........................\n",
             error, (unsigned long)status, (unsigned long)bodylen);
     if (error != 0) {
@@ -808,7 +842,9 @@ mdish_advlock_unlock(struct shim_handle *hdl, struct flock *flock)
     int error = 0;
     uint32_t bodylen = 0;
     uint32_t status = 0;
-    struct rho_buf *buf = g_client->buf;
+    struct mdish_mdata *mdata = hdl->fs->data;
+    struct mdish_client *client = mdata->client;
+    struct rho_buf *buf = client->buf;
     uint32_t mdish_fd = 0;
     struct mdish_segment *seg = NULL;
 
@@ -833,7 +869,7 @@ mdish_advlock_unlock(struct shim_handle *hdl, struct flock *flock)
     rho_hexdump(rho_buf_raw(buf, 0, SEEK_SET), 32, "request ");
 
     /* make request */
-    error = mdish_client_request(g_client, &status, &bodylen);
+    error = mdish_client_request(client, &status, &bodylen);
     if (error != 0) {
         error = -ERPC;
         goto done;
@@ -896,8 +932,9 @@ mdish_checkout(struct shim_handle *hdl)
 {
     debug("> mdish_checkout\n");
     debug("checkout hdl = {path:%s}\n", qstrgetstr(&hdl->path));
+    hdl->fs = NULL;
     debug("< mdish_checkout\n");
-    return (-ENOSYS);
+    return (0);
 }
 
 static int
@@ -924,9 +961,10 @@ mdish_checkpoint(void **checkpoint, void *mount_data)
     int error = 0;
     uint32_t bodylen = 0;
     uint32_t status = 0;
-    struct rho_buf *buf = g_client->buf;
+    struct mdish_mdata *mdata = mount_data;
+    struct mdish_client *client = mdata->client;
+    struct rho_buf *buf = client->buf;
     uint64_t ident = 0;
-    struct mdish_mount_data *mdata = NULL;
 
     debug("> mdish_checkpoint\n");
     
@@ -934,7 +972,7 @@ mdish_checkpoint(void **checkpoint, void *mount_data)
     mdish_pmarshal_hdr(buf, MDISH_OP_FORK, 0);
 
     /* make request */
-    error = mdish_client_request(g_client, &status, &bodylen);
+    error = mdish_client_request(client, &status, &bodylen);
     if (error != 0) {
         error = -ERPC;
         goto done;
@@ -953,38 +991,47 @@ mdish_checkpoint(void **checkpoint, void *mount_data)
 
     debug("mdish child ident = %llu\n", (unsigned long long)ident);
 
-    mdata = mount_data;
     mdata->ident = ident;
     *checkpoint = mdata;
 
 done:
     rho_buf_clear(buf);
     debug("< mdish_checkpoint\n");
-    return (sizeof(struct mdish_mount_data));
+    return (sizeof(struct mdish_mdata));
 }
 
 static int
 mdish_migrate(void *checkpoint, void **mount_data)
 {
     int error = 0;
+    struct mdish_mdata *mdata = NULL;
+    struct mdish_client *client = NULL;
     struct rho_buf *buf = NULL;
     uint32_t status = 0;
     uint32_t bodylen = 0;
 
     debug("> mdish_migrate\n");
 
-    g_mount_data = checkpoint;
-    mdish_mount_data_print(g_mount_data);
+    mdata = rhoL_zalloc(sizeof(struct mdish_mdata));
+    memcpy(mdata, checkpoint, sizeof(struct mdish_mdata));
+    mdish_mdata_print(mdata);
 
-    g_client = mdish_client_open(g_mount_data->url);
-    buf = g_client->buf;
+    //mdish_client_close(mdata->client); 
+    client = mdish_client_open(mdata->url, 
+            mdata->ca_der[0] == 0x00 ? NULL : mdata->ca_der,
+            mdata->ca_der_len);
+
+    debug("mdish migrate: client=%p, mdata=%p\n", client, mdata);
+
+    mdata->client = client;
+    buf = client->buf;
 
     rho_buf_seek(buf, MDISH_HEADER_LENGTH, SEEK_SET); 
-    rho_buf_writeu64be(buf, g_mount_data->ident);
+    rho_buf_writeu64be(buf, mdata->ident);
     bodylen = rho_buf_length(buf) - MDISH_HEADER_LENGTH;
     rho_buf_rewind(buf);
-    mdish_pmarshal_hdr(g_client->buf, MDISH_OP_CHILD_ATTACH, bodylen);
-    error = mdish_client_request(g_client, &status, &bodylen);
+    mdish_pmarshal_hdr(buf, MDISH_OP_CHILD_ATTACH, bodylen);
+    error = mdish_client_request(client, &status, &bodylen);
     if (error != 0) {
         error = -ERPC;
         goto done;
@@ -995,7 +1042,7 @@ mdish_migrate(void *checkpoint, void **mount_data)
         goto done;
     }
 
-    *mount_data = g_mount_data;
+    *mount_data = mdata;
 
 done:
     rho_buf_clear(buf);
@@ -1012,12 +1059,23 @@ mdish_open(struct shim_handle *hdl, struct shim_dentry *dent, int flags)
     int error = 0;
     uint32_t bodylen = 0;
     uint32_t status = 0;
-    struct rho_buf *buf = g_client->buf;
+    struct mdish_mdata *mdata = NULL;
+    struct mdish_client *client = NULL; 
+    struct rho_buf *buf = NULL; 
     uint32_t fd = 0;
     char name[MDISH_MAX_NAME_LENGTH + 1] = { 0 };
 
-    debug("> mdish_open(hdl=(%p), dent=(%p), flags=0x%08x\n", hdl, dent, flags);
+    debug("> mdish_open(hdl=(%p), dent=(%p), dent->fs=(%p), dent->fs->data=(%p), flags=0x%08x\n", 
+            hdl, dent, dent->fs, dent->fs->data, flags);
+
     rho_shim_dentry_print(dent);
+
+    //debug("hdl->fs->data=%p\n", hdl->fs->data);
+    debug("dent->fs->data=%p\n", dent->fs->data);
+    mdata = dent->fs->data;
+    mdish_mdata_print(mdata);
+    client = mdata->client;
+    buf = client->buf;
 
     /* get path */
     rho_shim_dentry_relpath(dent, name, sizeof(name));
@@ -1030,7 +1088,7 @@ mdish_open(struct shim_handle *hdl, struct shim_dentry *dent, int flags)
     mdish_pmarshal_hdr(buf, MDISH_OP_FILE_OPEN, bodylen);
 
     /* make request */
-    error = mdish_client_request(g_client, &status, &bodylen);
+    error = mdish_client_request(client, &status, &bodylen);
     debug("mdish_client_request returned %d\n", error);
     if (error != 0) {
         error = -ERPC;
@@ -1044,7 +1102,7 @@ mdish_open(struct shim_handle *hdl, struct shim_dentry *dent, int flags)
 
     rho_buf_readu32be(buf, &fd);
 
-    debug("mdish_open returned fd=%lu", (unsigned long)fd);
+    debug("mdish_open returned fd=%lu\n", (unsigned long)fd);
 
     /* fill in handle */
     hdl->type = TYPE_MDISH;
@@ -1062,7 +1120,11 @@ static int
 mdish_lookup(struct shim_dentry *dent, bool force)
 {
     debug("> mdish_lookup(dent=*, force=%d)\n", force);
-    (void)dent; (void)force;
+    (void)force;
+
+    rho_shim_dentry_print(dent);
+    debug("dent->fs=%p\n", dent->fs);
+    debug("dent->fs->data=%p\n", dent->fs->data);
 
     /* XXX: I know fs/shim_namei.c:297 asserts this condition, but why? */
     if (qstrempty(&dent->rel_path)) {
@@ -1082,6 +1144,11 @@ mdish_mode(struct shim_dentry *dent, mode_t *mode, bool force)
 {
     debug("> mdish_mode\n");
     (void)mode;
+
+    rho_shim_dentry_print(dent);
+    debug("dent->fs=%p\n", dent->fs);
+    debug("dent->fs->data=%p\n", dent->fs->data);
+    debug("mode=%p\n", mode);
 
     *mode = 0777;
 

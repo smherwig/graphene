@@ -72,6 +72,36 @@ rho_bearssl_certificate_to_ta_inner(br_x509_trust_anchor *ta,
  * all is considered an error). An appropriate error message is displayed.
  */
 size_t
+rho_bearssl_ta_list_from_cbuf(struct rho_bearssl_ta_list *dst, unsigned char *buf,
+        size_t len)
+{
+	br_x509_certificate *xcs;
+	struct rho_bearssl_ta_list tas = RHO_VECTOR_INIT;
+	size_t u, num;
+
+	xcs = rho_bearssl_certs_from_cbuf(buf, len, &num);
+	if (xcs == NULL) {
+        debug("rho_bearssl_certs_from_cbuf failed\n");
+		return 0;
+	}
+    debug("rho_bearssl_certs_from_cbuf succeeded: num=%lu\n", (unsigned long)num);
+	for (u = 0; u < num; u ++) {
+		br_x509_trust_anchor ta;
+
+		if (rho_bearssl_certificate_to_ta_inner(&ta, &xcs[u]) < 0) {
+            rho_bearssl_ta_list_destroy(&tas);
+			rho_bearssl_certs_destroy(xcs, num);
+			return 0;
+		}
+		RHO_VECTOR_ADD(tas, ta);
+	}
+	RHO_VECTOR_ADDMANY(*dst, &RHO_VECTOR_ELT(tas, 0), num);
+	RHO_VECTOR_CLEAR(tas);
+	rho_bearssl_certs_destroy(xcs, num);
+	return num;
+}
+
+size_t
 rho_bearssl_ta_list_from_file(struct rho_bearssl_ta_list *dst, const char *fname)
 {
 	br_x509_certificate *xcs;

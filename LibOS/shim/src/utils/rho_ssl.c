@@ -595,15 +595,21 @@ rho_ssl_ctx_create(struct rho_ssl_params *params)
     if (!params->protocol)
         rho_die("SSL protocol must be specified");
 
-    if (params->ca_file == NULL)
+    if (params->ca_file == NULL && params->ca_der == NULL)
         rho_die("currently, a CA file must be specified");
 
     br_ssl_client_zero(&sc->cc);
 
-    debug("rho_bearssl_ta_list_from_file\n");
-    n = rho_bearssl_ta_list_from_file(&tas, params->ca_file);
-    if (n == 0)
-        rho_die("failed to read any trust anchors from file \"%s\"", params->ca_file);
+    if (params->ca_file != NULL) {
+        debug("rho_bearssl_ta_list_from_file\n");
+        n = rho_bearssl_ta_list_from_file(&tas, params->ca_file);
+        if (n == 0)
+            rho_die("failed to read any trust anchors from file \"%s\"", params->ca_file);
+    } else {
+        n = rho_bearssl_ta_list_from_cbuf(&tas, params->ca_der, params->ca_der_len);
+        if (n == 0)
+            rho_die("failed to read any trust anchors from cbuf\n");
+    }
 
     debug("br_ssl_client_init_full\n");
     br_ssl_client_init_full(&sc->cc, &sc->xc,
@@ -713,7 +719,7 @@ rho_ssl_sock_send(struct rho_sock *sock, const void *buf, size_t len)
     }
     
     debug("flushing wbuf\n");
-    error = br_sslio_flush(&sc->ioc);    /* TODO: check errors */
+    error = br_sslio_flush(&sc->ioc);
     if (error == -1) {
         rho_bearssl_warn_last_error(engine, "br_sslio_flush");
         n = -1;

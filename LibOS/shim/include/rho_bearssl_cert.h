@@ -11,7 +11,12 @@
 
 RHO_DECLS_BEGIN
 
-br_x509_certificate * rho_bearssl_certs_from_file(const char *fname, size_t *num);
+br_x509_certificate * rho_bearssl_certs_from_cbuf(unsigned char *buf,
+        size_t len, size_t *num);
+
+br_x509_certificate * rho_bearssl_certs_from_file(const char *fname,
+        size_t *num);
+
 void rho_bearssl_certs_destroy(br_x509_certificate *certs, size_t num);
 
 RHO_DECLS_END
