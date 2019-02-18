@@ -773,7 +773,6 @@ rho_ssl_low_write(void *u, const unsigned char *data, size_t len)
     ssize_t n = 0;
 
     debug("> rho_ssl_low_write: n=%lu\n", (unsigned long)len);
-    rho_hexdump(data, len, "data");
     /* unconst */
     n = DkStreamWrite(sock->pal_hdl, 0, len, (void *)data, NULL);
     debug("< rho_ssl_low_write: n=%ld\n", (long)n);

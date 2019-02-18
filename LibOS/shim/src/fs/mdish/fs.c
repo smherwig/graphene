@@ -866,7 +866,7 @@ mdish_advlock_unlock(struct shim_handle *hdl, struct flock *flock)
     rho_buf_rewind(buf);
     mdish_pmarshal_hdr(buf, MDISH_OP_FILE_ADVLOCK, bodylen);
 
-    rho_hexdump(rho_buf_raw(buf, 0, SEEK_SET), 32, "request ");
+    //rho_hexdump(rho_buf_raw(buf, 0, SEEK_SET), 32, "request ");
 
     /* make request */
     error = mdish_client_request(client, &status, &bodylen);

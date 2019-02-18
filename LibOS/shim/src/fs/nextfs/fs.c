@@ -195,7 +195,17 @@ nextfs_hdl_get_client(struct shim_handle *hdl)
     struct nextfs_mdata *mdata = NULL;
     struct nextfs_client *client = NULL;
 
+    debug("nextfs_hdl_get_client: (path=\"%s\")\n",
+            qstrgetstr(&hdl->path));
+
     fs = hdl->fs;
+    if (fs == NULL) {
+        debug("nextfs_hdl_get_client: hdl->fs is NULL");
+    } else {
+        RHO_ASSERT(hdl->dentry != NULL);
+        rho_shim_dentry_print(hdl->dentry);
+        fs = hdl->dentry->fs;
+    }
     RHO_ASSERT(fs != NULL);
     
     mdata = fs->data;
