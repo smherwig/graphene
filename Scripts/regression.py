@@ -1,4 +1,4 @@
-#!/usr/bin/python
+#!/usr/bin/env python2
 
 import sys, os, subprocess, re, time
 
@@ -21,17 +21,17 @@ class Regression:
             self.timeout = timeout
         self.keep_log = (os.getenv('KEEP_LOG', '0') == '1')
 
-    def add_check(self, name, check, times = 1, flaky=0, args = []):
+    def add_check(self, name, check, times = 1, ignore_failure=0, args = []):
         combined_args = ' '.join(args)
         if not combined_args in self.runs:
             self.runs[combined_args] = []
-        self.runs[combined_args].append((name, check, flaky, times))
+        self.runs[combined_args].append((name, check, ignore_failure, times))
 
     def run_checks(self):
         something_failed = 0
         for combined_args in self.runs:
             needed_times = 1
-            for (name, check, flaky, times) in self.runs[combined_args]:
+            for (name, check, ignore_failure, times) in self.runs[combined_args]:
                 if needed_times < times:
                     needed_times = times
 
@@ -78,19 +78,19 @@ class Regression:
 
                 run_times = run_times + 1
                 keep_log = False
-                for (name, check, flaky, times) in self.runs[combined_args]:
+                for (name, check, ignore_failure, times) in self.runs[combined_args]:
                     if run_times == times:
                         result = check(outputs)
                         if result:
-                            print '\033[92m[Success]\033[0m', name
+                            print '\033[92m[Success       ]\033[0m', name
                         else:
-                            print '\033[93m[Fail   ]\033[0m', name
+                            if ignore_failure:
+                                print '[Fail (Ignored)]', name
+                            else:
+                                print '\033[93m[Fail          ]\033[0m', name
+                                something_failed = 1
                             if timed_out : print 'Test timed out!'
                             keep_log = True
-                            if flaky:
-                                print '   This test is known not to work, but should be fixed'
-                            else:
-                                something_failed = 1
                             
                 if self.keep_log and keep_log:
                     sargs = [re.sub(r"\W", '_', a).strip('_') for a in args]

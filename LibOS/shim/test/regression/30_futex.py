@@ -1,4 +1,4 @@
-#!/usr/bin/python
+#!/usr/bin/env python2
 
 import os, sys, mmap
 from regression import Regression
@@ -11,4 +11,5 @@ regression = Regression(loader, "futex")
 regression.add_check(name="Futex Wake Test",
     check=lambda res: "Woke all kiddos" in res[0].out)
 
-regression.run_checks()
+rv = regression.run_checks()
+if rv: sys.exit(rv)

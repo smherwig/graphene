@@ -401,7 +401,7 @@ static int send_checkpoint_by_gipc (PAL_HANDLE gipc_store,
     }
 
     hdr_size = ALIGN_UP(hdr_size);
-    int npages = DkPhysicalMemoryCommit(gipc_store, 1, &hdr_addr, &hdr_size, 0);
+    int npages = DkPhysicalMemoryCommit(gipc_store, 1, &hdr_addr, &hdr_size);
     if (!npages)
         return -EPERM;
 
@@ -428,7 +428,7 @@ static int send_checkpoint_by_gipc (PAL_HANDLE gipc_store,
     /* Chia-Che: sending an empty page can't ever be a smart idea.
        we might rather fail here */
     npages = DkPhysicalMemoryCommit(gipc_store, nentries, gipc_addrs,
-                                    gipc_sizes, 0);
+                                    gipc_sizes);
 
     if (npages < total_pages) {
         debug("gipc supposed to send %d pages, but only %d pages sent\n",
@@ -475,8 +475,12 @@ static int send_checkpoint_on_stream (PAL_HANDLE stream,
         size_t ret = DkStreamWrite(stream, 0, total_bytes - bytes,
                                    (void *) store->base + bytes, NULL);
 
-        if (!ret)
+        if (!ret) {
+            if (PAL_ERRNO == EINTR || PAL_ERRNO == EAGAIN ||
+                PAL_ERRNO == EWOULDBLOCK)
+                continue;
             return -PAL_ERRNO;
+        }
 
         bytes += ret;
     } while (bytes < total_bytes);
@@ -490,8 +494,12 @@ static int send_checkpoint_on_stream (PAL_HANDLE stream,
         do {
             size_t ret = DkStreamWrite(stream, 0, mem_size - bytes,
                                        mem_addr + bytes, NULL);
-            if (!ret)
+            if (!ret) {
+                if (PAL_ERRNO == EINTR || PAL_ERRNO == EAGAIN ||
+                    PAL_ERRNO == EWOULDBLOCK)
+                    continue;
                 return -PAL_ERRNO;
+            }
 
             bytes += ret;
         } while (bytes < mem_entries[i]->size);
@@ -674,7 +682,7 @@ int init_from_checkpoint_file (const char * filename,
         argv[1] = dentry_get_path(file, true, NULL);
         argv[2] = 0;
 
-        PAL_HANDLE proc = DkProcessCreate(NULL, 0, argv);
+        PAL_HANDLE proc = DkProcessCreate(NULL, argv);
         if (!proc) {
             ret = -PAL_ERRNO;
             goto out;
@@ -891,7 +899,6 @@ int do_migrate_process (int (*migrate) (struct shim_cp_store *,
     int ret = 0;
     struct shim_process * new_process = NULL;
     struct newproc_header hdr;
-    struct shim_cp_store * cpstore = NULL;
     int bytes;
     memset(&hdr, 0, sizeof(hdr));
 
@@ -908,8 +915,7 @@ int do_migrate_process (int (*migrate) (struct shim_cp_store *,
      * the latency of forking.
      */
     PAL_HANDLE proc = DkProcessCreate(exec ? qstrgetstr(&exec->uri) :
-                                      pal_control.executable,
-                                      0, argv);
+                                      pal_control.executable, argv);
 
     if (!proc) {
         ret = -PAL_ERRNO;
@@ -953,27 +959,27 @@ int do_migrate_process (int (*migrate) (struct shim_cp_store *,
     SAVE_PROFILE_INTERVAL(migrate_connect_ipc);
 
     /* Allocate a space for dumping the checkpoint data. */
-    cpstore = __alloca(sizeof(struct shim_cp_store));
-    memset(cpstore, 0, sizeof(struct shim_cp_store));
-    cpstore->alloc    = cp_alloc;
-    cpstore->use_gipc = use_gipc;
-    cpstore->bound    = CP_INIT_VMA_SIZE;
+    struct shim_cp_store cpstore;
+    memset(&cpstore, 0, sizeof(cpstore));
+    cpstore.alloc    = cp_alloc;
+    cpstore.use_gipc = use_gipc;
+    cpstore.bound    = CP_INIT_VMA_SIZE;
 
     while (1) {
         /*
          * Try allocating a space of a certain size. If the allocation fails,
          * continue to try with smaller sizes.
          */
-        cpstore->base = (ptr_t) cp_alloc(cpstore, 0, cpstore->bound);
-        if (cpstore->base)
+        cpstore.base = (ptr_t) cp_alloc(&cpstore, 0, cpstore.bound);
+        if (cpstore.base)
             break;
 
-        cpstore->bound >>= 1;
-        if (cpstore->bound < allocsize)
+        cpstore.bound >>= 1;
+        if (cpstore.bound < allocsize)
             break;
     }
 
-    if (!cpstore->base) {
+    if (!cpstore.base) {
         ret = -ENOMEM;
         debug("failed creating checkpoint store\n");
         goto err;
@@ -984,7 +990,7 @@ int do_migrate_process (int (*migrate) (struct shim_cp_store *,
     /* Calling the migration function defined by the caller. */
     va_list ap;
     va_start(ap, thread);
-    ret = (*migrate) (cpstore, thread, new_process, ap);
+    ret = (*migrate) (&cpstore, thread, new_process, ap);
     va_end(ap);
     if (ret < 0) {
         debug("failed creating checkpoint (ret = %d)\n", ret);
@@ -994,36 +1000,36 @@ int do_migrate_process (int (*migrate) (struct shim_cp_store *,
     SAVE_PROFILE_INTERVAL(migrate_save_checkpoint);
 
     unsigned long checkpoint_time = GET_PROFILE_INTERVAL();
-    unsigned long checkpoint_size = cpstore->offset + cpstore->mem_size;
+    unsigned long checkpoint_size = cpstore.offset + cpstore.mem_size;
 
     /* Checkpoint data created. */
     debug("checkpoint of %u bytes created, %lu microsecond is spent.\n",
           checkpoint_size, checkpoint_time);
 
-    hdr.checkpoint.hdr.addr = (void *) cpstore->base;
+    hdr.checkpoint.hdr.addr = (void *) cpstore.base;
     hdr.checkpoint.hdr.size = checkpoint_size;
 
-    if (cpstore->mem_nentries) {
+    if (cpstore.mem_nentries) {
         hdr.checkpoint.mem.entoffset =
-                    (ptr_t) cpstore->last_mem_entry - cpstore->base;
-        hdr.checkpoint.mem.nentries  = cpstore->mem_nentries;
+                    (ptr_t) cpstore.last_mem_entry - cpstore.base;
+        hdr.checkpoint.mem.nentries  = cpstore.mem_nentries;
     }
 
-    if (cpstore->use_gipc) {
+    if (cpstore.use_gipc) {
         snprintf(hdr.checkpoint.gipc.uri, sizeof(hdr.checkpoint.gipc.uri),
                  "gipc:%lld", gipc_key);
 
-        if (cpstore->gipc_nentries) {
+        if (cpstore.gipc_nentries) {
             hdr.checkpoint.gipc.entoffset =
-                        (ptr_t) cpstore->last_gipc_entry - cpstore->base;
-            hdr.checkpoint.gipc.nentries  = cpstore->gipc_nentries;
+                        (ptr_t) cpstore.last_gipc_entry - cpstore.base;
+            hdr.checkpoint.gipc.nentries  = cpstore.gipc_nentries;
         }
     }
 
-    if (cpstore->palhdl_nentries) {
+    if (cpstore.palhdl_nentries) {
         hdr.checkpoint.palhdl.entoffset =
-                    (ptr_t) cpstore->last_palhdl_entry - cpstore->base;
-        hdr.checkpoint.palhdl.nentries  = cpstore->palhdl_nentries;
+                    (ptr_t) cpstore.last_palhdl_entry - cpstore.base;
+        hdr.checkpoint.palhdl.nentries  = cpstore.palhdl_nentries;
     }
 
 #ifdef PROFILE
@@ -1050,8 +1056,8 @@ int do_migrate_process (int (*migrate) (struct shim_cp_store *,
     SAVE_PROFILE_INTERVAL(migrate_send_header);
 
     /* Sending the checkpoint either through GIPC or the RPC stream */
-    ret = cpstore->use_gipc ? send_checkpoint_by_gipc(gipc_hdl, cpstore) :
-          send_checkpoint_on_stream(proc, cpstore);
+    ret = cpstore.use_gipc ? send_checkpoint_by_gipc(gipc_hdl, &cpstore) :
+          send_checkpoint_on_stream(proc, &cpstore);
 
     if (ret < 0) {
         debug("failed sending checkpoint (ret = %d)\n", ret);
@@ -1064,19 +1070,19 @@ int do_migrate_process (int (*migrate) (struct shim_cp_store *,
      * For socket and RPC streams, we need to migrate the PAL handles
      * to the new process using PAL calls.
      */
-    if ((ret = send_handles_on_stream(proc, cpstore)) < 0)
+    if ((ret = send_handles_on_stream(proc, &cpstore)) < 0)
         goto err;
 
     SAVE_PROFILE_INTERVAL(migrate_send_pal_handles);
 
     /* Free the checkpoint space */
-    if ((ret = bkeep_munmap((void *) cpstore->base, cpstore->bound,
+    if ((ret = bkeep_munmap((void *) cpstore.base, cpstore.bound,
                             CP_VMA_FLAGS)) < 0) {
         debug("failed unmaping checkpoint (ret = %d)\n", ret);
         goto err;
     }
 
-    DkVirtualMemoryFree((PAL_PTR) cpstore->base, cpstore->bound);
+    DkVirtualMemoryFree((PAL_PTR) cpstore.base, cpstore.bound);
 
     SAVE_PROFILE_INTERVAL(migrate_free_checkpoint);
 
@@ -1216,8 +1222,12 @@ int do_migration (struct newproc_cp_header * hdr, void ** cpptr)
                                      size - total_bytes,
                                      (void *) base + total_bytes, NULL, 0);
 
-            if (!bytes)
+            if (!bytes) {
+                if (PAL_ERRNO == EINTR || PAL_ERRNO == EAGAIN ||
+                    PAL_ERRNO == EWOULDBLOCK)
+                    continue;
                 return -PAL_ERRNO;
+            }
 
             total_bytes += bytes;
         }
@@ -1253,8 +1263,10 @@ void restore_context (struct shim_context * context)
 
     debug("restore context: SP = %p, IP = %p\n", context->sp, context->ret_ip);
 
-    regs[nregs] = (void *) context->sp - 8;
-    *(void **) (context->sp - 8) = context->ret_ip;
+    regs[nregs] = (void *) context->sp;
+    /* don't clobber redzone. If sigaltstack is used,
+     * this area won't be clobbered by signal context */
+    *(void **) (context->sp - 128 - 8) = context->ret_ip;
 
     /* Ready to resume execution, re-enable preemption. */
     shim_tcb_t * tcb = SHIM_GET_TLS();
@@ -1279,6 +1291,6 @@ void restore_context (struct shim_context * context)
                  "popq %%rbp\r\n"
                  "popq %%rsp\r\n"
                  "movq $0, %%rax\r\n"
-                 "retq\r\n"
+                 "jmp *-128-8(%%rsp)\r\n"
                  :: "g"(&regs) : "memory");
 }

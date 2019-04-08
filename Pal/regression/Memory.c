@@ -23,7 +23,7 @@ void handler (PAL_PTR event, PAL_NUM arg, PAL_CONTEXT * context)
 int main (int argc, char ** argv, char ** envp)
 {
     volatile int c;
-    DkSetExceptionHandler(handler, PAL_EVENT_MEMFAULT, 0);
+    DkSetExceptionHandler(handler, PAL_EVENT_MEMFAULT);
 
     void * mem1 = (void *) DkVirtualMemoryAlloc(NULL, UNIT * 4, 0,
                                                 PAL_PROT_READ|PAL_PROT_WRITE);
@@ -44,14 +44,14 @@ int main (int argc, char ** argv, char ** envp)
         DkVirtualMemoryProtect(mem2, UNIT, PAL_PROT_READ);
         c = count;
         *(volatile int *) mem2 = 0;
-        asm volatile("nop");
+        __asm__ volatile("nop");
         if (c == count - 1)
             pal_printf("Memory Protection (R) OK\n");
 
         DkVirtualMemoryFree(mem2, UNIT);
         c = count;
         *(volatile int *) mem2 = 0;
-        asm volatile("nop");
+        __asm__ volatile("nop");
         if (c == count - 1)
             pal_printf("Memory Deallocation OK\n");
     }

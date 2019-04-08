@@ -26,8 +26,8 @@ unsigned long pagemask  = ~(PRESET_PAGESIZE - 1);
 unsigned long pageshift = PRESET_PAGESIZE - 1;
 
 static inline
-const char * alloc_concat(const char * p, int plen,
-                          const char * s, int slen)
+char * alloc_concat(const char * p, int plen,
+                    const char * s, int slen)
 {
     plen = (plen != -1) ? plen : (p ? strlen(p) : 0);
     slen = (slen != -1) ? slen : (s ? strlen(s) : 0);
@@ -179,7 +179,6 @@ int load_enclave_binary (sgx_arch_secs_t * secs, int fd,
             c->prot = (ph->p_flags & PF_R ? PROT_READ  : 0)|
                       (ph->p_flags & PF_W ? PROT_WRITE : 0)|
                       (ph->p_flags & PF_X ? PROT_EXEC  : 0)|prot;
-#define SGX_SECINFO_FLAGS_R             0x001
         }
 
     base -= loadcmds[0].mapstart;
@@ -249,15 +248,14 @@ int initialize_enclave (struct pal_enclave * enclave)
         if (ret < 0) {                                              \
             SGX_DBG(DBG_E, "initializing enclave failed: " #func ": %d\n",  \
                    -ret);                                           \
-            goto err;                                               \
+            return ret;                                             \
         } ret;                                                      \
     })
 
     enclave_image = INLINE_SYSCALL(open, 3, ENCLAVE_FILENAME, O_RDONLY, 0);
     if (IS_ERR(enclave_image)) {
         SGX_DBG(DBG_E, "cannot find %s\n", ENCLAVE_FILENAME);
-        ret = -ERRNO(ret);
-        goto err;
+        return -ERRNO(ret);
     }
 
     char cfgbuf[CONFIG_MAX];
@@ -265,8 +263,7 @@ int initialize_enclave (struct pal_enclave * enclave)
     /* Reading sgx.enclave_size from manifest */
     if (get_config(enclave->config, "sgx.enclave_size", cfgbuf, CONFIG_MAX) <= 0) {
         SGX_DBG(DBG_E, "enclave_size is not specified\n");
-        ret = -EINVAL;
-        goto err;
+        return -EINVAL;
     }
 
     enclave->size = parse_int(cfgbuf);
@@ -275,8 +272,7 @@ int initialize_enclave (struct pal_enclave * enclave)
      * Give users a better warning about this. */
     if (enclave->size & (enclave->size - 1)) {
         SGX_DBG(DBG_E, "Enclave size not a power of two.  SGX requires power-of-two enclaves.\n");
-        ret = -EINVAL;
-        goto err;
+        return -EINVAL;
     }
 
     /* Reading sgx.thread_num from manifest */
@@ -285,8 +281,7 @@ int initialize_enclave (struct pal_enclave * enclave)
 
     if (enclave_thread_num > MAX_DBG_THREADS) {
         SGX_DBG(DBG_E, "Too many threads to debug\n");
-        ret = -EINVAL;
-        goto err;
+        return -EINVAL;
     }
 
     /* Reading sgx.rpc_thread_num from manifest */
@@ -428,7 +423,7 @@ int initialize_enclave (struct pal_enclave * enclave)
         if (strcmp_static(areas[i].desc, "tls")) {
             data = (void *) INLINE_SYSCALL(mmap, 6, NULL, areas[i].size,
                                            PROT_READ|PROT_WRITE,
-                                           MAP_ANON|MAP_PRIVATE, -1, 0);
+                                           MAP_ANONYMOUS|MAP_PRIVATE, -1, 0);
 
             for (int t = 0 ; t < enclave->thread_num ; t++) {
                 struct enclave_tls * gs = data + pagesize * t;
@@ -442,14 +437,10 @@ int initialize_enclave (struct pal_enclave * enclave)
                 gs->gpr = gs->ssa +
                     enclave->ssaframesize - sizeof(sgx_arch_gpr_t);
             }
-
-            goto add_pages;
-        }
-
-        if (strcmp_static(areas[i].desc, "tcs")) {
+        } else if (strcmp_static(areas[i].desc, "tcs")) {
             data = (void *) INLINE_SYSCALL(mmap, 6, NULL, areas[i].size,
                                            PROT_READ|PROT_WRITE,
-                                           MAP_ANON|MAP_PRIVATE, -1, 0);
+                                           MAP_ANONYMOUS|MAP_PRIVATE, -1, 0);
 
             for (int t = 0 ; t < enclave->thread_num ; t++) {
                 sgx_arch_tcs_t * tcs = data + pagesize * t;
@@ -465,17 +456,12 @@ int initialize_enclave (struct pal_enclave * enclave)
                 tcs_addrs[t] = (void *) enclave_secs.baseaddr + tcs_area->addr
                     + pagesize * t;
             }
-
-            goto add_pages;
-        }
-
-        if (areas[i].fd != -1)
+        } else if (areas[i].fd != -1)
             data = (void *) INLINE_SYSCALL(mmap, 6, NULL, areas[i].size,
                                            PROT_READ,
                                            MAP_FILE|MAP_PRIVATE,
                                            areas[i].fd, 0);
 
-add_pages:
         TRY(add_pages_to_enclave,
             &enclave_secs, (void *) areas[i].addr, data, areas[i].size,
             areas[i].type, areas[i].prot, areas[i].skip_eextend,
@@ -505,13 +491,6 @@ add_pages:
     pal_sec->manifest_addr = (void *) enclave_secs.baseaddr + manifest_area->addr;
     pal_sec->manifest_size = manifest_size;
 
-    memcpy(pal_sec->mrenclave, enclave_secs.mrenclave,
-           sizeof(sgx_arch_hash_t));
-    memcpy(pal_sec->mrsigner, enclave_secs.mrsigner,
-           sizeof(sgx_arch_hash_t));
-    memcpy(&pal_sec->enclave_attributes, &enclave_secs.attributes,
-           sizeof(sgx_arch_attributes_t));
-
     struct enclave_dbginfo * dbg = (void *)
             INLINE_SYSCALL(mmap, 6, DBGINFO_ADDR,
                            sizeof(struct enclave_dbginfo),
@@ -533,8 +512,6 @@ add_pages:
         dbg->tcs_addrs[i] = tcs_addrs[i];
 
     return 0;
-err:
-    return ret;
 }
 
 static int mcast_s (int port)
@@ -650,7 +627,7 @@ int load_manifest (int fd, struct config_store ** config_ptr)
 
     void * config_raw = (void *)
             INLINE_SYSCALL(mmap, 6, NULL, nbytes,
-                           PROT_READ|PROT_WRITE, MAP_PRIVATE,
+                           PROT_READ, MAP_PRIVATE,
                            fd, 0);
 
     if (IS_ERR_P(config_raw)) {

@@ -34,6 +34,10 @@ LDFLAGS	= -shared -nostdlib --version-script shim.map -T shim.lds \
 LDFLAGS-debug = $(patsubst shim.map,shim-debug.map,$(LDFLAGS))
 ARFLAGS	=
 
+ifeq ($(WERROR),1)
+CFLAGS += -Werror
+endif
+
 files_to_build = libsysdb.a libsysdb.so libsysdb_debug.so
 files_to_install = $(addprefix $(RUNTIME_DIR)/,$(files_to_build))
 
@@ -75,15 +79,13 @@ ifeq ($(findstring x86_64,$(SYS))$(findstring linux,$(SYS)),x86_64linux)
 libsysdb.so: $(addsuffix .o,$(objs)) $(filter %.map %.lds,$(LDFLAGS)) \
 	     $(bearssl_lib) $(graphene_lib) $(pal_lib)
 	@echo [ $@ ]
-	$(LD) $(LDFLAGS) -o $@ $(filter-out %.map %.lds,$^) -soname $@ \
-		-e shim_start
+	$(LD) $(LDFLAGS) -o $@ $(filter-out %.map %.lds,$^) -soname $@
 
 libsysdb_debug.so: $(addsuffix .o,$(filter-out syscallas,$(objs))) \
 		   $(filter %.map %.lds,$($LDFLAGS-debug)) \
 		   $(bearssl_lib) $(graphene_lib) $(pal_lib)
 	@echo [ $@ ]
-	$(LD) $(LDFLAGS-debug) -o $@ $(filter-out %.map %.lds,$^) -soname $@ \
-		-e shim_start
+	$(LD) $(LDFLAGS-debug) -o $@ $(filter-out %.map %.lds,$^) -soname $@
 
 .lib/host_endian.h: ../../../Pal/src/host/$(PAL_HOST)/host_endian.h
 	@mkdir -p .lib
@@ -115,17 +117,25 @@ elf/shim_rtld.o: $(wildcard elf/*.h)
 	@echo [ $@ ]
 	@$(CC) $(CFLAGS) $(defs) -c $< -o $@
 
-%.e: %.c $(headers)
+%.e %.i: %.c $(headers)
 	@echo [ $@ ]
 	@$(CC) $(CFLAGS) $(defs) -E $< -o $@
+
+%.s: %.c $(headers)
+	@echo [ $@ ]
+	@$(CC) $(CFLAGS) $(defs) -S $< -o $@
 
 %.o: %.S $(headers)
 	@echo [ $@ ]
 	@$(AS) $(ASFLAGS) $(defs) -c $< -o $@
 
-%.e: %.S $(headers)
+%.e %.s: %.S $(headers)
 	@echo [ $@ ]
 	@$(AS) $(ASFLAGS) $(defs) -E $< -o $@
 
+syscallas.S: asm-offsets.h
+
+include ../../../Makefile.rules
+
 clean:
-	rm -rf $(addsuffix .o,$(objs)) $(shim_target) .lib
+	rm -rf $(addsuffix .o,$(objs)) $(shim_target) $(files_to_build) .lib $(CLEAN_FILES)

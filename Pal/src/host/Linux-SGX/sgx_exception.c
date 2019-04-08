@@ -58,7 +58,7 @@
  *     }
  */
 
-void restore_rt (void) asm ("__restore_rt");
+void restore_rt (void) __asm__ ("__restore_rt");
 
 #ifndef SA_RESTORER
 #define SA_RESTORER  0x04000000
@@ -66,7 +66,7 @@ void restore_rt (void) asm ("__restore_rt");
 
 #define DEFINE_RESTORE_RT(syscall) DEFINE_RESTORE_RT2(syscall)
 # define DEFINE_RESTORE_RT2(syscall)                \
-    asm (                                           \
+    __asm__ (                                       \
          "    nop\n"                                \
          ".align 16\n"                              \
          ".LSTART_restore_rt:\n"                    \
@@ -188,7 +188,7 @@ int unset_sighandler (int * sigs, int nsig)
 static int get_event_num (int signum)
 {
     switch(signum) {
-        case SIGFPE:                return PAL_EVENT_DIVZERO;
+        case SIGFPE:                return PAL_EVENT_ARITHMETIC_ERROR;
         case SIGSEGV: case SIGBUS:  return PAL_EVENT_MEMFAULT;
         case SIGILL:                return PAL_EVENT_ILLEGAL;
         case SIGTERM:               return PAL_EVENT_QUIT;
@@ -208,23 +208,16 @@ static void _DkTerminateSighandler (int signum, siginfo_t * info,
         for (size_t i = 0; i < g_rpc_queue->rpc_threads_num; i++)
             INLINE_SYSCALL(tkill, 2, g_rpc_queue->rpc_threads[i], SIGUSR2);
 
+    __UNUSED(info);
+
     unsigned long rip = uc->uc_mcontext.gregs[REG_RIP];
 
-#if SGX_HAS_FSGSBASE == 0
-    if (rip != (unsigned long) async_exit_pointer &&
-        rip != (unsigned long) double_async_exit) {
-#else
     if (rip != (unsigned long) async_exit_pointer) {
-#endif
         uc->uc_mcontext.gregs[REG_RIP] = (uint64_t) sgx_entry_return;
         uc->uc_mcontext.gregs[REG_RDI] = -PAL_ERROR_INTERRUPTED;
         uc->uc_mcontext.gregs[REG_RSI] = get_event_num(signum);
     } else {
-#if SGX_HAS_FSGSBASE != 0
         sgx_raise(get_event_num(signum));
-#else
-        uc->uc_mcontext.gregs[REG_R9]  = get_event_num(signum);
-#endif
     }
 }
 
@@ -237,14 +230,11 @@ static void _DkResumeSighandler (int signum, siginfo_t * info,
         for (size_t i = 0; i < g_rpc_queue->rpc_threads_num; i++)
             INLINE_SYSCALL(tkill, 2, g_rpc_queue->rpc_threads[i], SIGUSR2);
 
+    __UNUSED(info);
+
     unsigned long rip = uc->uc_mcontext.gregs[REG_RIP];
 
-#if SGX_HAS_FSGSBASE == 0
-    if (rip != (unsigned long) async_exit_pointer &&
-        rip != (unsigned long) double_async_exit) {
-#else
     if (rip != (unsigned long) async_exit_pointer) {
-#endif
         switch (signum) {
             case SIGSEGV:
                 SGX_DBG(DBG_E, "Segmentation Fault in Untrusted Code (RIP = %08lx)\n", rip);
@@ -265,21 +255,8 @@ static void _DkResumeSighandler (int signum, siginfo_t * info,
         INLINE_SYSCALL(exit, 1, 1);
     }
 
-    int event = 0;
-    switch(signum) {
-        case SIGBUS:
-        case SIGSEGV:
-            event = PAL_EVENT_MEMFAULT;
-            break;
-        case SIGILL:
-            event = PAL_EVENT_ILLEGAL;
-            break;
-    }
-#if SGX_HAS_FSGSBASE != 0
+    int event = get_event_num(signum);
     sgx_raise(event);
-#else
-    uc->uc_mcontext.gregs[REG_R9] = event;
-#endif
 }
 
 static void _DkEmptySighandler (int signum, siginfo_t * info,

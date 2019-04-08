@@ -45,14 +45,9 @@ typedef struct exception_event {
     struct pal_frame *  frame;
 } PAL_EVENT;
 
-#define save_return_point(ptr)                      \
-    asm volatile ("leaq 0(%%rip), %%rax\r\n"        \
-                  "movq %%rax, %0\r\n"              \
-                  : "=b"(ptr) :: "memory", "rax")
-
-void _DkGenericEventTrigger (PAL_IDX event_num, PAL_EVENT_HANDLER upcall,
-                             PAL_NUM arg, struct pal_frame * frame,
-                             PAL_CONTEXT * context)
+static void _DkGenericEventTrigger (PAL_IDX event_num, PAL_EVENT_HANDLER upcall,
+                                    PAL_NUM arg, struct pal_frame * frame,
+                                    PAL_CONTEXT * context)
 {
     struct exception_event event;
 
@@ -91,7 +86,7 @@ static struct pal_frame * get_frame (sgx_context_t * uc)
         if (!ADDR_IN_PAL(rip))
             return NULL;
     } else {
-        asm volatile ("movq %%rbp, %0" : "=r"(rbp) :: "memory");
+        __asm__ volatile ("movq %%rbp, %0" : "=r"(rbp) :: "memory");
     }
 
     while (ADDR_IN_PAL(((unsigned long *) rbp)[1]))
@@ -109,7 +104,7 @@ static struct pal_frame * get_frame (sgx_context_t * uc)
     return NULL;
 }
 
-asm (".type arch_exception_return_asm, @function;"
+__asm__ (".type arch_exception_return_asm, @function;"
      "arch_exception_return_asm:"
      "  pop %rax;"
      "  pop %rbx;"
@@ -127,7 +122,7 @@ asm (".type arch_exception_return_asm, @function;"
      "  pop %r15;"
      "  retq;");
 
-extern void arch_exception_return (void) asm ("arch_exception_return_asm");
+extern void arch_exception_return (void) __asm__ ("arch_exception_return_asm");
 
 void _DkExceptionRealHandler (int event, PAL_NUM arg, struct pal_frame * frame,
                               PAL_CONTEXT * context)
@@ -169,7 +164,8 @@ void restore_sgx_context (sgx_context_t * uc)
     *(uint64_t *) uc->rsp = uc->rip;
 
     /* now pop the stack */
-    asm volatile ("mov %0, %%rsp\n"
+    __asm__ volatile (
+                  "mov %0, %%rsp\n"
                   "pop %%rax\n"
                   "pop %%rcx\n"
                   "pop %%rdx\n"
@@ -194,13 +190,6 @@ void restore_sgx_context (sgx_context_t * uc)
 
 void _DkExceptionHandler (unsigned int exit_info, sgx_context_t * uc)
 {
-#if SGX_HAS_FSGSBASE == 0
-    /* set the FS first if necessary */
-    uint64_t fsbase = (uint64_t) GET_ENCLAVE_TLS(fsbase);
-    if (fsbase)
-        wrfsbase(fsbase);
-#endif
-
     union {
         sgx_arch_exitinfo_t info;
         int intval;
@@ -241,11 +230,13 @@ void _DkExceptionHandler (unsigned int exit_info, sgx_context_t * uc)
             restore_sgx_context(uc);
             return;
         }
+        SGX_DBG(DBG_E, "Illegal instruction executed in enclave\n");    
+        ocall_exit(1);
     }
 
     switch (ei.info.vector) {
         case SGX_EXCEPTION_VECTOR_DE:
-            event_num = PAL_EVENT_DIVZERO;
+            event_num = PAL_EVENT_ARITHMETIC_ERROR;
             break;
         case SGX_EXCEPTION_VECTOR_AC:
             event_num = PAL_EVENT_MEMFAULT;
@@ -313,7 +304,8 @@ void _DkExceptionReturn (void * event)
         __clear_frame(frame);
         arch_restore_frame(&frame->arch);
 
-        asm volatile ("xor %%rax, %%rax\r\n"
+        __asm__ volatile (
+                      "xor %%rax, %%rax\r\n"
                       "leaveq\r\n"
                       "retq\r\n" ::: "memory");
     }
@@ -340,7 +332,7 @@ void _DkExceptionReturn (void * event)
     restore_sgx_context(&uc);
 }
 
-void _DkHandleExternelEvent (PAL_NUM event, sgx_context_t * uc)
+void _DkHandleExternalEvent (PAL_NUM event, sgx_context_t * uc)
 {
     struct pal_frame * frame = get_frame(uc);
 
@@ -351,8 +343,8 @@ void _DkHandleExternelEvent (PAL_NUM event, sgx_context_t * uc)
     if (!frame) {
         frame = __alloca(sizeof(struct pal_frame));
         frame->identifier = PAL_FRAME_IDENTIFIER;
-        frame->func = &_DkHandleExternelEvent;
-        frame->funcname = "_DkHandleExternelEvent";
+        frame->func = &_DkHandleExternalEvent;
+        frame->funcname = "_DkHandleExternalEvent";
         arch_store_frame(&frame->arch);
     }
 

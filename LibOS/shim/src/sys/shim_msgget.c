@@ -782,7 +782,7 @@ static int __store_msg_persist (struct shim_msg_handle * msgq)
     snprintf(fileuri, 20, "file:msgq.%08x", msgq->msqid);
 
     PAL_HANDLE file = DkStreamOpen(fileuri, PAL_ACCESS_RDWR, 0600,
-                                   PAL_CREAT_TRY, 0);
+                                   PAL_CREATE_TRY, 0);
     if (!file) {
         ret = -PAL_ERRNO;
         goto out;
@@ -792,7 +792,7 @@ static int __store_msg_persist (struct shim_msg_handle * msgq)
                         sizeof(struct msg_backup) * msgq->nmsgs +
                         msgq->currentsize;
 
-    if (DkStreamSetLength(file, expected_size) != expected_size)
+    if (DkStreamSetLength(file, expected_size))
         goto err_file;
 
     void * mem = (void *) DkStreamMap(file, NULL,

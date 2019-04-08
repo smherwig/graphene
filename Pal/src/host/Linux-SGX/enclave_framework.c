@@ -66,7 +66,7 @@ int sgx_get_report (sgx_arch_hash_t * mrenclave,
         return -PAL_ERROR_DENIED;
 
     SGX_DBG(DBG_S, "Generated report:\n");
-    SGX_DBG(DBG_S, "    cpusvn:           %08x %08x\n", report->cpusvn[0],
+    SGX_DBG(DBG_S, "    cpusvn:           %08lx %08lx\n", report->cpusvn[0],
                                                 report->cpusvn[1]);
     SGX_DBG(DBG_S, "    mrenclave:        %s\n",        alloca_bytes2hexstr(report->mrenclave));
     SGX_DBG(DBG_S, "    mrsigner:         %s\n",        alloca_bytes2hexstr(report->mrsigner));
@@ -498,7 +498,7 @@ int copy_and_verify_trusted_file (const char * path, const void * umem,
          */
         if (memcmp(s, hash, sizeof(sgx_stub_t))) {
             SGX_DBG(DBG_E, "Accesing file:%s is denied. Does not match with MAC"
-                    " at chunk starting at %llu-%llu.\n",
+                    " at chunk starting at %lu-%lu.\n",
                     path, checking, checking_end);
             return -PAL_ERROR_DENIED;
         }
@@ -581,7 +581,7 @@ static int register_trusted_file (const char * uri, const char * checksum_str)
         }
 
         new->index = (++trusted_file_indexes);
-        SGX_DBG(DBG_S, "trusted: [%d] %s %s\n", new->index,
+        SGX_DBG(DBG_S, "trusted: [%ld] %s %s\n", new->index,
                 checksum_text, new->uri);
     } else {
         memset(&new->checksum, 0, sizeof(sgx_checksum_t));
@@ -857,6 +857,24 @@ void test_dh (void)
 
 int init_enclave (void)
 {
+    // Get report to initialize info (MRENCLAVE, etc.) about this enclave from
+    // a trusted source.
+
+    // Since this report is only read by ourselves we can
+    // leave targetinfo zeroed.
+    sgx_arch_targetinfo_t targetinfo = {0};
+    struct pal_enclave_state reportdata = {0};
+    sgx_arch_report_t report;
+
+    int ret = sgx_report(&targetinfo, &reportdata, &report);
+    if (ret) {
+        SGX_DBG(DBG_E, "failed to get self report: %d\n", ret);
+        return -PAL_ERROR_INVAL;
+    }
+    memcpy(pal_sec.mrenclave, report.mrenclave, sizeof(pal_sec.mrenclave));
+    memcpy(pal_sec.mrsigner, report.mrsigner, sizeof(pal_sec.mrsigner));
+    pal_sec.enclave_attributes = report.attributes;
+
 #if 0
     /*
      * This enclave-specific key is a building block for authenticating
@@ -1030,7 +1048,7 @@ int _DkStreamAttestationRequest (PAL_HANDLE stream, void * data,
     }
 
     if (ret == 1) {
-        SGX_DBG(DBG_S, "Not an allowed encalve (mrenclave = %s)\n",
+        SGX_DBG(DBG_S, "Not an allowed enclave (mrenclave = %s)\n",
                 alloca_bytes2hexstr(att.mrenclave));
         ret = -PAL_ERROR_DENIED;
         goto out;

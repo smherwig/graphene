@@ -1,6 +1,6 @@
 GLIBC {
     global:
-        _r_debug; _dl_debug_state;
+        _dl_debug_state;
 };
 PAL {
     global:
@@ -29,6 +29,7 @@ PAL {
 
         DkSystemTimeQuery; DkRandomBitsRead;
         DkInstructionCacheFlush;
+        DkCpuIdRetrieve;
         DkObjectClose;
         # objects checkpoint?
         # objects reload?
@@ -48,6 +49,9 @@ PAL {
 
         # Control block
         pal_control_addr; pal_sec;
+
+        # debugger
+        _r_debug;
 
     local: *;
 };

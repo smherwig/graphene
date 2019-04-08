@@ -79,7 +79,7 @@ int read_enclave_sigstruct(int sigfile, sgx_arch_sigstruct_t * sig)
 
 static inline void cpuid(uint32_t leaf, uint32_t subleaf, uint32_t info[4])
 {
-    asm volatile("cpuid"
+    __asm__ volatile("cpuid"
                  : "=a"(info[0]),
                    "=b"(info[1]),
                    "=c"(info[2]),
@@ -146,8 +146,11 @@ int create_enclave(sgx_arch_secs_t * secs,
     secs->miscselect = token->miscselect_mask;
     memcpy(&secs->attributes, &token->attributes,
            sizeof(sgx_arch_attributes_t));
-    memcpy(&secs->mrenclave, &token->mrenclave, sizeof(sgx_arch_hash_t));
-    memcpy(&secs->mrsigner,  &token->mrsigner,  sizeof(sgx_arch_hash_t));
+    /* Do not initialize secs->mrsigner and secs->mrenclave here as they are
+     * not used by ECREATE to populate the internal SECS. SECS's mrenclave is
+     * computed dynamically and SECS's mrsigner is populated based on the
+     * SIGSTRUCT during EINIT (see pp21 for ECREATE and pp34 for
+     * EINIT in https://software.intel.com/sites/default/files/managed/48/88/329298-002.pdf). */
 
     if (baseaddr) {
         secs->baseaddr = (uint64_t) baseaddr & ~(secs->size - 1);

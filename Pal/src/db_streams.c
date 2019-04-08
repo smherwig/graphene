@@ -72,8 +72,8 @@ const struct handle_ops * pal_handle_ops [PAL_HANDLE_TYPE_BOUND] = {
 
 /* parse_stream_uri scan the uri, seperate prefix and search for
    stream handler which will open or access the stream */
-int parse_stream_uri (const char ** uri, const char ** prefix,
-                      struct handle_ops ** ops)
+static int parse_stream_uri(const char ** uri, char ** prefix,
+                            struct handle_ops ** ops)
 {
     const char * p, * u = (*uri);
 
@@ -126,8 +126,12 @@ int parse_stream_uri (const char ** uri, const char ** prefix,
 
     *uri = p + 1;
 
-    if (prefix)
-        *prefix = u;
+    if (prefix) {
+        *prefix = malloc_copy(u, p - u + 1);
+        if (!*prefix)
+            return -PAL_ERROR_NOMEM;
+        (*prefix)[p - u] = '\0';
+    }
 
     if (ops)
         *ops = hops;
@@ -142,7 +146,7 @@ int _DkStreamOpen (PAL_HANDLE * handle, const char * uri,
                    int access, int share, int create, int options)
 {
     struct handle_ops * ops = NULL;
-    const char * type = NULL;
+    char* type = NULL;
 
     log_stream(uri);
 
@@ -152,7 +156,9 @@ int _DkStreamOpen (PAL_HANDLE * handle, const char * uri,
         return ret;
 
     assert(ops && ops->open);
-    return ops->open(handle, type, uri, access, share, create, options);
+    ret = ops->open(handle, type, uri, access, share, create, options);
+    free(type);
+    return ret;
 }
 
 /* PAL call DkStreamOpen: Open stream based on uri, as given access/share/
@@ -370,9 +376,9 @@ DkStreamWrite (PAL_HANDLE handle, PAL_NUM offset, PAL_NUM count,
 int _DkStreamAttributesQuery (const char * uri, PAL_STREAM_ATTR * attr)
 {
     struct handle_ops * ops = NULL;
-    const char * type = NULL;
+    char* type = NULL;
 
-    int ret = parse_stream_uri (&uri, &type, &ops);
+    int ret = parse_stream_uri(&uri, &type, &ops);
 
     if (ret < 0)
         return ret;
@@ -380,7 +386,9 @@ int _DkStreamAttributesQuery (const char * uri, PAL_STREAM_ATTR * attr)
     if (!ops->attrquery)
         return -PAL_ERROR_NOTSUPPORT;
 
-    return ops->attrquery(type, uri, attr);
+    ret = ops->attrquery(type, uri, attr);
+    free(type);
+    return ret;
 }
 
 /* PAL call DkStreamAttributeQuery: query attribute of a stream by its
@@ -639,6 +647,7 @@ int64_t _DkStreamSetLength (PAL_HANDLE handle, uint64_t length)
 PAL_NUM
 DkStreamSetLength (PAL_HANDLE handle, PAL_NUM length)
 {
+    PAL_NUM rv = 0;
     ENTER_PAL_CALL(DkStreamSetLength);
 
     if (!handle) {
@@ -648,12 +657,16 @@ DkStreamSetLength (PAL_HANDLE handle, PAL_NUM length)
 
     int64_t ret = _DkStreamSetLength(handle, length);
 
+    // Convert failure to a positive value
     if (ret < 0) {
         _DkRaiseFailure(-ret);
-        ret = 0;
+        rv = -ret;
     }
 
-    LEAVE_PAL_CALL_RETURN(ret);
+    // At this point, ret should equal length
+    assert(ret == length);
+
+    LEAVE_PAL_CALL_RETURN(rv);
 }
 
 /* _DkStreamFlush for internal use. This function sync up the handle with
@@ -759,7 +772,7 @@ PAL_BOL DkStreamChangeName (PAL_HANDLE hdl, PAL_STR uri)
     ENTER_PAL_CALL(DkStreamChangeName);
 
     struct handle_ops * ops = NULL;
-    const char * type = NULL;
+    char* type = NULL;
     int ret;
 
     if (uri) {
@@ -774,11 +787,13 @@ PAL_BOL DkStreamChangeName (PAL_HANDLE hdl, PAL_STR uri)
     const struct handle_ops * hops = HANDLE_OPS(hdl);
 
     if (!hops || !hops->rename || (ops && hops != ops)) {
+        free(type);
         _DkRaiseFailure(PAL_ERROR_NOTSUPPORT);
         LEAVE_PAL_CALL_RETURN(PAL_FALSE);
     }
 
     ret = hops->rename(hdl, type, uri);
+    free(type);
 
     if (ret < 0) {
         _DkRaiseFailure(-ret);

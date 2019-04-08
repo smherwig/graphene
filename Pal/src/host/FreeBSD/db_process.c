@@ -137,7 +137,6 @@ static int child_process (void * param)
     struct proc_param * proc_param = param;
     int ret;
 
-    INLINE_SYSCALL(close, 1, PROC_INIT_FD);
     ret = INLINE_SYSCALL(dup2, 2, proc_param->parent->process.stream_in,
                          PROC_INIT_FD);
     if (IS_ERR(ret))
@@ -157,8 +156,7 @@ failed:
     return 0;
 }
 
-int _DkProcessCreate (PAL_HANDLE * handle,
-                      const char * uri, int flags, const char ** args)
+int _DkProcessCreate (PAL_HANDLE * handle, const char * uri, const char ** args)
 {
     PAL_HANDLE exec = NULL;
     PAL_HANDLE parent_handle = NULL, child_handle = NULL;

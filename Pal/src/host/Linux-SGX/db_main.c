@@ -82,7 +82,7 @@ PAL_NUM _DkGetHostId (void)
 void setup_pal_map (struct link_map * map);
 static struct link_map pal_map;
 
-int init_untrusted_slab_mgr (int pagesize);
+void init_untrusted_slab_mgr ();
 int init_enclave (void);
 int init_enclave_key (void);
 int init_child_process (PAL_HANDLE * parent_handle);
@@ -113,11 +113,11 @@ static PAL_HANDLE setup_file_handle (const char * name, int fd)
 
 static int loader_filter (const char * key, int len)
 {
-    if (key[0] == 'l' && key[1] == 'o' && key[2] == 'a' && key[3] == 'd' &&
+    if (len > 7 && key[0] == 'l' && key[1] == 'o' && key[2] == 'a' && key[3] == 'd' &&
         key[4] == 'e' && key[5] == 'r' && key[6] == '.')
         return 0;
 
-    if (key[0] == 's' && key[1] == 'g' && key[2] == 'x' && key[3] == '.')
+    if (len > 4 && key[0] == 's' && key[1] == 'g' && key[2] == 'x' && key[3] == '.')
         return 0;
 
     return 1;
@@ -144,7 +144,7 @@ void pal_linux_main(const char ** arguments, const char ** environments,
 
     /* set up page allocator and slab manager */
     init_slab_mgr(pagesz);
-    init_untrusted_slab_mgr(pagesz);
+    init_untrusted_slab_mgr();
     init_pages();
     init_enclave_key();
 
@@ -152,7 +152,12 @@ void pal_linux_main(const char ** arguments, const char ** environments,
     setup_pal_map(&pal_map);
 
     /* initialize enclave properties */
-    init_enclave();
+    rv = init_enclave();
+    if (rv) {
+        SGX_DBG(DBG_E, "Failed to initalize enclave properties: %d\n", rv);
+        ocall_exit(rv);
+    }
+
     pal_state.start_time = start_time;
 
     /* if there is a parent, create parent handle */
@@ -226,12 +231,6 @@ void pal_linux_main(const char ** arguments, const char ** environments,
 
 /* the following code is borrowed from CPUID */
 
-#define WORD_EAX  0
-#define WORD_EBX  1
-#define WORD_ECX  2
-#define WORD_EDX  3
-#define WORD_NUM  4
-
 static void cpuid (unsigned int leaf, unsigned int subleaf,
                    unsigned int words[])
 {
@@ -290,25 +289,29 @@ static char * cpu_flags[]
 
 void _DkGetCPUInfo (PAL_CPU_INFO * ci)
 {
-    unsigned int words[WORD_NUM];
+    unsigned int words[PAL_CPUID_WORD_NUM];
 
-    char * vendor_id = malloc(12);
+    const size_t VENDOR_ID_SIZE = 13;
+    char* vendor_id = malloc(VENDOR_ID_SIZE);
     cpuid(0, 0, words);
 
-    FOUR_CHARS_VALUE(&vendor_id[0], words[WORD_EBX]);
-    FOUR_CHARS_VALUE(&vendor_id[4], words[WORD_EDX]);
-    FOUR_CHARS_VALUE(&vendor_id[8], words[WORD_ECX]);
+    FOUR_CHARS_VALUE(&vendor_id[0], words[PAL_CPUID_WORD_EBX]);
+    FOUR_CHARS_VALUE(&vendor_id[4], words[PAL_CPUID_WORD_EDX]);
+    FOUR_CHARS_VALUE(&vendor_id[8], words[PAL_CPUID_WORD_ECX]);
+    vendor_id[VENDOR_ID_SIZE - 1] = '\0';
     ci->cpu_vendor = vendor_id;
     // Must be an Intel CPU
     assert(!memcmp(vendor_id, "GenuineIntel", 12));
 
-    char * brand = malloc(48);
+    const size_t BRAND_SIZE = 49;
+    char* brand = malloc(BRAND_SIZE);
     cpuid(0x80000002, 0, words);
-    memcpy(&brand[ 0], words, sizeof(unsigned int) * WORD_NUM);
+    memcpy(&brand[ 0], words, sizeof(unsigned int) * PAL_CPUID_WORD_NUM);
     cpuid(0x80000003, 0, words);
-    memcpy(&brand[16], words, sizeof(unsigned int) * WORD_NUM);
+    memcpy(&brand[16], words, sizeof(unsigned int) * PAL_CPUID_WORD_NUM);
     cpuid(0x80000004, 0, words);
-    memcpy(&brand[32], words, sizeof(unsigned int) * WORD_NUM);
+    memcpy(&brand[32], words, sizeof(unsigned int) * PAL_CPUID_WORD_NUM);
+    brand[BRAND_SIZE - 1] = '\0';
     ci->cpu_brand = brand;
 
     /* According to SDM: EBX[15:0] is to enumerate processor topology 
@@ -318,14 +321,14 @@ void _DkGetCPUInfo (PAL_CPU_INFO * ci)
      * best option we have so far to get the cpu number  */
 
     cpuid(0xb, 1, words);
-    ci->cpu_num      = BIT_EXTRACT_LE(words[WORD_EBX], 0, 16);
+    ci->cpu_num      = BIT_EXTRACT_LE(words[PAL_CPUID_WORD_EBX], 0, 16);
 
     cpuid(1, 0, words);
-    ci->cpu_family   = BIT_EXTRACT_LE(words[WORD_EAX],  8, 12) +
-                       BIT_EXTRACT_LE(words[WORD_EAX], 20, 28);
-    ci->cpu_model    = BIT_EXTRACT_LE(words[WORD_EAX],  4,  8) +
-                      (BIT_EXTRACT_LE(words[WORD_EAX], 16, 20) << 4);
-    ci->cpu_stepping = BIT_EXTRACT_LE(words[WORD_EAX],  0,  4);
+    ci->cpu_family   = BIT_EXTRACT_LE(words[PAL_CPUID_WORD_EAX],  8, 12) +
+                       BIT_EXTRACT_LE(words[PAL_CPUID_WORD_EAX], 20, 28);
+    ci->cpu_model    = BIT_EXTRACT_LE(words[PAL_CPUID_WORD_EAX],  4,  8) +
+                      (BIT_EXTRACT_LE(words[PAL_CPUID_WORD_EAX], 16, 20) << 4);
+    ci->cpu_stepping = BIT_EXTRACT_LE(words[PAL_CPUID_WORD_EAX],  0,  4);
 
     int flen = 0, fmax = 80;
     char * flags = malloc(fmax);
@@ -334,7 +337,7 @@ void _DkGetCPUInfo (PAL_CPU_INFO * ci)
         if (!cpu_flags[i])
             continue;
 
-        if (BIT_EXTRACT_LE(words[WORD_EDX], i, i + 1)) {
+        if (BIT_EXTRACT_LE(words[PAL_CPUID_WORD_EDX], i, i + 1)) {
             int len = strlen(cpu_flags[i]);
             if (flen + len + 1 > fmax) {
                 char * new_flags = malloc(fmax * 2);

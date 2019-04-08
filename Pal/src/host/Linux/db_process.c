@@ -142,7 +142,6 @@ static int child_process (void * param)
     struct proc_param * proc_param = param;
     int ret;
 
-    INLINE_SYSCALL(close, 1, PROC_INIT_FD);
     ret = INLINE_SYSCALL(dup2, 2, proc_param->parent->process.stream_in,
                          PROC_INIT_FD);
     if (IS_ERR(ret))
@@ -164,9 +163,9 @@ failed:
     return ret;
 }
 
-int _DkProcessCreate (PAL_HANDLE * handle,
-                      const char * uri, int flags, const char ** args)
+int _DkProcessCreate (PAL_HANDLE * handle, const char * uri, const char ** args)
 {
+
     PAL_HANDLE exec = NULL;
     PAL_HANDLE parent_handle = NULL, child_handle = NULL;
     int ret;
@@ -497,6 +496,9 @@ int _DkProcessSandboxCreate (const char * manifest, int flags)
 static int64_t proc_read (PAL_HANDLE handle, uint64_t offset, uint64_t count,
                       void * buffer)
 {
+    if (offset)
+        return -PAL_ERROR_INVAL;
+
     int64_t bytes = INLINE_SYSCALL(read, 3, handle->process.stream_in, buffer,
                                    count);
 
@@ -516,6 +518,9 @@ static int64_t proc_read (PAL_HANDLE handle, uint64_t offset, uint64_t count,
 static int64_t proc_write (PAL_HANDLE handle, uint64_t offset, uint64_t count,
                        const void * buffer)
 {
+    if (offset)
+        return -PAL_ERROR_INVAL;
+
     int64_t bytes = INLINE_SYSCALL(write, 3, handle->process.stream_out, buffer,
                                    count);
 

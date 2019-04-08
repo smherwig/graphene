@@ -163,6 +163,8 @@ int _DkMutexUnlock (struct mutex_handle * mut);
 void init_child_process (PAL_HANDLE * parent, PAL_HANDLE * exec,
                          PAL_HANDLE * manifest);
 
+void cpuid (unsigned int leaf, unsigned int subleaf,
+            unsigned int words[]);
 void signal_setup (void);
 
 unsigned long _DkSystemTimeQueryEarly (void);
@@ -198,7 +200,8 @@ int pal_thread_init (void * tcbptr);
 static inline PAL_TCB * get_tcb (void)
 {
     PAL_TCB * tcb;
-    asm ("movq %%gs:%c1,%q0"
+    __asm__ (
+         "movq %%gs:%c1,%q0"
          : "=r" (tcb)
          : "i" (offsetof(PAL_TCB, self)));
     return tcb;

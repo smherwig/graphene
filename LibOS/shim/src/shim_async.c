@@ -93,16 +93,19 @@ int64_t install_async_event (PAL_HANDLE object, unsigned long time,
     if (!listp_empty(&async_list)) {
         tmp = listp_first_entry(&async_list, struct async_event, list);
         tmp = tmp->list.prev;
+
+        rv = tmp->expire_time - install_time;
+
         /*
          * any previously set alarm() is canceled.
          * There should be exactly only one timer pending
          */
-		listp_del(tmp, &async_list, list);
+        listp_del(tmp, &async_list, list);
         free(tmp);
-        rv = tmp->expire_time - install_time;
-    } else
-	   tmp = NULL;
-    
+    } else {
+        tmp = NULL;
+    }
+
     INIT_LIST_HEAD(event, list);
     if (!time)    // If seconds is zero, any pending alarm is canceled.
         free(event);
@@ -281,6 +284,7 @@ update_list:
     unlock(async_helper_lock);
     put_thread(self);
     debug("async helper thread terminated\n");
+    free(local_objects);
 
     DkThreadExit();
 }
@@ -318,14 +322,27 @@ int create_async_helper (void)
     return 0;
 }
 
-int terminate_async_helper (void)
+/*
+ * On success, the reference to the thread of async helper is returned with
+ * reference count incremented.
+ * It's caller the responsibility to wait for its exit and release the
+ * final reference to free related resources.
+ * It's problematic for the thread itself to release its resources which it's
+ * using. For example stack.
+ * So defer releasing it after its exit and make the releasing the caller
+ * responsibility.
+ */
+struct shim_thread * terminate_async_helper (void)
 {
     if (async_helper_state != HELPER_ALIVE)
-        return 0;
+        return NULL;
 
     lock(async_helper_lock);
+    struct shim_thread * ret = async_helper_thread;
+    if (ret)
+        get_thread(ret);
     async_helper_state = HELPER_NOTALIVE;
     unlock(async_helper_lock);
     set_event(&async_helper_event, 1);
-    return 0;
+    return ret;
 }

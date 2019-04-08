@@ -13,13 +13,13 @@ struct stack_frame {
 
 PAL_HANDLE _fork (void * args)
 {
-    register struct stack_frame * fp asm("ebp");
+    register struct stack_frame * fp __asm__ ("ebp");
     struct stack_frame * frame = fp;
 
     if (args == NULL) {
         struct stack_frame cur_frame = *frame;
         pal_printf("return address is %08x\n", cur_frame.ret);
-        return DkThreadCreate(&_fork, &cur_frame, 0);
+        return DkThreadCreate(&_fork, &cur_frame);
     }
     else {
         struct stack_frame * las_frame = (struct stack_frame *) args;

@@ -1,4 +1,4 @@
-#!/usr/bin/python
+#!/usr/bin/env python2
 
 import os, sys, mmap
 from regression import Regression
@@ -29,5 +29,6 @@ if not sgx:
                          check=lambda res: "mmap test 5 passed" in res[0].out and \
                          "mmap test 8 passed" in res[0].out)
 
-                         
-regression.run_checks()
+
+rv = regression.run_checks()
+if rv: sys.exit(rv)

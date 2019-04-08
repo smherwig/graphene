@@ -1,4 +1,6 @@
-#!/usr/bin/python
+#!/usr/bin/env python2
+## This test is specifically for the reference monitor code, not process creation in general.
+## It is not well-tested right now, but keep the tests around for future work.
 
 import os, sys, mmap
 from regression import Regression
@@ -47,4 +49,3 @@ regression.add_check(name="Process Creation without Executable",
 
 rv = regression.run_checks()
 #if rv: sys.exit(rv)
-

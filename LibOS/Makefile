@@ -19,11 +19,25 @@ format:
 
 ifeq ($(findstring x86_64,$(SYS))$(findstring linux,$(SYS)),x86_64linux)
 
-.INTERMEDIATE: $(BUILD_DIR)/Build.success
+.SECONDARY: $(BUILD_DIR)/Build.success
 
-$(BUILD_DIR)/Build.success: $(BUILD_DIR)/Makefile
+GLIBC_ADDED_FILES = \
+        $(GLIBC_SRC)/syscallas.S \
+        $(GLIBC_SRC)/syscalldb.c \
+        $(GLIBC_SRC)/syscalldb.h \
+        $(GLIBC_SRC)/libos/Makefile \
+        $(GLIBC_SRC)/libos/Versions \
+        $(GLIBC_SRC)/libos/benchmark.c \
+        $(GLIBC_SRC)/libos/checkpoint.c \
+        $(GLIBC_SRC)/libos/msgpersist.c \
+        $(GLIBC_SRC)/libos/sandbox.c \
+        $(GLIBC_SRC)/elf/syscalldb.c \
+        $(GLIBC_SRC)/elf/syscallas.S \
+        $(GLIBC_SRC)/sysdeps/unix/sysv/linux/x86_64/syscalldb.h
+
+$(BUILD_DIR)/Build.success: $(BUILD_DIR)/Makefile $(GLIBC_ADDED_FILES)
 	@echo "Building glibc, may take a while to finish. Warning messages may show up. If this process terminates with failures, see \"$(BUILD_DIR)/build.log\" for more information."
-	cd $(BUILD_DIR) && ($(MAKE) 2>&1 >> build.log)
+	($(MAKE) -C $(BUILD_DIR) 2>&1 >> build.log) && touch $@
 #  2>&1 | tee -a build.log)
 
 $(GLIBC_TARGET): $(BUILD_DIR)/Build.success
@@ -40,7 +54,12 @@ GLIBC_MIRRORS ?= https://ftp.gnu.org/gnu/ \
 		https://mirrors.ocf.berkeley.edu/gnu/
 
 ifeq ($(shell git ls-files $(GLIBC_SRC)/configure),)
-$(GLIBC_SRC)/configure: $(GLIBC_SRC).patch
+GLIBC_PATCHES = \
+	$(GLIBC_SRC).patch \
+	glibc-fix-warning.patch \
+	glibc-no-pie.patch
+
+$(GLIBC_SRC)/configure: $(GLIBC_PATCHES) Makefile
 	[ -f $(GLIBC_SRC).tar.gz ] || \
 	for MIRROR in $(GLIBC_MIRRORS); do \
 		wget --timeout=10 $${MIRROR}glibc/$(GLIBC_SRC).tar.gz \
@@ -49,9 +68,11 @@ $(GLIBC_SRC)/configure: $(GLIBC_SRC).patch
 	[ "`sha256sum $(GLIBC_SRC).tar.gz`" = "$(GLIBC_CHECKSUM)  $(GLIBC_SRC).tar.gz" ] || \
 		(echo "*** $(GLIBC_SRC).tar.gz has a wrong checksum ***"; exit 255)
 	tar -xzf $(GLIBC_SRC).tar.gz
-	cd $(GLIBC_SRC) && patch -p1 < ../$(GLIBC_SRC).patch
-	cd $(GLIBC_SRC) && patch -p1 < ../glibc-fix-warning.patch
-	cd $(GLIBC_SRC) && patch -p1 < ../glibc-no-pie.patch
+	cd $(GLIBC_SRC) && \
+	for p in $(GLIBC_PATCHES); do \
+		echo applying $$p; \
+		patch -p1 < ../$$p; \
+	done
 endif
 
 .PHONY: clean

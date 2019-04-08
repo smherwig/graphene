@@ -68,19 +68,16 @@ bool _DkCheckMemoryMappable (const void * addr, int size)
 
 int _DkVirtualMemoryAlloc (void ** paddr, uint64_t size, int alloc_type, int prot)
 {
-    void * addr = *paddr, * mem;
+    if (!WITHIN_MASK(prot, PAL_PROT_MASK))
+        return -PAL_ERROR_INVAL;
 
-    //int flags = HOST_FLAGS(alloc_type, prot|PAL_PROT_WRITECOPY);
-    //prot = HOST_PROT(prot);
-    /* The memory should have MAP_PRIVATE and MAP_ANONYMOUS */
-    //flags |= MAP_ANONYMOUS|(addr ? MAP_FIXED : 0);
-    //mem = (void *) ARCH_MMAP(addr, size, prot, flags, -1, 0);
+    void * addr = *paddr, * mem;
 
     if ((alloc_type & PAL_ALLOC_INTERNAL) && addr)
         return -PAL_ERROR_INVAL;
 
     if (size == 0)
-        asm volatile ("int $3");
+        __asm__ volatile ("int $3");
 
     mem = get_reserved_pages(addr, size);
     if (!mem)
@@ -123,6 +120,11 @@ int _DkVirtualMemoryFree (void * addr, uint64_t size)
 
 int _DkVirtualMemoryProtect (void * addr, uint64_t size, int prot)
 {
+    static struct atomic_int at_cnt = {.counter = 0};
+
+    if (atomic_cmpxchg(&at_cnt, 0, 1) == 0)
+        SGX_DBG(DBG_M, "[Warning] DkVirtualMemoryProtect (0x%p, %lu, %d) is unimplemented",
+                addr, size, prot);
     return 0;
 }
 

@@ -404,10 +404,15 @@ call_lose:
     if (type == OBJECT_LOAD &&
         header->e_phoff + maplength <= (size_t) fbp_len) {
         ElfW(Phdr) * new_phdr = (ElfW(Phdr) *) malloc (maplength);
+        if (!new_phdr) {
+            errstring = "new_phdr malloc failure";
+            goto call_lose;
+        }
         if ((ret = (*seek) (file, header->e_phoff, SEEK_SET)) < 0 ||
             (ret = (*read) (file, new_phdr, maplength)) < 0) {
             errstring = "cannot read file data";
             errval = ret;
+            free(new_phdr);
             goto call_lose;
         }
         phdr = new_phdr;
@@ -1035,7 +1040,7 @@ static int __load_elf_object (struct shim_handle * file, void * addr,
                               int type, struct link_map * remap)
 {
     char * hdr = addr;
-    int len, ret = 0;
+    int len = 0, ret = 0;
 
     if (type == OBJECT_LOAD || type == OBJECT_REMAP) {
         hdr = __alloca(FILEBUF_SIZE);
@@ -1586,8 +1591,8 @@ int execute_elf_object (struct shim_handle * exec, int argc, const char ** argp,
                     :
                     : "a"(entry),
                     "b"(argp),
-                    "D"(argc)
-
+                    "D"(argc),
+                    "d"(0)
                     : "memory");
 #else
 # error "architecture not supported"
