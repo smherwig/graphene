@@ -4,3 +4,7 @@
 /Jenkinsfiles/JenkinsfileSGX-*
 
 .lib
+
+bearssl-0.6/build/libbearssl.a
+bearssl-0.6/build/libbearssl.so
+bearssl-0.6/build/obj/
