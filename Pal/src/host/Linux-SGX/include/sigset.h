@@ -1,9 +1,5 @@
-#ifndef __SIGSET_H__
-#define __SIGSET_H__
-
-/* __sig_atomic_t, __sigset_t, and related definitions.  Linux version.
-   Copyright (C) 1991, 1992, 1994, 1996, 1997, 2007
-   Free Software Foundation, Inc.
+/* __sig_atomic_t, __sigset_t, and related definitions.  Generic/BSD version.
+   Copyright (C) 1991-2014 Free Software Foundation, Inc.
    This file is part of the GNU C Library.
 
    The GNU C Library is free software; you can redistribute it and/or
@@ -17,67 +13,54 @@
    Lesser General Public License for more details.
 
    You should have received a copy of the GNU Lesser General Public
-   License along with the GNU C Library; if not, write to the Free
-   Software Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA
-   02111-1307 USA.  */
+   License along with the GNU C Library; if not, see
+   <http://www.gnu.org/licenses/>.  */
 
-#define _SIGSET_H_types 1
-#define _SIGSET_H_fns   1
-
-#define ____sigset_t_defined
+#ifndef	_SIGSET_H_types
+#define	_SIGSET_H_types	1
 
 typedef int __sig_atomic_t;
 
 /* A `sigset_t' has a bit for each signal.  */
-
-# define _SIGSET_NWORDS	(64 / (8 * sizeof (unsigned long int)))
-
-typedef struct
-  {
-    unsigned long int __val[_SIGSET_NWORDS];
-  } __sigset_t;
+typedef unsigned long int __sigset_t;
 
 
-/* Return a mask that includes the bit for SIG only.  */
-# define __sigmask(sig) \
-  (((unsigned long int) 1) << (((sig) - 1) % (8 * sizeof (unsigned long int))))
+/* We only want to define these functions if <signal.h> was actually
+   included; otherwise we were included just to define the types.  Since we
+   are namespace-clean, it wouldn't hurt to define extra macros.  But
+   trouble can be caused by functions being defined (e.g., any global
+   register vars declared later will cause compilation errors).  */
 
-/* Return the word index for SIG.  */
-# define __sigword(sig)	(((sig) - 1) / (8 * sizeof (unsigned long int)))
+/* Return a mask that includes SIG only.  The cast to `sigset_t' avoids
+   overflow if `sigset_t' is wider than `int'.  */
+#define	__sigmask(sig)	(((__sigset_t) 1) << ((sig) - 1))
 
-# define __sigemptyset(set) \
-  ({ int __cnt = _SIGSET_NWORDS;				      \
-		    __sigset_t *__set = (set);				      \
-		    while (--__cnt >= 0) __set->__val[__cnt] = 0;	      \
-		    0; })
-# define __sigfillset(set) \
-  ({ int __cnt = _SIGSET_NWORDS;				      \
-		    __sigset_t *__set = (set);				      \
-		    while (--__cnt >= 0) __set->__val[__cnt] = ~0UL;	      \
-		    0; })
-# define __sigcopyset(set, src) \
-  ({ int __cnt = _SIGSET_NWORDS;				      \
-		    __sigset_t *__set = (set);				      \
-		    __sigset_t *__src = (src);				      \
-		    while (--__cnt >= 0) __set->__val[__cnt] = __src->__val[__cnt]; \
-		    0; })
+#define	__sigemptyset(set)	((*(set) = (__sigset_t) 0), 0)
+#define	__sigfillset(set)	((*(set) = ~(__sigset_t) 0), 0)
+
+#ifdef _GNU_SOURCE
+# define __sigisemptyset(set)	(*(set) == (__sigset_t) 0)
+# define __sigandset(dest, left, right) \
+				((*(dest) = (*(left) & *(right))), 0)
+# define __sigorset(dest, left, right) \
+				((*(dest) = (*(left) | *(right))), 0)
+#endif
 
 /* These functions needn't check for a bogus signal number -- error
    checking is done in the non __ versions.  */
-
 # define __SIGSETFN(NAME, BODY, CONST)					      \
   static inline int							      \
   NAME (CONST __sigset_t *__set, int __sig)				      \
   {									      \
-    unsigned long int __mask = __sigmask (__sig);			      \
-    unsigned long int __word = __sigword (__sig);			      \
+    __sigset_t __mask = __sigmask (__sig);				      \
     return BODY;							      \
   }
 
-__SIGSETFN (__sigismember, (__set->__val[__word] & __mask) ? 1 : 0, __const)
-__SIGSETFN (__sigaddset, ((__set->__val[__word] |= __mask), 0), )
-__SIGSETFN (__sigdelset, ((__set->__val[__word] &= ~__mask), 0), )
+__SIGSETFN (__sigismember, (*__set & __mask) ? 1 : 0, const)
+__SIGSETFN (__sigaddset, ((*__set |= __mask), 0), )
+__SIGSETFN (__sigdelset, ((*__set &= ~__mask), 0), )
 
 # undef __SIGSETFN
 
-#endif /* __SIGSET_H__  */
+
+#endif /* ! _SIGSET_H_fns.  */

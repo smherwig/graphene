@@ -32,8 +32,8 @@
 #include "rpcqueue.h"
 
 #include <atomic.h>
-#include <sigset.h>
 #include <linux/signal.h>
+#include <sigset.h>
 #include <ucontext.h>
 #include <asm/errno.h>
 

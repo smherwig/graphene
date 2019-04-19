@@ -17,13 +17,46 @@
 #include <linux/futex.h>
 #include <math.h>
 #include <asm/errno.h>
-#include <signal.h>
+#include <linux/signal.h>
+
+#include <sigset.h>
 
 #ifndef SOL_IPV6
 # define SOL_IPV6 41
 #endif
 
 #define ODEBUG(code, ms) do {} while (0)
+
+/* Set all signals in SET.  */
+static int
+sigfillset(sigset_t *set)
+{
+    if (set == NULL)
+        return -1;
+
+    memset (set, 0xff, sizeof (sigset_t));
+
+    /* If the implementation uses a cancellation signal don't set the bit.  */
+#ifdef SIGCANCEL
+    __sigdelset (set, SIGCANCEL);
+#endif
+    /* Likewise for the signal to implement setxid.  */
+#ifdef SIGSETXID
+    __sigdelset (set, SIGSETXID);
+#endif
+
+  return 0;
+}
+
+/* Add SIGNO to SET.  */
+static int
+sigdelset(sigset_t *set, int signo)
+{
+    if (set == NULL || signo <= 0 || signo >= NSIG)
+            return -1; 
+
+    return __sigdelset (set, signo);
+}
 
 static int sgx_ocall_exit(void* prv)
 {

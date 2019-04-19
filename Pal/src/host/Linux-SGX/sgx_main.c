@@ -290,8 +290,7 @@ int initialize_enclave (struct pal_enclave * enclave)
 
     if (enclave->rpc_thread_num > MAX_RPC_THREADS) {
         SGX_DBG(DBG_E, "Too many RPC threads specified\n");
-        ret = -EINVAL;
-        goto err;
+        return -EINVAL;
     }
 
     /* Reading sgx.static_address from manifest */
