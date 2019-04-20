@@ -49,6 +49,7 @@ struct shim_fs mountable_fs [NUM_MOUNTABLE_FS] = {
         { .name = "dev",    .fs_ops = &dev_fs_ops,    .d_ops = &dev_d_ops,    },
         { .name = "nextfs", .fs_ops = &nextfs_fs_ops, .d_ops = &nextfs_d_ops, },
         { .name = "mdish",  .fs_ops = &mdish_fs_ops,  .d_ops = &mdish_d_ops,  },
+        { .name = "mtcad",  .fs_ops = &mtcad_fs_ops,  .d_ops = &mtcad_d_ops,  },
     };
 
 #define NUM_BUILTIN_FS      4
