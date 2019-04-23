@@ -29,16 +29,25 @@
 #include <inttypes.h>
 #include <string.h>
 
+#include <bearssl.h>
+
 #include <rho_binascii.h>
+#include <rho_bitops.h>
 #include <rho_buf.h>
+#include <rho_endian.h>
 #include <rho_log.h>
 #include <rho_mem.h>
+#include <rho_misc.h>
 #include <rho_queue.h>
 #include <rho_rand.h>
 #include <rho_shim_dentry.h>
 #include <rho_sock.h>
 #include <rho_ssl.h>
 #include <rho_str.h>
+#include <rho_ticketlock.h>
+
+#include <rpc.h>
+#include <tcad.h>
 
 #define URI_MAX_SIZE    STR_SIZE
 
@@ -49,153 +58,200 @@
 
 /*****/
 
-#define MTCAD_HEADER_LENGTH            8
-#define MTCAD_MAX_NAME_LENGTH   255
-
 /* TODO: move to errno.h */
 #define ERPC                            999
 
-#define MTCAD_OP_FILE_OPEN      0
-#define MTCAD_OP_FILE_CLOSE     1
-#define MTCAD_OP_FILE_ADVLOCK   2
-#define MTCAD_OP_MMAP           3
-#define MTCAD_OP_MUNMAP         4
+#define SMTCAD_LOCKOP_LOCK       1
+#define SMTCAD_LOCKOP_UNLOCK     2
 
-#define MTCAD_OP_FORK           5
-#define MTCAD_OP_CHILD_ATTACH   6
-#define MTCAD_OP_NEW_FDTABLE    7
+#define SMTCAD_COUNTER_SIZE 4
+#define SMTCAD_IV_SIZE 12
+#define SMTCAD_KEY_SIZE 32
+#define SMTCAD_TAG_SIZE 16
 
-#define MTCAD_LOCKOP_LOCK       1
-#define MTCAD_LOCKOP_UNLOCK     2
+#define SMTCAD_AD_SIZE \
+    (SMTCAD_COUNTER_SIZE + SMTCAD_KEY_SIZE + SMTCAD_IV_SIZE + SMTCAD_TAG_SIZE)
 
-struct mtcad_client {
-    struct rho_sock *sock;
-    struct rho_buf *buf;
-    char *url;      /* URL for server */
-    uint32_t    debug_cookie;
+#define SMTCAD_AD_COUNTER_POS  0
+#define SMTCAD_AD_KEY_POS      SMTCAD_COUNTER_SIZE
+#define SMTCAD_AD_IV_POS       SMTCAD_AD_KEY_POS + SMTCAD_KEY_SIZE
+#define SMTCAD_AD_TAG_POS      SMTCAD_AD_IV_POS + SMTCAD_IV_SIZE
+
+struct smtcad_client {
+    struct rpc_agent *agent;
 };
 
-struct mtcad_segment {
-    char name[MTCAD_MAX_NAME_LENGTH + 1];
-    void *addr;
+struct smtcad_memfile {
+    char name[TCAD_MAX_NAME_SIZE];
     size_t size;
+    void *pub_mem;
+    void *priv_mem;
+    uint8_t iv[SMTCAD_IV_SIZE];
+    uint8_t key[SMTCAD_KEY_SIZE];
+    uint8_t tag[SMTCAD_TAG_SIZE];
+    struct rho_ticketlock *tl;
+    int turn;
 };
 
 /*
- * For now, we have a hard limit of 32 segments opened.
+ * For now, we have a hard limit of 32 memfiles opened.
  * The implementation is simplistic because the struct
  * is (I believe) shallow-copied during migration/fork,
  * and a more robus data structure (with internal pointers)
  * would require additional work to reconstitute during
  * migration/fork.
  */
-struct mtcad_mdata {
+struct smtcad_mdata {
     char url[512];           /* URL for server */
     uint64_t ident;             /* auth cookie for child */
     unsigned char ca_der[4096];
     size_t  ca_der_len;
-    uint32_t segments_bitmap;
-    struct mtcad_segment segments[32];
-    struct mtcad_client *client;
+    uint32_t fd_bitmap;
+    struct smtcad_memfile fd_tab[32];
+    struct smtcad_client *client;
 };
 
 
-static struct mtcad_mdata * mtcad_mdata_create(const char *uri,
-        unsigned char *ca_der, size_t ca_der_len);
-static void mtcad_mdata_print(const struct mtcad_mdata *mdata);
-static struct mtcad_segment * mtcad_mdata_new_segment(
-        struct mtcad_mdata *mdata, const char *name);
-static struct mtcad_segment * mtcad_mdata_segment_by_name(
-        struct mtcad_mdata *mdata, const char *name);
+/******************************************
+ * SERIALIZE/DESERIALIZE HELPERS
+ ******************************************/
+static void
+smtcad_pack_assocdata(const struct smtcad_memfile *mf, void *ad)
+{
+    int32_t turn_be = htobe32(mf->turn);
 
-static int mtcad_segment_initialize(struct mtcad_segment *seg, void **addr,
-        size_t size);
-static struct mtcad_segment * mtcad_shim_handle_to_segment(
-        const struct shim_handle *hdl);
+    memcpy(ad,                    &turn_be, sizeof(turn_be));
+    memcpy(ad + SMTCAD_AD_KEY_POS, mf->key, SMTCAD_KEY_SIZE);
+    memcpy(ad + SMTCAD_AD_IV_POS,  mf->iv,  SMTCAD_IV_SIZE);
+    memcpy(ad + SMTCAD_AD_TAG_POS, mf->tag, SMTCAD_TAG_SIZE);
+}
 
-static void mtcad_marshal_str(struct rho_buf *buf, const char *s);
-static void mtcad_pmarshal_hdr(struct rho_buf *buf, uint32_t op,
-        uint32_t bodylen);
-static void mtcad_demarshal_hdr(struct rho_buf *buf, uint32_t *status,
-        uint32_t *bodylen);
-
-static struct mtcad_client * mtcad_client_open(const char *url,
-        unsigned char *ca_der, size_t ca_der_len);
-
-static void mtcad_client_close(struct mtcad_client *client);
-static int mtcad_client_request(struct mtcad_client *client,
-        uint32_t *status, uint32_t *bodylen);
-
-static int mtcad_mount(const char *uri, const char *root, void **mount_data);
-static int mtcad_unmount(void *mount_data);
-static int mtcad_close(struct shim_handle *hdl);
-static int mtcad_write(struct shim_handle *hdl, const void *data,
-        size_t count);
-static int mtcad_mmap(struct shim_handle *hdl, void **addr, size_t size,
-                        int prot, int flags, off_t offset);
-static int mtcad_flush(struct shim_handle *hdl);
-static int mtcad_seek(struct shim_handle *hdl, off_t offset, int whence);
-static int mtcad_move(const char *trim_old_name, const char *trim_new_name);
-static int mtcad_copy(const char *trim_old_name, const char *trim_new_name);
-static int mtcad_truncate(struct shim_handle *hdl, uint64_t len);
-static int mtcad_hstat(struct shim_handle *hdl, struct stat *stat);
-static int mtcad_setflags(struct shim_handle *hdl, int flags);
-static void mtcad_hput(struct shim_handle *hdl);
-static int mtcad_advlock(struct shim_handle *hdl, int op, struct flock *flock);
-static int mtcad_advlock_lock(struct shim_handle *hdl, struct flock *flock);
-static int mtcad_advlock_unlock(struct shim_handle *hdl, struct flock *flock);
-static int mtcad_lock(const char *trim_name);
-static int mtcad_unlock(const char *trim_name);
-static int mtcad_lockfs(void);
-static int mtcad_unlockfs(void);
-static int mtcad_checkout(struct shim_handle *hdl);
-static int mtcad_checkin(struct shim_handle *hdl);
-static int mtcad_poll(struct shim_handle *hdl, int poll_type);
-static int mtcad_checkpoint(void **checkpoint, void *mount_data);
-static int mtcad_migrate(void *checkpoint, void **mount_data);
-
-static int mtcad_open(struct shim_handle *hdl, struct shim_dentry *dent,
-        int flags);
-static int mtcad_lookup(struct shim_dentry *dent, bool force);
-static int mtcad_mode(struct shim_dentry *dent, mode_t *mode, bool force);
-static int mtcad_dput(struct shim_dentry *dent);
-static int mtcad_creat(struct shim_handle *hdl, struct shim_dentry *dir,
-        struct shim_dentry *dent, int flags, mode_t mode);
-static int mtcad_unlink(struct shim_dentry *dir, struct shim_dentry *dent);
-static int mtcad_mkdir(struct shim_dentry *dir, struct shim_dentry *dent,
-        mode_t mode);
-static int mtcad_stat(struct shim_dentry *dent, struct stat *stat);
-static int mtcad_follow_link(struct shim_dentry *dent, struct shim_qstr *link);
-static int mtcad_set_link(struct shim_dentry *dent, const char *link);
-static int mtcad_chmod(struct shim_dentry *dent, mode_t mode);
-static int mtcad_chown(struct shim_dentry *dent, int uid, int gid);
-static int mtcad_rename(struct shim_dentry *old, struct shim_dentry *new);
-static int mtcad_readdir(struct shim_dentry *dent,
-        struct shim_dirent **dirent);
+static void
+smtcad_unpack_assocdata(const void *ad, struct smtcad_memfile *mf)
+{
+    memcpy(mf->iv,  ad + SMTCAD_AD_IV_POS,  SMTCAD_IV_SIZE);
+    memcpy(mf->tag, ad + SMTCAD_AD_TAG_POS, SMTCAD_TAG_SIZE);
+}
 
 /********************************* 
- * SEGMENTS BITMAP
+ * AES-GCM
  *********************************/
-#define MTCAD_SEGMENTS_BITMAP_SET(bitmap, i) \
-    (bitmap) |= (1 << (i))
 
-#define MTCAD_SEGMENTS_BITMAP_CLEAR(bitmap, i) \
-    (bitmap) &= (~(1 << (i)))
+static void
+smtcad_encrypt(uint8_t *data, size_t data_len, const uint8_t *key,
+        const uint8_t *iv, uint8_t *tag)
+{
+    br_aes_x86ni_ctr_keys ctx;
+    br_gcm_context gc;
 
-#define MTCAD_SEGMENTS_BITMAP_FOREACH(i, val, bitmap) \
-    for ( \
-            (i) = 0, (val) = (((bitmap) & (1 << (i))) ? 1 : 0); \
-            (i) < 32; \
-            (i)++,   (val) = (((bitmap) & (1 << (i))) ? 1 : 0) \
-        )
+    br_aes_x86ni_ctr_init(&ctx, key, SMTCAD_KEY_SIZE);
+    br_gcm_init(&gc, &ctx.vtable, br_ghash_pclmul);
+    br_gcm_reset(&gc, iv, SMTCAD_IV_SIZE); 
+    /* use br_gc_aad_inject, if needed */
+    br_gcm_flip(&gc);
+    br_gcm_run(&gc, 1, data, data_len); /* encrypts in-place */
+    br_gcm_get_tag(&gc, tag);
+}
 
+static void
+smtcad_decrypt(uint8_t *data, size_t data_len, const uint8_t *key,
+        const uint8_t *iv, uint8_t *tag)
+{
+    br_aes_x86ni_ctr_keys ctx;
+    br_gcm_context gc;
+
+    br_aes_x86ni_ctr_init(&ctx, key, SMTCAD_KEY_SIZE);
+    br_gcm_init(&gc, &ctx.vtable, br_ghash_pclmul);
+    br_gcm_reset(&gc, iv, SMTCAD_IV_SIZE); 
+    /* use br_gc_aad_inject, if needed */
+    br_gcm_flip(&gc);
+    br_gcm_run(&gc, 0, data, data_len); /* encrypts in-place */
+    br_gcm_get_tag(&gc, tag);
+}
+
+/******************************************
+ * MEMFILE
+ *
+ * A MEMFILE is either a file that acts as
+ * a lock, or a file that acts as a lock
+ * with some associated memory.
+ ******************************************/ 
+static void
+smtcad_memfile_make_map(struct smtcad_memfile *mf, size_t size)
+{
+    mf->size = size;
+
+    /* TODO: need to make SHAREABLE, outside of enclave */
+    mf->pub_mem =  DkVirtualMemoryAlloc(NULL, size, 0,
+            PAL_PROT((PROT_READ|PROT_WRITE), 0));
+    if (mf->pub_mem == NULL)
+        rho_errno_die(errno, "mmap");
+
+    mf->priv_mem = DkVirtualMemoryAlloc(NULL, size, 0,
+            PAL_PROT((PROT_READ|PROT_WRITE), 0));
+    if (mf->priv_mem == NULL)
+        rho_errno_die(errno, "mmap");
+
+    rho_rand_bytes(mf->iv, SMTCAD_IV_SIZE);
+    rho_rand_bytes(mf->key, SMTCAD_KEY_SIZE);
+    smtcad_encrypt(mf->priv_mem, mf->size, mf->key, mf->iv, mf->tag);
+    memcpy(mf->pub_mem, mf->priv_mem, mf->size);
+}
+
+static void
+smtcad_memfile_clear(struct smtcad_memfile *mf)
+{
+    if (mf->pub_mem != NULL)
+        DkVirtualMemoryFree(mf->pub_mem, mf->size);
+
+    if (mf->priv_mem != NULL)
+        DkVirtualMemoryFree(mf->priv_mem, mf->size);
+
+    if (mf->tl != NULL)
+        DkVirtualMemoryFree(mf->tl, sizeof(struct rho_ticketlock));
+
+    rho_memzero(mf, sizeof(*mf));
+}
+
+/* decrypt file into private memory */
 static int
-mtcad_segments_bitmap_ffc(uint32_t bitmap)
+smtcad_memfile_map_in(struct smtcad_memfile *mf)
+{
+    int error = 0;
+    uint8_t actual_tag[SMTCAD_TAG_SIZE] = {0};
+
+    memcpy(mf->priv_mem, mf->pub_mem, mf->size);
+    smtcad_decrypt(mf->priv_mem, mf->size, mf->key, mf->iv, actual_tag);
+    if (!rho_mem_equal(mf->tag, actual_tag, SMTCAD_TAG_SIZE)) {
+        rho_warn("on memfile \"%s\"map in, tag does not match trusted tag",
+                mf->name);
+        error = EBADE;  /* invalid exchange */
+    }
+
+    return (error);
+}
+
+/* encrypt private memory to file */
+static void
+smtcad_memfile_map_out(struct smtcad_memfile *mf)
+{
+    rho_rand_bytes(mf->iv, SMTCAD_IV_SIZE);
+    smtcad_encrypt(mf->priv_mem, mf->size, mf->key, mf->iv, mf->tag);
+    memcpy(mf->pub_mem, mf->priv_mem, mf->size);
+}
+
+/**********************************************************
+ * MOUNT DATA
+ *
+ * (acts like a fs-specific file descriptor table
+ **********************************************************/
+static int
+smtcad_fd_bitmap_ffc(uint32_t bitmap)
 {
     int i = 0;
     int val = 0;
 
-    MTCAD_SEGMENTS_BITMAP_FOREACH(i, val, bitmap) {
+    RHO_BITOPS_FOREACH(i, val, (uint8_t *)&bitmap, sizeof(bitmap)) {
         if (val == 0)
             return (i);
     }
@@ -204,257 +260,137 @@ mtcad_segments_bitmap_ffc(uint32_t bitmap)
     return (-1);
 }
 
-/********************************* 
- * MOUNT DATA
- *********************************/
-static struct mtcad_mdata *
-mtcad_mdata_create(const char *uri, unsigned char *ca_der,
+static struct smtcad_mdata *
+smtcad_mdata_create(const char *uri, unsigned char *ca_der,
         size_t ca_der_len)
 {
-    struct mtcad_mdata *mdata = NULL;
+    struct smtcad_mdata *mdata = NULL;
     
-    debug("> mtcad_mdata_create\n");
+    debug("> smtcad_mdata_create\n");
 
-    mdata = rhoL_zalloc(sizeof(struct mtcad_mdata));
+    mdata = rhoL_zalloc(sizeof(struct smtcad_mdata));
     memcpy(mdata->url, uri, strlen(uri));
     if (ca_der != NULL) {
         memcpy(mdata->ca_der, ca_der, ca_der_len);
         mdata->ca_der_len = ca_der_len;
     }
 
-    debug("< mtcad_mdata_create\n");
+    debug("< smtcad_mdata_create\n");
     return (mdata);
 }
 
 static void
-mtcad_mdata_print(const struct mtcad_mdata *mdata)
+smtcad_mdata_print(const struct smtcad_mdata *mdata)
 {
     debug("mtcad_mdata = {url: %s, ident:%llu, ca_der[0]:%02x, ca_der_len:%u}\n",
             mdata->url, (unsigned long long)mdata->ident, mdata->ca_der[0],
             mdata->ca_der_len);
 }
 
-/* TODO: for munmap, need mtcad_mount_dat_segment_by_addr() */
-
-static struct mtcad_segment *
-mtcad_mdata_new_segment(struct mtcad_mdata *mdata, const char *name)
+static struct smtcad_memfile *
+smtcad_mdata_new_memfile(struct smtcad_mdata *mdata, const char *name)
 {
     int i = 0;
-    struct mtcad_segment *seg = NULL;
+    struct smtcad_memfile *mf = NULL;
+    struct rho_ticketlock *tl = NULL;
 
-    i = mtcad_segments_bitmap_ffc(mdata->segments_bitmap);
-    seg = &(mdata->segments[i]);
-    memcpy(seg->name, name, strlen(name));
-    MTCAD_SEGMENTS_BITMAP_SET(mdata->segments_bitmap, i);
+    i = smtcad_fd_bitmap_ffc(mdata->fd_bitmap);
+    /* TODO: check if bitmap is full */
+    RHO_BITOPS_SET((uint8_t *)&mdata->fd_bitmap, i);
+    mf = &(mdata->fd_tab[i]);
+    rho_memzero(mf, sizeof(*mf));
+    memcpy(mf->name, name, strlen(name));
 
-    return (seg);
+    /* TODO: need to make this memory outside-of-enclave and SHARED */
+    tl = DkVirtualMemoryAlloc(NULL, sizeof(struct rho_ticketlock), 0,
+            PAL_PROT((PROT_READ|PROT_WRITE), 0));
+    if (tl == NULL)
+        rho_errno_die(errno, "mmap");
+
+    tl->ticket_number = 0;
+    tl->turn = 0;
+
+    mf->tl = tl;
+    return (mf);
 }
 
-static struct mtcad_segment *
-mtcad_mdata_segment_by_name(struct mtcad_mdata *mdata,
+static struct smtcad_memfile *
+smtcad_mdata_memfile_by_name(struct smtcad_mdata *mdata,
         const char *name)
 {
     int i = 0;
     int bitval = 0;
-    struct mtcad_segment *seg = NULL;
+    struct smtcad_memfile *mf = NULL;
 
-    MTCAD_SEGMENTS_BITMAP_FOREACH(i, bitval, mdata->segments_bitmap) {
+    RHO_BITOPS_FOREACH(i, bitval, (uint8_t *)&mdata->fd_bitmap,
+            sizeof(mdata->fd_bitmap)) {
         if (bitval == 0)
             continue;
-        seg = &(mdata->segments[i]);
-        if (rho_str_equal(seg->name, name))
+        mf = &(mdata->fd_tab[i]);
+        if (rho_str_equal(mf->name, name))
             goto done;
     }
-    seg = NULL;
+    mf = NULL;
 
 done:
-    return (seg);
+    return (mf);
 }
 
-/********************************* 
- * SEGMENT
- *********************************/
-static int
-mtcad_segment_initialize(struct mtcad_segment *seg, void **addr, size_t size)
+static struct smtcad_memfile *
+smtcad_shim_handle_to_memfile(const struct shim_handle *hdl)
 {
-    int error = 0;
-
-    if (seg->addr != NULL) {
-        error = -EEXIST;
-        goto done;
-    }
-
-    //seg->addr = rhoL_zalloc(size);
-    
-    /*
-     * I'm still groking Graphene's memory management (mm), but
-     * I think for mmap, Graphene's mm finds an address that should
-     * be good, and mmap is responsible for actually allocating at
-     * that address.
-     */
-    seg->addr = DkVirtualMemoryAlloc(*addr, size, 0, 
-            PAL_PROT((PROT_READ|PROT_WRITE), 0));
-    debug("addr=%p, *addr=%p, seg->addr=%p\n", addr, *addr, seg->addr);
-    if (seg->addr == NULL) {
-        error = -ENOMEM;
-        goto done;
-    }
-
-    seg->size = size;
-    *addr = seg->addr;
-
-done:
-    return (error);
-}
-
-static struct mtcad_segment *
-mtcad_shim_handle_to_segment(const struct shim_handle *hdl)
-{
-    struct mtcad_segment *seg = NULL;
-    char name[MTCAD_MAX_NAME_LENGTH + 1] = { 0 };
-    struct mtcad_mdata *mdata = hdl->fs->data;
+    struct smtcad_memfile *mf = NULL;
+    char name[TCAD_MAX_NAME_SIZE] = { 0 };
+    struct smtcad_mdata *mdata = hdl->fs->data;
 
     rho_shim_dentry_relpath(hdl->dentry, name, sizeof(name));
-    seg = mtcad_mdata_segment_by_name(mdata, name);
-    debug("> mtcad_shim_handle_to_segment(path=%s) -> %p\n", name, seg);
-    if (seg != NULL) {
-        debug("< mtcad_shim_handle_to_segment: (name=\"%s\", addr=%p, size=%lu)\n",
-                seg->name, seg->addr, (unsigned long)seg->size);
+    mf = smtcad_mdata_memfile_by_name(mdata, name);
+    debug("> smtcad_shim_handle_to_memfile(path=%s) -> %p\n", name, mf);
+    if (mf != NULL) {
+        debug("< smtcad_shim_handle_to_memfile: (name=\"%s\", size=%lu)\n",
+                mf->name, (unsigned long)mf->size);
     }
 
-    /* TODO: assert that seg is not NULL */
-    return (seg);
+    /* TODO: assert that mf is not NULL */
+    return (mf);
 }
 
-/********************************* 
- * RPC HELPERS
- *********************************/
+/**********************************************************
+ * SMTCAD CLIENT
+ * (mostly a wrapper around an rpc_agent)
+ **********************************************************/
 
-static void
-mtcad_marshal_str(struct rho_buf *buf, const char *s)
+static struct smtcad_client *
+smtcad_client_open(const char *url, unsigned char *ca_der, size_t ca_der_len)
 {
-    size_t len = strlen(s);
-    rho_buf_writeu32be(buf, len);
-    rho_buf_puts(buf, s);
-}
-
-static void
-mtcad_pmarshal_hdr(struct rho_buf *buf, uint32_t op, uint32_t bodylen)
-{
-    rho_buf_pwriteu32be_at(buf, op, 0);
-    rho_buf_pwriteu32be_at(buf, bodylen, 4);
-}
-
-static void
-mtcad_demarshal_hdr(struct rho_buf *buf, uint32_t *status, uint32_t *bodylen)
-{
-    *status = 0;
-    *bodylen = 0;
-
-    rho_buf_readu32be(buf, status);
-    rho_buf_readu32be(buf, bodylen);
-}
-
-static struct mtcad_client *
-mtcad_client_open(const char *url, unsigned char *ca_der, size_t ca_der_len)
-{
-    struct mtcad_client *client = NULL;
+    struct smtcad_client *client = NULL;
     struct rho_ssl_params *params = NULL;
     struct rho_ssl_ctx *ctx = NULL;
+    struct rho_sock *sock = NULL;
 
-    debug("> mtcad_client_open(url=%s)\n", url);
-
+    sock = rho_sock_open_url(url);
     client = rhoL_zalloc(sizeof(*client));
-    client->buf = rho_buf_create();
-    client->url = rhoL_strdup(url);
-    client->sock = rho_sock_open_url(url);
-    client->debug_cookie = rho_rand_u32();
+    client->agent = rpc_agent_create(sock);
 
     if (ca_der != NULL) {
-        debug("mtcad client using TLS\n");
+        debug("smtcad client using TLS\n");
         params = rho_ssl_params_create();
         rho_ssl_params_set_mode(params, RHO_SSL_MODE_CLIENT);
         rho_ssl_params_set_protocol(params, RHO_SSL_PROTOCOL_TLSv1_2);
         rho_ssl_params_set_ca_der(params, ca_der, ca_der_len);
         ctx = rho_ssl_ctx_create(params);
-        rho_ssl_wrap(client->sock, ctx);
+        rho_ssl_wrap(sock, ctx);
         //rho_ssl_params_destroy(params);
     }
 
-    debug("< mtcad_client_open\n");
     return (client);
 }
 
 static void
-mtcad_client_close(struct mtcad_client *client)
+smtcad_client_close(struct smtcad_client *client)
 {
-    debug("> mtcad_client_close(url=\"%s\")\n", client->url);
-
-    rho_sock_destroy(client->sock);
-    rhoL_free(client->url);
-    rho_buf_destroy(client->buf);
+    rpc_agent_destroy(client->agent);
     rhoL_free(client);
-
-    debug("< mtcad_client_close\n");
-}
-
-/*
- * return 0 on success, or -errno on failure?
- *
- * On success, status and bodylen point to the responses'
- * status and bodylen, and client->buf holds the reponse
- * (starting at offset=0, with buf cursor at 0).
- */
-static int
-mtcad_client_request(struct mtcad_client *client,
-        uint32_t *status, uint32_t *bodylen)
-{
-    int error = 0;
-    ssize_t n = 0;
-    struct rho_sock *sock = client->sock;
-    struct rho_buf *buf = client->buf;
-
-    debug("> mtcad_client_request debug_cookie=%lu, (buf_length(buf)=%lu, buf_tell=%ld, raw=%p\n",
-            (unsigned long)client->debug_cookie,
-            (unsigned long)rho_buf_length(buf), 
-            (long)rho_buf_tell(buf),
-            rho_buf_raw(buf, 0, SEEK_SET));
-
-    n = rho_sock_sendn_buf(sock, buf, rho_buf_length(buf));
-    debug("request: wanted to send %lu; sent %ld\n",
-            (unsigned long)rho_buf_length(buf), (long)n);
-    if (n == -1) {
-        error = -1;
-        goto done;
-    }
-
-    debug("receiving mtcad header\n");
-    rho_buf_clear(buf);
-    n = rho_sock_precvn_buf(sock, buf, 8);
-    debug("response: wanted to recv 8; got %ld\n", (long)n);
-    if (n == -1) {
-        error = -1;
-        goto done;
-    }
-
-    debug("demarshaling mtcad header (n=%ld)\n", n);
-
-    mtcad_demarshal_hdr(buf, status, bodylen);
-    if (*bodylen > 0) {
-        rho_buf_clear(buf);
-        debug("response status=%u, len=%u\n", *status, *bodylen);
-        debug("receiving mtcad body\n");
-        n = rho_sock_precvn_buf(sock, buf, *bodylen);
-        debug("received %ld bytes of mtcad body\n", (long)n);
-        if (n == -1) {
-            error = -1;
-            goto done;
-        }
-    }
-
-done:
-    debug("< mtcad_client_request\n");
-    return (error);
 }
 
 /********************************* 
@@ -462,30 +398,23 @@ done:
  *********************************/
 
 /*
- * XXX: For now, we assume that only one mtcad is mounted, and that
- * it is a unix domain socket.
- */
-
-/*
- * Mount should allocated a struct mtcad_mountdata and return it
+ * Mount should allocated a struct smtcad_mountdata and return it
  * in the mount_data out parameter.
  *
  * uri is the host URI for the resource to be "mounted", and
  * root is the guest mountpoint.
  */
 static int
-mtcad_mount(const char *uri, const char *root, void **mount_data)
+smtcad_mount(const char *uri, const char *root, void **mount_data)
 {
     int error = 0;
-    uint32_t status = 0;
-    uint32_t bodylen = 0;
     char ca_hex[CONFIG_MAX] = { 0 };
     unsigned char *ca_der = NULL;
     ssize_t len = 0;
-    struct mtcad_mdata *mdata = NULL;
-    struct mtcad_client *client = NULL;
+    struct smtcad_mdata *mdata = NULL;
+    struct smtcad_client *client = NULL;
 
-    debug("> mtcad_mount(uri=%s, root=%s, mount_data=*)\n", uri, root);
+    debug("> smtcad_mount(uri=%s, root=%s, mount_data=*)\n", uri, root);
 
     len = get_config(root_config, "phoenix.ca_der", ca_hex, sizeof(ca_hex));
     if (len > 0) {
@@ -493,560 +422,187 @@ mtcad_mount(const char *uri, const char *root, void **mount_data)
         ca_der = rhoL_malloc(len / 2);
         rho_binascii_hex2bin(ca_der, ca_hex);
     }
-    client = mtcad_client_open(uri, ca_der, len / 2);
-    rho_buf_rewind(client->buf);
-    mtcad_pmarshal_hdr(client->buf, MTCAD_OP_NEW_FDTABLE, 0);
-    error = mtcad_client_request(client, &status, &bodylen);
-    if (error != 0) {
-        error = -ERPC;
-        goto done;
-    }
 
-    if (status != 0) {
-        error = -status;
-        goto done;
-    }
-
-    mdata = mtcad_mdata_create(uri, ca_der, len / 2);
+    client = smtcad_client_open(uri, ca_der, len / 2);
+    error = tcad_new_fdtable(client->agent);
+    mdata = smtcad_mdata_create(uri, ca_der, len / 2);
     mdata->client = client;
     *mount_data = mdata;
-    debug("setting mtcad mount data (%p)\n", mdata);
+    debug("setting smtcad mount data (%p)\n", mdata);
 
-done:
     /* TODO: need to propagate an error if we can't open the client */
-    rho_buf_clear(client->buf);
     if (ca_der != NULL)
         rhoL_free(ca_der);
-    debug("< mtcad_mount\n");
+    debug("< smtcad_mount\n");
     return (error);
 }
 
-static int 
-mtcad_unmount(void *mount_data)
-{
-    debug("> mtcad_unmount\n");
-    (void)mount_data;
-    debug("< mtcad_unmount\n");
-    return (-ENOSYS);
-}
-
 static int
-mtcad_close(struct shim_handle *hdl)
+smtcad_close(struct shim_handle *hdl)
 {
     int error = 0;
-    uint32_t bodylen = 0;
-    uint32_t status = 0;
-    struct mtcad_mdata *mdata = hdl->fs->data;
-    struct mtcad_client *client = mdata->client;
-    struct rho_buf *buf = client->buf;
-    uint32_t mtcad_fd = 0;
+    struct smtcad_mdata *mdata = hdl->fs->data;
+    struct smtcad_client *client = mdata->client;
+    struct smtcad_memfile *mf = NULL;
+    uint32_t sfd = 0;
 
-    mtcad_fd = hdl->info.mtcad.fd;
+    sfd = hdl->info.mtcad.fd;
 
-    debug("> mtcad_close(fd=%u)\n", mtcad_fd);
+    debug("> smtcad_close(fd=%u)\n", sfd);
 
-    /* build request */
-    rho_buf_seek(buf, MTCAD_HEADER_LENGTH, SEEK_SET); 
-    rho_buf_writeu32be(buf, mtcad_fd);
-    bodylen = rho_buf_length(buf) - MTCAD_HEADER_LENGTH;
-    rho_buf_rewind(buf);
-    mtcad_pmarshal_hdr(buf, MTCAD_OP_FILE_CLOSE, bodylen);
+    RHO_ASSERT(RHO_BITOPS_ISSET((uint8_t *)&mdata->fd_bitmap, sfd));
+    mf = &(mdata->fd_tab[sfd]);
+    smtcad_memfile_clear(mf);
+    RHO_BITOPS_CLR((uint8_t *)&mdata->fd_tab, sfd);
+    error = tcad_destroy_entry(client->agent, sfd);
 
-    /* make request */
-    error = mtcad_client_request(client, &status, &bodylen);
-    if (error != 0) {
-        error = -ERPC;
-        goto done;
-    }
-
-    if (status != 0) {
-        error = -status;
-        goto done;
-    }
-
-done:
-    rho_buf_clear(buf);
-    debug("< mtcad_close\n");
+    debug("< smtcad_close\n");
     return (error);
 }
 
 static int
-mtcad_read(struct shim_handle *hdl, void *data, size_t count)
-{
-    debug("> mtcad_read\n");
-    (void)hdl; (void)data; (void)count;
-    debug("< mtcad_read\n");
-    return (-ENOSYS);
-}
-
-static int
-mtcad_write(struct shim_handle *hdl, const void *data, size_t count)
-{
-    debug("> mtcad_write\n");
-    (void)hdl; (void)data; (void)count;
-    debug("< mtcad_write\n");
-    return (-ENOSYS);
-}
-
-static int
-mtcad_mmap(struct shim_handle *hdl, void **addr, size_t size,
+smtcad_mmap(struct shim_handle *hdl, void **addr, size_t size,
                         int prot, int flags, off_t offset)
 {
     int error = 0;
-    uint32_t bodylen = 0;
-    uint32_t status = 0;
-    struct mtcad_mdata *mdata = hdl->fs->data;
-    struct mtcad_client *client = mdata->client;
-    struct rho_buf *buf = client->buf;
-    uint32_t mtcad_fd = 0;
-    char name[MTCAD_MAX_NAME_LENGTH + 1] = { 0 };
-    struct mtcad_segment *seg = NULL;
-    uint32_t mtcad_sd = 0;
+    struct smtcad_mdata *mdata = hdl->fs->data;
+    struct smtcad_client *client = mdata->client;
+    char name[TCAD_MAX_NAME_SIZE] = { 0 };
+    struct smtcad_memfile *mf = NULL;
+    uint32_t sfd = 0;
 
     (void)prot;
     (void)flags;
     (void)offset;
 
-    mtcad_fd = hdl->info.mtcad.fd;
+    sfd = hdl->info.mtcad.fd;
     rho_shim_dentry_relpath(hdl->dentry, name, sizeof(name));
 
-    debug("> mtcad_mmap(fd=%u (%s), size=%lu)\n",
-            mtcad_fd, name, (unsigned long) size);
+    debug("> smtcad_mmap(fd=%u (%s), size=%lu)\n",
+            sfd, name, (unsigned long) size);
 
-    /* build request */
-    rho_buf_seek(buf, MTCAD_HEADER_LENGTH, SEEK_SET); 
-    rho_buf_writeu32be(buf, mtcad_fd);
-    rho_buf_writeu32be(buf, size);
-    bodylen = rho_buf_length(buf) - MTCAD_HEADER_LENGTH;
-    rho_buf_rewind(buf);
-    mtcad_pmarshal_hdr(buf, MTCAD_OP_MMAP, bodylen);
+    RHO_ASSERT(RHO_BITOPS_ISSET((uint8_t *)&mdata->fd_bitmap, sfd));
+    mf = &(mdata->fd_tab[sfd]);
+    smtcad_memfile_make_map(mf, size);
 
-    /* make request */
-    error = mtcad_client_request(client, &status, &bodylen);
-    if (error != 0) {
-        error = -ERPC;
-        goto done;
-    }
-
-    if (status != 0) {
-        error = -status;
-        goto done;
-    }
-
-    if (bodylen != 4) {
-        error = -ERPC;
-        goto done;
-    }
-
-    rho_buf_readu32be(buf, &mtcad_sd);
-    seg = mtcad_mdata_new_segment(mdata, name);
-    error = mtcad_segment_initialize(seg, addr, size);
-
-done:
-    rho_buf_clear(buf);
-    debug("< mtcad_mmap\n");
+    debug("< smtcad_mmap\n");
     return (error);
 }
 
 static int
-mtcad_flush(struct shim_handle *hdl)
+smtcad_advlock_lock(struct shim_handle *hdl, struct flock *flock)
 {
-    debug("> mtcad_flush\n");
-    (void)hdl;
-    debug("< mtcad_flush\n");
-    return (-ENOSYS);
+    int error = 0;
+    struct smtcad_mdata *mdata = NULL;
+    struct smtcad_client *client = NULL;
+    uint32_t sfd = 0;
+    struct smtcad_memfile *mf = NULL;
+    uint8_t ad[SMTCAD_AD_SIZE] = {0};
+    size_t ad_size = 0;
+
+    sfd = hdl->info.mtcad.fd;
+    debug("> smtcad_advlock_lock(fd=%u, hdl=%p, hdl->fs=%p, hdl->fs->data=%p)\n",
+            sfd, hdl, hdl->fs, hdl->fs->data);
+    mf = smtcad_shim_handle_to_memfile(hdl);
+    mdata = hdl->fs->data;
+    client = mdata->client;
+
+    mf->turn = rho_ticketlock_lock(mf->tl);
+    error = tcad_cmp_and_get(client->agent, sfd, mf->turn, ad, &ad_size);
+    smtcad_unpack_assocdata(ad, mf);
+    error = smtcad_memfile_map_in(mf);
+
+    debug("< smtcad_advlock_lock\n");
+    return (error);
 }
 
 static int
-mtcad_seek(struct shim_handle *hdl, off_t offset, int whence)
+smtcad_advlock_unlock(struct shim_handle *hdl, struct flock *flock)
 {
-    debug("> mtcad_seek\n");
-    (void)hdl; (void)offset; (void)whence;
-    debug("< mtcad_seek\n");
-    return (-ENOSYS);
+    int error = 0;
+    struct smtcad_mdata *mdata = hdl->fs->data;
+    struct smtcad_client *client = mdata->client;
+    uint32_t sfd = 0;
+    struct smtcad_memfile *mf = NULL;
+    uint8_t ad[SMTCAD_AD_SIZE] = {0};
+
+    sfd = hdl->info.mtcad.fd;
+    mf = smtcad_shim_handle_to_memfile(hdl);
+
+    debug("> smtcad_advlock_unlock(fd=%u), mf->size:%lu\n",
+            sfd, (unsigned long)mf->size);
+
+    smtcad_memfile_map_out(mf);
+    smtcad_pack_assocdata(mf, ad);
+    error = tcad_inc_and_set(client->agent, sfd, ad, sizeof(ad));
+    rho_ticketlock_unlock(mf->tl);
+
+    debug("< smtcad_advlock_unlock\n");
+    return (error);
 }
 
 static int
-mtcad_move(const char *trim_old_name, const char *trim_new_name)
-{
-    debug("> mtcad_move(%s, %s)\n", trim_old_name, trim_new_name);
-    debug("< mtcad_move\n");
-    return (-ENOSYS);
-}
-
-static int
-mtcad_copy(const char *trim_old_name, const char *trim_new_name)
-{
-    debug("> mtcad_copy\n");
-    (void)trim_old_name; (void)trim_new_name;
-    debug("< mtcad_copy\n");
-    return (-ENOSYS);
-}
-
-static int
-mtcad_truncate(struct shim_handle *hdl, uint64_t len)
-{
-    debug("> mtcad_truncate(len=%lu)\n", len);
-    (void)hdl;
-    debug("< mtcad_truncate returns\n");
-    return (-ENOSYS);
-}
-
-static int
-mtcad_hstat(struct shim_handle *hdl, struct stat *stat)
-{
-    debug("> mtcad_hstat(hdl=*, stat=*)\n");
-    (void)hdl; (void)stat;
-    debug("< mtcad_hstat\n");
-    return (-ENOSYS);
-}
-
-static int
-mtcad_setflags(struct shim_handle *hdl, int flags)
-{
-    debug("> mtcad_setflags\n");
-    (void)hdl; (void)flags;
-    debug("< mtcad_setflags\n");
-    return (-ENOSYS);
-}
-
-static void
-mtcad_hput(struct shim_handle *hdl)
-{
-    debug("> mtcad_hput\n");
-    (void)hdl;
-    debug("< mtcad_hput\n");
-    return;
-}
-
-static int
-mtcad_advlock(struct shim_handle *hdl, int op, struct flock *flock)
+smtcad_advlock(struct shim_handle *hdl, int op, struct flock *flock)
 {
     int error = 0;
 
-    debug("> mtcad_advlock(op=%d)\n", op);
+    debug("> smtcad_advlock(op=%d)\n", op);
 
     if (flock->l_type == F_WRLCK)
-        error = mtcad_advlock_lock(hdl, flock);
+        error = smtcad_advlock_lock(hdl, flock);
     else if (flock->l_type == F_UNLCK)
-        error = mtcad_advlock_unlock(hdl, flock);
+        error = smtcad_advlock_unlock(hdl, flock);
     else
         error = -EINVAL;
 
-    debug("< mtcad_advlock\n");
+    debug("< smtcad_advlock\n");
     return (error);
 }
 
 static int
-mtcad_advlock_lock(struct shim_handle *hdl, struct flock *flock)
+smtcad_checkpoint(void **checkpoint, void *mount_data)
 {
-    int error = 0;
-    uint32_t bodylen = 0;
-    uint32_t status = 0;
-    struct mtcad_mdata *mdata = NULL;
-    struct mtcad_client *client = NULL;
-    struct rho_buf *buf = NULL;
-    uint32_t mtcad_fd = 0;
-    struct mtcad_segment *seg = NULL;
-
-    mtcad_fd = hdl->info.mtcad.fd;
-    debug("> mtcad_advlock_lock(fd=%u, hdl=%p, hdl->fs=%p, hdl->fs->data=%p)\n",
-            mtcad_fd, hdl, hdl->fs, hdl->fs->data);
-    seg = mtcad_shim_handle_to_segment(hdl);
-
-    mdata = hdl->fs->data;
-    client = mdata->client;
-    debug("mtcad_advlock_lock: client=(%p)\n", client);
-    buf = client->buf;
-
-again:
-    rho_buf_clear(buf);
-    /* build request */
-    rho_buf_seek(buf, MTCAD_HEADER_LENGTH, SEEK_SET); 
-    rho_buf_writeu32be(buf, mtcad_fd);
-    rho_buf_writeu32be(buf, MTCAD_LOCKOP_LOCK);
-
-    bodylen = rho_buf_length(buf) - MTCAD_HEADER_LENGTH;
-    rho_buf_rewind(buf);
-    mtcad_pmarshal_hdr(buf, MTCAD_OP_FILE_ADVLOCK, bodylen);
-
-    /* make request */
-    error = mtcad_client_request(client, &status, &bodylen);
-    debug("unlock {error=%d, status=%lu, bodylen=%lu}........................\n",
-            error, (unsigned long)status, (unsigned long)bodylen);
-    if (error != 0) {
-        error = -ERPC;
-        goto done;
-    }
-
-    if (status == EAGAIN) {
-        /* 
-         * TODO: perhaps sleep here briefly for random amount of time
-         * before again trying to acquire the lock.
-         */
-        thread_sleep(100000);
-        debug("again try to unlock ........................\n");
-        goto again;
-    } else if (status != 0) {
-        error = -status;
-        goto done;
-    }
-
-
-    /*
-     * XXX: This is a little messy.  We have a few cases:
-     *
-     * case 0 - just a lock file
-     *
-     *          seg == NULL, bodylen == 0
-     *
-     * case 1 - lock file with associated memory, but this
-     *          is the first time locking, so don't download
-     *          the server's view of the memory (which would be
-     *          all zeroes)
-     *
-     *          seg != NULL, bodylen == 0
-     *
-     * case 2 - lock file with associated memroy, and this
-     *          is not the first tiem locking, so download
-     *          the server's view of the memory and make that
-     *          the client's view.
-     *
-     *          seg != NULL, bodylen > 0
-     */
-    if (bodylen == 0)
-        goto done;
-
-    if (bodylen != seg->size) {
-        debug("bodylen=%lu, seg->size=%lu\n", bodylen, seg->size);
-        /* TODO: how should we handle this error? 
-         * XXX: this might be the problem.
-         */
-        error = -ERPC;
-        goto done;
-    }
-
-    debug("mtcad_advlock_lock: memcpy: %p <- %p\n",
-            seg->addr, rho_buf_raw(buf, 0, SEEK_SET));
-    memcpy(seg->addr, rho_buf_raw(buf, 0, SEEK_SET), bodylen);
-
-done:
-    rho_buf_clear(buf);
-    debug("< mtcad_advlock_lock\n");
-    return (error);
-}
-
-static int
-mtcad_advlock_unlock(struct shim_handle *hdl, struct flock *flock)
-{
-    int error = 0;
-    uint32_t bodylen = 0;
-    uint32_t status = 0;
-    struct mtcad_mdata *mdata = hdl->fs->data;
-    struct mtcad_client *client = mdata->client;
-    struct rho_buf *buf = client->buf;
-    uint32_t mtcad_fd = 0;
-    struct mtcad_segment *seg = NULL;
-
-    mtcad_fd = hdl->info.mtcad.fd;
-    seg = mtcad_shim_handle_to_segment(hdl);
-
-    debug("> mtcad_advlock_unlock(fd=%u), seg->size:%lu\n",
-            mtcad_fd, (unsigned long)seg->size);
-
-    /* build request */
-    rho_buf_seek(buf, MTCAD_HEADER_LENGTH, SEEK_SET); 
-    rho_buf_writeu32be(buf, mtcad_fd);
-    rho_buf_writeu32be(buf, MTCAD_LOCKOP_UNLOCK);
-
-    if (seg != NULL)
-        rho_buf_write(buf, seg->addr, seg->size); 
-
-    bodylen = rho_buf_length(buf) - MTCAD_HEADER_LENGTH;
-    rho_buf_rewind(buf);
-    mtcad_pmarshal_hdr(buf, MTCAD_OP_FILE_ADVLOCK, bodylen);
-
-    //rho_hexdump(rho_buf_raw(buf, 0, SEEK_SET), 32, "request ");
-
-    /* make request */
-    error = mtcad_client_request(client, &status, &bodylen);
-    if (error != 0) {
-        error = -ERPC;
-        goto done;
-    }
-
-    if (status != 0) {
-        error = -status;
-        goto done;
-    }
-done:
-    rho_buf_clear(buf);
-    debug("< mtcad_advlock_unlock\n");
-    return (error);
-}
-
-/* POSTPONE: */
-static int
-mtcad_lock(const char *trim_name)
-{
-    debug("> mtcad_lock\n");
-    (void)trim_name;
-    debug("< mtcad_lock\n");
-    return (-ENOSYS);
-}
-
-static int
-mtcad_unlock(const char *trim_name)
-{
-    debug("> mtcad_unlock\n");
-    (void)trim_name;
-    debug("< mtcad_unlock\n");
-    return (-ENOSYS);
-}
-
-static int
-mtcad_lockfs(void)
-{
-    debug("> mtcad_lockfs\n");
-    debug("< mtcad_lockfs\n");
-    return (-ENOSYS);
-}
-
-static int
-mtcad_unlockfs(void)
-{
-    debug("> mtcad_lockfs\n");
-    debug("< mtcad_lockfs\n");
-    return (-ENOSYS);
-}
-
-/* 
- * TODO: what are the semantics of checkout and checkin?
- * I'm pretty sure checkin is called by the parent
- * and checkout by the child, and, vaguely, this has soemthign
- * to do with altering the hdl state, but beyond that, I don't
- * understand.
- */
-static int
-mtcad_checkout(struct shim_handle *hdl)
-{
-    debug("> mtcad_checkout\n");
-    debug("checkout hdl = {path:%s}\n", qstrgetstr(&hdl->path));
-    hdl->fs = NULL;
-    debug("< mtcad_checkout\n");
-    return (0);
-}
-
-static int
-mtcad_checkin(struct shim_handle *hdl)
-{
-    debug("> mtcad_checkin\n");
-    debug("checkin hdl = {path:%s}\n", qstrgetstr(&hdl->path));
-    debug("< mtcad_checkin\n");
-    return (-ENOSYS);
-}
-
-static int
-mtcad_poll(struct shim_handle *hdl, int poll_type)
-{
-    debug("> mtcad_poll\n");
-    (void)hdl; (void)poll_type;
-    debug("< mtcad_poll\n");
-    return (-ENOSYS);
-}
-
-static int
-mtcad_checkpoint(void **checkpoint, void *mount_data)
-{
-    int error = 0;
-    uint32_t bodylen = 0;
-    uint32_t status = 0;
-    struct mtcad_mdata *mdata = mount_data;
-    struct mtcad_client *client = mdata->client;
-    struct rho_buf *buf = client->buf;
+    struct smtcad_mdata *mdata = mount_data;
+    struct smtcad_client *client = mdata->client;
     uint64_t ident = 0;
 
-    debug("> mtcad_checkpoint\n");
+    debug("> smtcad_checkpoint\n");
+
+    /* TODO: check error */
+    (void)tcad_fork(client->agent, &ident);
     
-    rho_buf_rewind(buf);
-    mtcad_pmarshal_hdr(buf, MTCAD_OP_FORK, 0);
-
-    /* make request */
-    error = mtcad_client_request(client, &status, &bodylen);
-    if (error != 0) {
-        error = -ERPC;
-        goto done;
-    }
-
-    if (status != 0) {
-        error = -status;
-        goto done;
-    }
-
-    error = rho_buf_readu64be(buf, &ident);
-    if (error == -1) {
-        error = -ERPC;
-        goto done;
-    }
-
-    debug("mtcad child ident = %llu\n", (unsigned long long)ident);
+    debug("smtcad child ident = %llu\n", (unsigned long long)ident);
 
     mdata->ident = ident;
     *checkpoint = mdata;
 
-done:
-    rho_buf_clear(buf);
-    debug("< mtcad_checkpoint\n");
-    return (sizeof(struct mtcad_mdata));
+    debug("< smtcad_checkpoint\n");
+    return (sizeof(struct smtcad_mdata));
 }
 
 static int
-mtcad_migrate(void *checkpoint, void **mount_data)
+smtcad_migrate(void *checkpoint, void **mount_data)
 {
     int error = 0;
-    struct mtcad_mdata *mdata = NULL;
-    struct mtcad_client *client = NULL;
-    struct rho_buf *buf = NULL;
-    uint32_t status = 0;
-    uint32_t bodylen = 0;
+    struct smtcad_mdata *mdata = NULL;
+    struct smtcad_client *client = NULL;
 
-    debug("> mtcad_migrate\n");
+    debug("> smtcad_migrate\n");
 
-    mdata = rhoL_zalloc(sizeof(struct mtcad_mdata));
-    memcpy(mdata, checkpoint, sizeof(struct mtcad_mdata));
-    mtcad_mdata_print(mdata);
+    mdata = rhoL_zalloc(sizeof(struct smtcad_mdata));
+    memcpy(mdata, checkpoint, sizeof(struct smtcad_mdata));
+    smtcad_mdata_print(mdata);
 
     //mtcad_client_close(mdata->client); 
-    client = mtcad_client_open(mdata->url, 
+    client = smtcad_client_open(mdata->url, 
             mdata->ca_der[0] == 0x00 ? NULL : mdata->ca_der,
             mdata->ca_der_len);
 
-    debug("mtcad migrate: client=%p, mdata=%p\n", client, mdata);
-
-    mdata->client = client;
-    buf = client->buf;
-
-    rho_buf_seek(buf, MTCAD_HEADER_LENGTH, SEEK_SET); 
-    rho_buf_writeu64be(buf, mdata->ident);
-    bodylen = rho_buf_length(buf) - MTCAD_HEADER_LENGTH;
-    rho_buf_rewind(buf);
-    mtcad_pmarshal_hdr(buf, MTCAD_OP_CHILD_ATTACH, bodylen);
-    error = mtcad_client_request(client, &status, &bodylen);
-    if (error != 0) {
-        error = -ERPC;
-        goto done;
-    }
-
-    if (status != 0) {
-        error = -status;
-        goto done;
-    }
-
+    error = tcad_child_attach(client->agent, mdata->ident);
     *mount_data = mdata;
 
 done:
-    rho_buf_clear(buf);
-    debug("< mtcad_migrate\n");
+    debug("< smtcad_migrate\n");
     return (0);
 }
 
@@ -1054,18 +610,17 @@ done:
  * DIRECTORY OPERATIONS
  *********************************/
 static int
-mtcad_open(struct shim_handle *hdl, struct shim_dentry *dent, int flags)
+smtcad_open(struct shim_handle *hdl, struct shim_dentry *dent, int flags)
 {
     int error = 0;
-    uint32_t bodylen = 0;
-    uint32_t status = 0;
-    struct mtcad_mdata *mdata = NULL;
-    struct mtcad_client *client = NULL; 
-    struct rho_buf *buf = NULL; 
+    uint8_t ad[SMTCAD_AD_SIZE] = {0};
+    struct smtcad_mdata *mdata = NULL;
+    struct smtcad_client *client = NULL; 
     uint32_t fd = 0;
-    char name[MTCAD_MAX_NAME_LENGTH + 1] = { 0 };
+    struct smtcad_memfile *mf = NULL;
+    char name[TCAD_MAX_NAME_SIZE] = { 0 };
 
-    debug("> mtcad_open(hdl=(%p), dent=(%p), dent->fs=(%p), dent->fs->data=(%p), flags=0x%08x\n", 
+    debug("> smtcad_open(hdl=(%p), dent=(%p), dent->fs=(%p), dent->fs->data=(%p), flags=0x%08x\n", 
             hdl, dent, dent->fs, dent->fs->data, flags);
 
     rho_shim_dentry_print(dent);
@@ -1073,36 +628,15 @@ mtcad_open(struct shim_handle *hdl, struct shim_dentry *dent, int flags)
     //debug("hdl->fs->data=%p\n", hdl->fs->data);
     debug("dent->fs->data=%p\n", dent->fs->data);
     mdata = dent->fs->data;
-    mtcad_mdata_print(mdata);
+    smtcad_mdata_print(mdata);
     client = mdata->client;
-    buf = client->buf;
 
     /* get path */
     rho_shim_dentry_relpath(dent, name, sizeof(name));
 
-    /* build request */
-    rho_buf_seek(buf, MTCAD_HEADER_LENGTH, SEEK_SET); 
-    mtcad_marshal_str(buf, name);
-    bodylen = rho_buf_length(buf) - MTCAD_HEADER_LENGTH;
-    rho_buf_rewind(buf);
-    mtcad_pmarshal_hdr(buf, MTCAD_OP_FILE_OPEN, bodylen);
-
-    /* make request */
-    error = mtcad_client_request(client, &status, &bodylen);
-    debug("mtcad_client_request returned %d\n", error);
-    if (error != 0) {
-        error = -ERPC;
-        goto done;
-    }
-
-    if (status != 0) {
-        error = -status;
-        goto done;
-    }
-
-    rho_buf_readu32be(buf, &fd);
-
-    debug("mtcad_open returned fd=%lu\n", (unsigned long)fd);
+    mf = smtcad_mdata_new_memfile(mdata, name);
+    smtcad_pack_assocdata(mf, ad);
+    error = tcad_create_entry(client->agent, name, ad, sizeof(ad), &fd);
 
     /* fill in handle */
     hdl->type = TYPE_MTCAD;
@@ -1111,15 +645,14 @@ mtcad_open(struct shim_handle *hdl, struct shim_dentry *dent, int flags)
     hdl->info.mtcad.fd = fd;
 
 done:
-    rho_buf_clear(buf);
-    debug("< mtcad_open\n");
+    debug("< smtcad_open\n");
     return (error);
 }
 
 static int
-mtcad_lookup(struct shim_dentry *dent, bool force)
+smtcad_lookup(struct shim_dentry *dent, bool force)
 {
-    debug("> mtcad_lookup(dent=*, force=%d)\n", force);
+    debug("> smtcad_lookup(dent=*, force=%d)\n", force);
     (void)force;
 
     rho_shim_dentry_print(dent);
@@ -1135,14 +668,14 @@ mtcad_lookup(struct shim_dentry *dent, bool force)
     /* TODO: set ino? */
 
 done:
-    debug("< mtcad_lookup\n");
+    debug("< smtcad_lookup\n");
     return (0);
 }
 
 static int 
-mtcad_mode(struct shim_dentry *dent, mode_t *mode, bool force)
+smtcad_mode(struct shim_dentry *dent, mode_t *mode, bool force)
 {
-    debug("> mtcad_mode\n");
+    debug("> smtcad_mode\n");
     (void)mode;
 
     rho_shim_dentry_print(dent);
@@ -1152,160 +685,91 @@ mtcad_mode(struct shim_dentry *dent, mode_t *mode, bool force)
 
     *mode = 0777;
 
-    debug("< mtcad_mode\n");
+    debug("< smtcad_mode\n");
     return (0);
 }
 
-static int 
-mtcad_dput(struct shim_dentry *dent)
-{
-    debug("> mtcad_dput\n");
-    (void)dent;
-    debug("< mtcad_dput\n");
-    return (-ENOSYS);
-}
-
 static int
-mtcad_creat(struct shim_handle *hdl, struct shim_dentry *dir,
+smtcad_creat(struct shim_handle *hdl, struct shim_dentry *dir,
         struct shim_dentry *dent, int flags, mode_t mode)
 {
-    debug("> mtcad_creat\n");
+    debug("> smtcad_creat\n");
     (void)hdl; (void)dir; (void)dent; (void)flags; (void)mode;
-    debug("< mtcad_creat\n");
+    debug("< smtcad_creat\n");
     return (-ENOSYS);
 }
 
 static int
-mtcad_unlink(struct shim_dentry *dir, struct shim_dentry *dent)
+smtcad_unlink(struct shim_dentry *dir, struct shim_dentry *dent)
 {
-    debug("> mtcad_unlink(dir=*, dent=*)\n");
+    debug("> smtcad_unlink(dir=*, dent=*)\n");
     (void)dir; (void)dent;
-    debug("< mtcad_unlink\n");
+    debug("< smtcad_unlink\n");
     return (-ENOSYS);
 }
 
 static int
-mtcad_mkdir(struct shim_dentry *dir, struct shim_dentry *dent, mode_t mode)
+smtcad_stat(struct shim_dentry *dent, struct stat *stat)
 {
-    debug("> mtcad_mkdir\n");
-    (void)dir; (void)dent; (void)mode;
-    debug("< mtcad_mkdir\n");
-    return (-ENOSYS);
-}
-
-static int
-mtcad_stat(struct shim_dentry *dent, struct stat *stat)
-{
-    debug("> mtcad_stat\n");
+    debug("> smtcad_stat\n");
     (void)dent; (void)stat;
-    debug("< mtcad_stat\n");
+    debug("< smtcad_stat\n");
     return (-ENOSYS);
 }
 
 static int
-mtcad_follow_link(struct shim_dentry *dent, struct shim_qstr *link)
+smtcad_chmod(struct shim_dentry *dent, mode_t mode)
 {
-    debug("> mtcad_follow_link\n");
-    (void)dent; (void)link;
-    debug("< mtcad_follow_link\n");
-    return (-ENOSYS);
-}
-
-static int
-mtcad_set_link(struct shim_dentry *dent, const char *link)
-{
-    debug("> mtcad_set_link\n");
-    (void)dent;(void)link;
-    debug("< mtcad_set_link\n");
-    return (-ENOSYS);
-}
-
-static int
-mtcad_chmod(struct shim_dentry *dent, mode_t mode)
-{
-    debug("> mtcad_chmod\n");
+    debug("> smtcad_chmod\n");
     (void)dent; (void)mode;
-    debug("< mtcad_chmod\n");
+    debug("< smtcad_chmod\n");
     return (-ENOSYS);
 }
 
 static int
-mtcad_chown(struct shim_dentry *dent, int uid, int gid)
+smtcad_chown(struct shim_dentry *dent, int uid, int gid)
 {
-    debug("> mtcad_chown\n");
+    debug("> smtcad_chown\n");
     (void)dent; (void)uid; (void)gid;
-    debug("< mtcad_chown\n");
+    debug("< smtcad_chown\n");
     return (-ENOSYS);
 } 
 
 static int
-mtcad_rename(struct shim_dentry *old, struct shim_dentry *new)
+smtcad_rename(struct shim_dentry *old, struct shim_dentry *new)
 {
-    debug("> mtcad_rename\n");
+    debug("> smtcad_rename\n");
     (void)old; (void)new;
-    debug("< mtcad_rename\n");
+    debug("< smtcad_rename\n");
     return (-ENOSYS);
 }
 
 static int
-mtcad_readdir(struct shim_dentry *dent, struct shim_dirent **dirent)
+smtcad_readdir(struct shim_dentry *dent, struct shim_dirent **dirent)
 {
-    debug("> mtcad_readdir\n");
+    debug("> smtcad_readdir\n");
     (void)dent; (void)dirent;
-    debug("< mtcad_readdir\n");
+    debug("< smtcad_readdir\n");
     return (-ENOSYS);
 }
 
 struct shim_fs_ops mtcad_fs_ops = {
-        .mount       = &mtcad_mount,      /**/
-        .unmount     = &mtcad_unmount,    /**/
-        .close       = &mtcad_close,      /**/
-        .read        = &mtcad_read,       /**/
-        .write       = &mtcad_write,      /**/
-        .mmap        = &mtcad_mmap,       /**/
-        .flush       = &mtcad_flush,      /**/
-        .seek        = &mtcad_seek,       /**/
-        .move        = &mtcad_move,
-        .copy        = &mtcad_copy,
-        .truncate    = &mtcad_truncate,   /**/
-        .hstat       = &mtcad_hstat,      /**/
-        .setflags    = &mtcad_setflags,
-        .hput        = &mtcad_hput,
-        .advlock     = &mtcad_advlock,
-        .lock        = &mtcad_lock,
-        .unlock      = &mtcad_unlock,
-        .lockfs      = &mtcad_lockfs,
-        .unlockfs    = &mtcad_unlockfs,
-        .checkout    = &mtcad_checkout,   /**/
-        .checkin     = &mtcad_checkin,
-        .poll        = &mtcad_poll,       /**/
-        .checkpoint  = &mtcad_checkpoint, /**/
-        .migrate     = &mtcad_migrate,    /**/
+        .mount       = &smtcad_mount,      /**/
+        .close       = &smtcad_close,      /**/
+        .mmap        = &smtcad_mmap,       /**/
+        .advlock     = &smtcad_advlock,
+        .checkpoint  = &smtcad_checkpoint, /**/
+        .migrate     = &smtcad_migrate,    /**/
     };
 
 struct shim_d_ops mtcad_d_ops = {
-        .open       = &mtcad_open,        /**/
-        .lookup     = &mtcad_lookup,      /**/
-        .mode       = &mtcad_mode,        /**/
-        .dput       = &mtcad_dput,        /**/
-        .creat      = &mtcad_creat,       /**/
-        .unlink     = &mtcad_unlink,      /**/
-        .mkdir      = &mtcad_mkdir,       /**/
-        .stat       = &mtcad_stat,        /**/
-        .follow_link = &mtcad_follow_link,
-        .set_link = &mtcad_set_link,
-        .chmod      = &mtcad_chmod,       /**/
-        .chown      = &mtcad_chown,       /**/
-        .rename     = &mtcad_rename,      /**/
-        .readdir    = &mtcad_readdir,     /**/
+        .open       = &smtcad_open,        /**/
+        .lookup     = &smtcad_lookup,      /**/
+        .mode       = &smtcad_mode,        /**/
+        .unlink     = &smtcad_unlink,      /**/
+        .stat       = &smtcad_stat,        /**/
+        .chmod      = &smtcad_chmod,       /**/
+        .chown      = &smtcad_chown,       /**/
+        .rename     = &smtcad_rename,      /**/
+        .readdir    = &smtcad_readdir,     /**/
     };
-
-#if 0
-struct mount_data mtcad_data = { .root_uri_len = 5,
-                                  .root_uri = "file:", };
-
-struct shim_mount mtcad_builtin_fs = { .type   = "mtcad",
-                                        .fs_ops = &mtcad_fs_ops,
-                                        .d_ops  = &mtcad_d_ops,
-                                        .data   = &mtcad_data, };
-#endif

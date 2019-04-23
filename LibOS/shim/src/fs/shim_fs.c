@@ -41,7 +41,7 @@ struct shim_fs {
     struct shim_d_ops * d_ops;
 };
 
-#define NUM_MOUNTABLE_FS    5
+#define NUM_MOUNTABLE_FS    6
 
 struct shim_fs mountable_fs [NUM_MOUNTABLE_FS] = {
         { .name = "chroot", .fs_ops = &chroot_fs_ops, .d_ops = &chroot_d_ops, },
