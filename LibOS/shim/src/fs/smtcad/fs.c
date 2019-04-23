@@ -176,26 +176,42 @@ smtcad_decrypt(uint8_t *data, size_t data_len, const uint8_t *key,
  * a lock, or a file that acts as a lock
  * with some associated memory.
  ******************************************/ 
-static void
+static int
 smtcad_memfile_make_map(struct smtcad_memfile *mf, size_t size)
 {
+    int error = 0;
+
     mf->size = size;
 
     /* TODO: need to make SHAREABLE, outside of enclave */
     mf->pub_mem =  DkVirtualMemoryAlloc(NULL, size, 0,
             PAL_PROT((PROT_READ|PROT_WRITE), 0));
-    if (mf->pub_mem == NULL)
-        rho_errno_die(PAL_ERRNO, "mmap");
+    if (mf->pub_mem == NULL) {
+        rho_errno_warn(PAL_ERRNO, "mmap public");
+        error = -1;
+        goto fail;
+    }
 
     mf->priv_mem = DkVirtualMemoryAlloc(NULL, size, 0,
             PAL_PROT((PROT_READ|PROT_WRITE), 0));
-    if (mf->priv_mem == NULL)
-        rho_errno_die(PAL_ERRNO, "mmap");
+    if (mf->priv_mem == NULL) {
+        rho_errno_warn(PAL_ERRNO, "mmap private");
+        error = -1;
+        goto fail;
+    }
 
     rho_rand_bytes(mf->iv, SMTCAD_IV_SIZE);
     rho_rand_bytes(mf->key, SMTCAD_KEY_SIZE);
     smtcad_encrypt(mf->priv_mem, mf->size, mf->key, mf->iv, mf->tag);
     memcpy(mf->pub_mem, mf->priv_mem, mf->size);
+
+    goto succeed;
+
+fail:
+    if (mf->pub_mem != NULL)
+        DkVirtualMemoryFree(mf->pub_mem, size);
+succeed:
+    return (error);
 }
 
 static void
@@ -225,7 +241,7 @@ smtcad_memfile_map_in(struct smtcad_memfile *mf)
     if (!rho_mem_equal(mf->tag, actual_tag, SMTCAD_TAG_SIZE)) {
         rho_warn("on memfile \"%s\"map in, tag does not match trusted tag",
                 mf->name);
-        error = EBADE;  /* invalid exchange */
+        error = -EBADE;  /* invalid exchange */
     }
 
     return (error);
@@ -295,7 +311,9 @@ smtcad_mdata_new_memfile(struct smtcad_mdata *mdata, const char *name)
     struct rho_ticketlock *tl = NULL;
 
     i = smtcad_fd_bitmap_ffc(mdata->fd_bitmap);
-    /* TODO: check if bitmap is full */
+    if (i == -1)
+        goto done;  /* fd table full */
+
     RHO_BITOPS_SET((uint8_t *)&mdata->fd_bitmap, i);
     mf = &(mdata->fd_tab[i]);
     rho_memzero(mf, sizeof(*mf));
@@ -311,6 +329,8 @@ smtcad_mdata_new_memfile(struct smtcad_mdata *mdata, const char *name)
     tl->turn = 0;
 
     mf->tl = tl;
+
+done:
     return (mf);
 }
 
@@ -444,19 +464,21 @@ smtcad_close(struct shim_handle *hdl)
     struct smtcad_mdata *mdata = hdl->fs->data;
     struct smtcad_client *client = mdata->client;
     struct smtcad_memfile *mf = NULL;
-    uint32_t sfd = 0;
+    uint32_t fd = 0;
 
-    sfd = hdl->info.smtcad.fd;
+    fd = hdl->info.smtcad.fd;
+    RHO_ASSERT(RHO_BITOPS_ISSET((uint8_t *)&mdata->fd_bitmap, fd));
 
-    debug("> smtcad_close(fd=%u)\n", sfd);
+    debug("> smtcad_close(fd=%u)\n", fd);
 
-    RHO_ASSERT(RHO_BITOPS_ISSET((uint8_t *)&mdata->fd_bitmap, sfd));
-    mf = &(mdata->fd_tab[sfd]);
+    mf = &(mdata->fd_tab[fd]);
     smtcad_memfile_clear(mf);
-    RHO_BITOPS_CLR((uint8_t *)&mdata->fd_tab, sfd);
-    error = tcad_destroy_entry(client->agent, sfd);
+    RHO_BITOPS_CLR((uint8_t *)&mdata->fd_tab, fd);
+    error = tcad_destroy_entry(client->agent, fd);
+    if (error != 0)
+        error = -error;
 
-    debug("< smtcad_close\n");
+    debug("< smtcad_close (ret=%d)\n", error);
     return (error);
 }
 
@@ -466,26 +488,27 @@ smtcad_mmap(struct shim_handle *hdl, void **addr, size_t size,
 {
     int error = 0;
     struct smtcad_mdata *mdata = hdl->fs->data;
-    struct smtcad_client *client = mdata->client;
     char name[TCAD_MAX_NAME_SIZE] = { 0 };
     struct smtcad_memfile *mf = NULL;
-    uint32_t sfd = 0;
+    uint32_t fd = 0;
 
     (void)prot;
     (void)flags;
     (void)offset;
 
-    sfd = hdl->info.smtcad.fd;
+    fd = hdl->info.smtcad.fd;
+    RHO_ASSERT(RHO_BITOPS_ISSET((uint8_t *)&mdata->fd_bitmap, fd));
+
     rho_shim_dentry_relpath(hdl->dentry, name, sizeof(name));
-
     debug("> smtcad_mmap(fd=%u (%s), size=%lu)\n",
-            sfd, name, (unsigned long) size);
+            fd, name, (unsigned long) size);
 
-    RHO_ASSERT(RHO_BITOPS_ISSET((uint8_t *)&mdata->fd_bitmap, sfd));
-    mf = &(mdata->fd_tab[sfd]);
-    smtcad_memfile_make_map(mf, size);
+    mf = &(mdata->fd_tab[fd]);
+    error = smtcad_memfile_make_map(mf, size);
+    if (error == -1)
+        error = -PAL_ERRNO;
 
-    debug("< smtcad_mmap\n");
+    debug("< smtcad_mmap (ret=%d)\n", error);
     return (error);
 }
 
@@ -495,23 +518,31 @@ smtcad_advlock_lock(struct shim_handle *hdl, struct flock *flock)
     int error = 0;
     struct smtcad_mdata *mdata = NULL;
     struct smtcad_client *client = NULL;
-    uint32_t sfd = 0;
+    uint32_t fd = 0;
     struct smtcad_memfile *mf = NULL;
     uint8_t ad[SMTCAD_AD_SIZE] = {0};
     size_t ad_size = 0;
 
-    sfd = hdl->info.smtcad.fd;
+    fd = hdl->info.smtcad.fd;
+    RHO_ASSERT(RHO_BITOPS_ISSET((uint8_t *)&mdata->fd_bitmap, fd));
+
     debug("> smtcad_advlock_lock(fd=%u, hdl=%p, hdl->fs=%p, hdl->fs->data=%p)\n",
-            sfd, hdl, hdl->fs, hdl->fs->data);
+            fd, hdl, hdl->fs, hdl->fs->data);
     mf = smtcad_shim_handle_to_memfile(hdl);
     mdata = hdl->fs->data;
     client = mdata->client;
 
     mf->turn = rho_ticketlock_lock(mf->tl);
-    error = tcad_cmp_and_get(client->agent, sfd, mf->turn, ad, &ad_size);
+    error = tcad_cmp_and_get(client->agent, fd, mf->turn, ad, &ad_size);
+    if (error != 0) {
+        error = -error;
+        goto done;
+    }
+        
     smtcad_unpack_assocdata(ad, mf);
     error = smtcad_memfile_map_in(mf);
 
+done:
     debug("< smtcad_advlock_lock\n");
     return (error);
 }
@@ -522,22 +553,32 @@ smtcad_advlock_unlock(struct shim_handle *hdl, struct flock *flock)
     int error = 0;
     struct smtcad_mdata *mdata = hdl->fs->data;
     struct smtcad_client *client = mdata->client;
-    uint32_t sfd = 0;
+    uint32_t fd = 0;
     struct smtcad_memfile *mf = NULL;
     uint8_t ad[SMTCAD_AD_SIZE] = {0};
 
-    sfd = hdl->info.smtcad.fd;
+    fd = hdl->info.smtcad.fd;
+    RHO_ASSERT(RHO_BITOPS_ISSET((uint8_t *)&mdata->fd_bitmap, fd));
+
     mf = smtcad_shim_handle_to_memfile(hdl);
 
     debug("> smtcad_advlock_unlock(fd=%u), mf->size:%lu\n",
-            sfd, (unsigned long)mf->size);
+            fd, (unsigned long)mf->size);
 
     smtcad_memfile_map_out(mf);
     smtcad_pack_assocdata(mf, ad);
-    error = tcad_inc_and_set(client->agent, sfd, ad, sizeof(ad));
+
+    error = tcad_inc_and_set(client->agent, fd, ad, sizeof(ad));
+    if (error != 0) {
+        error = -error;
+        goto done;
+    }
+
+    /* XXX: not sure what to do here to avoid an inconsistent state */
     rho_ticketlock_unlock(mf->tl);
 
-    debug("< smtcad_advlock_unlock\n");
+done:
+    debug("< smtcad_advlock_unlock (ret=%d)\n", error);
     return (error);
 }
 
@@ -583,7 +624,6 @@ smtcad_checkpoint(void **checkpoint, void *mount_data)
 static int
 smtcad_migrate(void *checkpoint, void **mount_data)
 {
-    int error = 0;
     struct smtcad_mdata *mdata = NULL;
     struct smtcad_client *client = NULL;
 
@@ -593,15 +633,19 @@ smtcad_migrate(void *checkpoint, void **mount_data)
     memcpy(mdata, checkpoint, sizeof(struct smtcad_mdata));
     smtcad_mdata_print(mdata);
 
+    /* 
+     * TODO: need to check if smtcad_client_open or tcad_child_attach
+     * fails
+     */
     //mtcad_client_close(mdata->client); 
     client = smtcad_client_open(mdata->url, 
             mdata->ca_der[0] == 0x00 ? NULL : mdata->ca_der,
             mdata->ca_der_len);
 
-    error = tcad_child_attach(client->agent, mdata->ident);
+    (void)tcad_child_attach(client->agent, mdata->ident);
+
     *mount_data = mdata;
 
-done:
     debug("< smtcad_migrate\n");
     return (0);
 }
@@ -622,11 +666,10 @@ smtcad_open(struct shim_handle *hdl, struct shim_dentry *dent, int flags)
 
     debug("> smtcad_open(hdl=(%p), dent=(%p), dent->fs=(%p), dent->fs->data=(%p), flags=0x%08x\n", 
             hdl, dent, dent->fs, dent->fs->data, flags);
-
     rho_shim_dentry_print(dent);
-
     //debug("hdl->fs->data=%p\n", hdl->fs->data);
     debug("dent->fs->data=%p\n", dent->fs->data);
+
     mdata = dent->fs->data;
     smtcad_mdata_print(mdata);
     client = mdata->client;
@@ -635,8 +678,17 @@ smtcad_open(struct shim_handle *hdl, struct shim_dentry *dent, int flags)
     rho_shim_dentry_relpath(dent, name, sizeof(name));
 
     mf = smtcad_mdata_new_memfile(mdata, name);
+    if (mf == NULL) {
+        error = -ENFILE;
+        goto done;
+    }
+
     smtcad_pack_assocdata(mf, ad);
     error = tcad_create_entry(client->agent, name, ad, sizeof(ad), &fd);
+    if (error != 0) {
+        error= -error;
+        goto done;
+    }
 
     /* fill in handle */
     hdl->type = TYPE_SMTCAD;
@@ -645,7 +697,7 @@ smtcad_open(struct shim_handle *hdl, struct shim_dentry *dent, int flags)
     hdl->info.smtcad.fd = fd;
 
 done:
-    debug("< smtcad_open\n");
+    debug("< smtcad_open (ret=%d)\n", error);
     return (error);
 }
 
@@ -690,66 +742,11 @@ smtcad_mode(struct shim_dentry *dent, mode_t *mode, bool force)
 }
 
 static int
-smtcad_creat(struct shim_handle *hdl, struct shim_dentry *dir,
-        struct shim_dentry *dent, int flags, mode_t mode)
-{
-    debug("> smtcad_creat\n");
-    (void)hdl; (void)dir; (void)dent; (void)flags; (void)mode;
-    debug("< smtcad_creat\n");
-    return (-ENOSYS);
-}
-
-static int
 smtcad_unlink(struct shim_dentry *dir, struct shim_dentry *dent)
 {
     debug("> smtcad_unlink(dir=*, dent=*)\n");
     (void)dir; (void)dent;
     debug("< smtcad_unlink\n");
-    return (-ENOSYS);
-}
-
-static int
-smtcad_stat(struct shim_dentry *dent, struct stat *stat)
-{
-    debug("> smtcad_stat\n");
-    (void)dent; (void)stat;
-    debug("< smtcad_stat\n");
-    return (-ENOSYS);
-}
-
-static int
-smtcad_chmod(struct shim_dentry *dent, mode_t mode)
-{
-    debug("> smtcad_chmod\n");
-    (void)dent; (void)mode;
-    debug("< smtcad_chmod\n");
-    return (-ENOSYS);
-}
-
-static int
-smtcad_chown(struct shim_dentry *dent, int uid, int gid)
-{
-    debug("> smtcad_chown\n");
-    (void)dent; (void)uid; (void)gid;
-    debug("< smtcad_chown\n");
-    return (-ENOSYS);
-} 
-
-static int
-smtcad_rename(struct shim_dentry *old, struct shim_dentry *new)
-{
-    debug("> smtcad_rename\n");
-    (void)old; (void)new;
-    debug("< smtcad_rename\n");
-    return (-ENOSYS);
-}
-
-static int
-smtcad_readdir(struct shim_dentry *dent, struct shim_dirent **dirent)
-{
-    debug("> smtcad_readdir\n");
-    (void)dent; (void)dirent;
-    debug("< smtcad_readdir\n");
     return (-ENOSYS);
 }
 
@@ -767,9 +764,4 @@ struct shim_d_ops smtcad_d_ops = {
         .lookup     = &smtcad_lookup,      /**/
         .mode       = &smtcad_mode,        /**/
         .unlink     = &smtcad_unlink,      /**/
-        .stat       = &smtcad_stat,        /**/
-        .chmod      = &smtcad_chmod,       /**/
-        .chown      = &smtcad_chown,       /**/
-        .rename     = &smtcad_rename,      /**/
-        .readdir    = &smtcad_readdir,     /**/
     };
