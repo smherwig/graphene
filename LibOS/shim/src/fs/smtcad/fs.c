@@ -1,7 +1,7 @@
 /*
  * fs.c
  *
- * The 'mtcad' filesystem.
+ * The 'smtcad' filesystem.
  */
 
 #include <shim_internal.h>
@@ -185,12 +185,12 @@ smtcad_memfile_make_map(struct smtcad_memfile *mf, size_t size)
     mf->pub_mem =  DkVirtualMemoryAlloc(NULL, size, 0,
             PAL_PROT((PROT_READ|PROT_WRITE), 0));
     if (mf->pub_mem == NULL)
-        rho_errno_die(errno, "mmap");
+        rho_errno_die(PAL_ERRNO, "mmap");
 
     mf->priv_mem = DkVirtualMemoryAlloc(NULL, size, 0,
             PAL_PROT((PROT_READ|PROT_WRITE), 0));
     if (mf->priv_mem == NULL)
-        rho_errno_die(errno, "mmap");
+        rho_errno_die(PAL_ERRNO, "mmap");
 
     rho_rand_bytes(mf->iv, SMTCAD_IV_SIZE);
     rho_rand_bytes(mf->key, SMTCAD_KEY_SIZE);
@@ -446,7 +446,7 @@ smtcad_close(struct shim_handle *hdl)
     struct smtcad_memfile *mf = NULL;
     uint32_t sfd = 0;
 
-    sfd = hdl->info.mtcad.fd;
+    sfd = hdl->info.smtcad.fd;
 
     debug("> smtcad_close(fd=%u)\n", sfd);
 
@@ -475,7 +475,7 @@ smtcad_mmap(struct shim_handle *hdl, void **addr, size_t size,
     (void)flags;
     (void)offset;
 
-    sfd = hdl->info.mtcad.fd;
+    sfd = hdl->info.smtcad.fd;
     rho_shim_dentry_relpath(hdl->dentry, name, sizeof(name));
 
     debug("> smtcad_mmap(fd=%u (%s), size=%lu)\n",
@@ -500,7 +500,7 @@ smtcad_advlock_lock(struct shim_handle *hdl, struct flock *flock)
     uint8_t ad[SMTCAD_AD_SIZE] = {0};
     size_t ad_size = 0;
 
-    sfd = hdl->info.mtcad.fd;
+    sfd = hdl->info.smtcad.fd;
     debug("> smtcad_advlock_lock(fd=%u, hdl=%p, hdl->fs=%p, hdl->fs->data=%p)\n",
             sfd, hdl, hdl->fs, hdl->fs->data);
     mf = smtcad_shim_handle_to_memfile(hdl);
@@ -526,7 +526,7 @@ smtcad_advlock_unlock(struct shim_handle *hdl, struct flock *flock)
     struct smtcad_memfile *mf = NULL;
     uint8_t ad[SMTCAD_AD_SIZE] = {0};
 
-    sfd = hdl->info.mtcad.fd;
+    sfd = hdl->info.smtcad.fd;
     mf = smtcad_shim_handle_to_memfile(hdl);
 
     debug("> smtcad_advlock_unlock(fd=%u), mf->size:%lu\n",
@@ -639,10 +639,10 @@ smtcad_open(struct shim_handle *hdl, struct shim_dentry *dent, int flags)
     error = tcad_create_entry(client->agent, name, ad, sizeof(ad), &fd);
 
     /* fill in handle */
-    hdl->type = TYPE_MTCAD;
+    hdl->type = TYPE_SMTCAD;
     hdl->flags = flags;
     hdl->acc_mode = ACC_MODE(flags & O_ACCMODE);
-    hdl->info.mtcad.fd = fd;
+    hdl->info.smtcad.fd = fd;
 
 done:
     debug("< smtcad_open\n");
@@ -753,7 +753,7 @@ smtcad_readdir(struct shim_dentry *dent, struct shim_dirent **dirent)
     return (-ENOSYS);
 }
 
-struct shim_fs_ops mtcad_fs_ops = {
+struct shim_fs_ops smtcad_fs_ops = {
         .mount       = &smtcad_mount,      /**/
         .close       = &smtcad_close,      /**/
         .mmap        = &smtcad_mmap,       /**/
@@ -762,7 +762,7 @@ struct shim_fs_ops mtcad_fs_ops = {
         .migrate     = &smtcad_migrate,    /**/
     };
 
-struct shim_d_ops mtcad_d_ops = {
+struct shim_d_ops smtcad_d_ops = {
         .open       = &smtcad_open,        /**/
         .lookup     = &smtcad_lookup,      /**/
         .mode       = &smtcad_mode,        /**/

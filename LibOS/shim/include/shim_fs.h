@@ -583,8 +583,8 @@ extern struct shim_d_ops  nextfs_d_ops;
 extern struct shim_fs_ops mdish_fs_ops;
 extern struct shim_d_ops  mdish_d_ops;
 
-extern struct shim_fs_ops mtcad_fs_ops;
-extern struct shim_d_ops  mtcad_d_ops;
+extern struct shim_fs_ops smtcad_fs_ops;
+extern struct shim_d_ops  smtcad_d_ops;
 
 extern struct shim_mount chroot_builtin_fs;
 extern struct shim_mount pipe_builtin_fs;

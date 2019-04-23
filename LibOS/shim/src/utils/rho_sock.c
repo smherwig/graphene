@@ -3,6 +3,9 @@
 #include <shim_table.h>
 #include <shim_handle.h>
 
+#include <pal.h>
+#include <pal_error.h>
+
 #include <errno.h>
 
 #include <asm/socket.h>
@@ -211,7 +214,16 @@ static ssize_t
 rho_sock_stream_recv(struct rho_sock *sock, void *buf, size_t len)
 {
     PAL_NUM n = 0;
+
     n = DkStreamRead(sock->pal_hdl, 0, len, buf, NULL, 0);
+    /* 
+     * DkStreamRead returns 0 on failure, and the number of bytes read
+     * on success.  We intervene by returning -1 on failure; the caller
+     * can check PAL_ERRNO for the resultant UNIX errno value.
+     */
+    if ((n == 0) && (PAL_NATIVE_ERRNO != PAL_ERROR_ENDOFSTREAM))
+        n = -1;
+
     return (n);
 }
 
@@ -219,7 +231,16 @@ static ssize_t
 rho_sock_stream_send(struct rho_sock *sock, const void *buf, size_t len)
 {
     PAL_NUM n = 0;
+
     n = DkStreamWrite(sock->pal_hdl, 0, len, buf, NULL);
+    /* 
+     * DkStreamWrite returns 0 on failure, and the number of bytes
+     * written on succes.  We intervene by returning -1 on fialure;
+     * the caller can check PAL_ERRNO forthe resultant UNIX errno value.
+     */
+    if (n == 0)
+        n = -1;
+
     return (n);
 }
 

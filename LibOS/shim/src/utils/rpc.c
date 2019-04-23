@@ -1,9 +1,12 @@
 #include <shim_internal.h>
 #include <shim_types.h>
 
-#include <errno.h>
+#include <pal.h>
+#include <pal_error.h>
 
 #include <api.h>
+
+#include <errno.h>
 
 #include <rho_buf.h>
 #include <rho_log.h>
@@ -197,9 +200,9 @@ rpc_agent_recv_hdr(struct rpc_agent *agent)
     got = rho_sock_recv_buf(sock, buf, need);
 
     if (got == -1) {
-        if (errno != EAGAIN) {
+        if (PAL_ERRNO != EAGAIN) {
             agent->ra_state = RPC_STATE_ERROR;
-            rho_errno_warn(errno, "rho_sock_recv_buf failed");
+            rho_errno_warn(PAL_ERRNO, "rho_sock_recv_buf failed");
         }
     } else if (got == 0) {
         agent->ra_state = RPC_STATE_CLOSED;
@@ -233,9 +236,9 @@ rpc_agent_recv_body(struct rpc_agent *agent)
 
     got = rho_sock_recv_buf(sock, buf, need);
     if (got == -1) {
-        if (errno != EAGAIN) {
+        if (PAL_ERRNO != EAGAIN) {
             agent->ra_state = RPC_STATE_ERROR;
-            rho_errno_warn(errno, "rho_sock_recv_buf failed");
+            rho_errno_warn(PAL_ERRNO, "rho_sock_recv_buf failed");
         }
     } else if (got == 0) {
         agent->ra_state = RPC_STATE_CLOSED;
@@ -263,9 +266,9 @@ rpc_agent_send_hdr(struct rpc_agent *agent)
     nput = rho_sock_send_buf(sock, buf, left);
 
     if (nput == -1) {
-        if (errno != EAGAIN) {
+        if (PAL_ERRNO != EAGAIN) {
             agent->ra_state = RPC_STATE_ERROR;
-            rho_errno_warn(errno, "rho_sock_send_hdr() failed");
+            rho_errno_warn(PAL_ERRNO, "rho_sock_send_hdr() failed");
         }
     } else if ((size_t)nput == left) {
         if (agent->ra_hdr.rh_bodylen > 0)
@@ -296,9 +299,9 @@ rpc_agent_send_body(struct rpc_agent *agent)
     nput = rho_sock_send_buf(sock, buf, left);
 
     if (nput == -1) {
-        if (errno != EAGAIN) {
+        if (PAL_ERRNO != EAGAIN) {
             agent->ra_state = RPC_STATE_ERROR;
-            rho_errno_warn(errno, "rho_sock_send_body() failed");
+            rho_errno_warn(PAL_ERRNO, "rho_sock_send_body() failed");
         }
     } else if ((size_t)nput == left) {
         agent->ra_state = RPC_STATE_RECV_HDR;
