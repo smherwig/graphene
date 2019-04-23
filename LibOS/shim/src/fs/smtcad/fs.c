@@ -323,7 +323,7 @@ smtcad_mdata_new_memfile(struct smtcad_mdata *mdata, const char *name)
     tl = DkVirtualMemoryAlloc(NULL, sizeof(struct rho_ticketlock), 0,
             PAL_PROT((PROT_READ|PROT_WRITE), 0));
     if (tl == NULL)
-        rho_errno_die(errno, "mmap");
+        rho_errno_die(PAL_ERRNO, "mmap");
 
     tl->ticket_number = 0;
     tl->turn = 0;
