@@ -56,6 +56,7 @@ enum shim_handle_type {
     TYPE_NEXTFS,
     TYPE_MDISH,
     TYPE_SMTCAD,
+    TYPE_SM0,
 };
 
 struct shim_handle;
@@ -340,6 +341,12 @@ struct shim_smtcad_handle {
     size_t      shmsize;
 };
 
+struct shim_sm0_handle {
+    uint32_t    fd;
+    void        *shm;
+    size_t      shmsize;
+};
+
 struct shim_mount;
 struct shim_qstr;
 struct shim_dentry;
@@ -380,6 +387,7 @@ struct shim_handle {
         struct shim_nextfs_handle nextfs;
         struct shim_mdish_handle  mdish;
         struct shim_smtcad_handle smtcad;
+        struct shim_sm0_handle    sm0;
     } info;
 
     int                 flags;

@@ -334,47 +334,6 @@ done:
     return (mf);
 }
 
-static struct smtcad_memfile *
-smtcad_mdata_memfile_by_name(struct smtcad_mdata *mdata,
-        const char *name)
-{
-    int i = 0;
-    int bitval = 0;
-    struct smtcad_memfile *mf = NULL;
-
-    RHO_BITOPS_FOREACH(i, bitval, (uint8_t *)&mdata->fd_bitmap,
-            sizeof(mdata->fd_bitmap)) {
-        if (bitval == 0)
-            continue;
-        mf = &(mdata->fd_tab[i]);
-        if (rho_str_equal(mf->name, name))
-            goto done;
-    }
-    mf = NULL;
-
-done:
-    return (mf);
-}
-
-static struct smtcad_memfile *
-smtcad_shim_handle_to_memfile(const struct shim_handle *hdl)
-{
-    struct smtcad_memfile *mf = NULL;
-    char name[TCAD_MAX_NAME_SIZE] = { 0 };
-    struct smtcad_mdata *mdata = hdl->fs->data;
-
-    rho_shim_dentry_relpath(hdl->dentry, name, sizeof(name));
-    mf = smtcad_mdata_memfile_by_name(mdata, name);
-    debug("> smtcad_shim_handle_to_memfile(path=%s) -> %p\n", name, mf);
-    if (mf != NULL) {
-        debug("< smtcad_shim_handle_to_memfile: (name=\"%s\", size=%lu)\n",
-                mf->name, (unsigned long)mf->size);
-    }
-
-    /* TODO: assert that mf is not NULL */
-    return (mf);
-}
-
 /**********************************************************
  * SMTCAD CLIENT
  * (mostly a wrapper around an rpc_agent)
@@ -528,7 +487,8 @@ smtcad_advlock_lock(struct shim_handle *hdl, struct flock *flock)
 
     debug("> smtcad_advlock_lock(fd=%u, hdl=%p, hdl->fs=%p, hdl->fs->data=%p)\n",
             fd, hdl, hdl->fs, hdl->fs->data);
-    mf = smtcad_shim_handle_to_memfile(hdl);
+
+    mf = &(mdata->fd_tab[fd]);
     mdata = hdl->fs->data;
     client = mdata->client;
 
@@ -560,7 +520,7 @@ smtcad_advlock_unlock(struct shim_handle *hdl, struct flock *flock)
     fd = hdl->info.smtcad.fd;
     RHO_ASSERT(RHO_BITOPS_ISSET((uint8_t *)&mdata->fd_bitmap, fd));
 
-    mf = smtcad_shim_handle_to_memfile(hdl);
+    mf = &(mdata->fd_tab[fd]);
 
     debug("> smtcad_advlock_unlock(fd=%u), mf->size:%lu\n",
             fd, (unsigned long)mf->size);

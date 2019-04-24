@@ -42,7 +42,7 @@ files_to_build = libsysdb.a libsysdb.so libsysdb_debug.so
 files_to_install = $(addprefix $(RUNTIME_DIR)/,$(files_to_build))
 
 defs	= -DIN_SHIM
-fs	= chroot str pipe socket proc dev nextfs mdish smtcad
+fs	= chroot str pipe socket proc dev nextfs mdish smtcad sm0
 ipcns	= pid sysv
 objs	= $(addprefix bookkeep/shim_,handle vma thread signal) \
 	  $(patsubst %.c,%,$(wildcard utils/*.c)) \
