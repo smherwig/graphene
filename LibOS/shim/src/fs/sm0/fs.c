@@ -110,9 +110,9 @@ sm0_lockad_create(void)
 
     RHO_TRACE_ENTER();
 
-    /* this memory will be untrusted: need to make MAP_SHARED */
     lockad =  DkVirtualMemoryAlloc(NULL, 
-            sizeof(struct sm0_lockad), 0, PAL_PROT((PROT_READ|PROT_WRITE), 0));
+            sizeof(struct sm0_lockad), PAL_ALLOC_UNTRUSTED, 
+            PAL_PROT((PROT_READ|PROT_WRITE), 0));
 
     if (lockad == NULL) {
         rho_errno_warn(PAL_ERRNO, "mmap lockad");
@@ -209,8 +209,7 @@ sm0_memfile_make_map(struct sm0_memfile *mf, size_t size)
 
     mf->size = size;
 
-    /* TODO: need to make SHAREABLE, outside of enclave */
-    mf->pub_mem =  DkVirtualMemoryAlloc(NULL, size, 0,
+    mf->pub_mem =  DkVirtualMemoryAlloc(NULL, size, PAL_ALLOC_UNTRUSTED,
             PAL_PROT((PROT_READ|PROT_WRITE), 0));
     if (mf->pub_mem == NULL) {
         rho_errno_warn(PAL_ERRNO, "mmap public");

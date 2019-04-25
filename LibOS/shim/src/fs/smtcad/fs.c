@@ -202,8 +202,7 @@ smtcad_memfile_make_map(struct smtcad_memfile *mf, size_t size)
 
     mf->size = size;
 
-    /* TODO: need to make SHAREABLE, outside of enclave */
-    mf->pub_mem =  DkVirtualMemoryAlloc(NULL, size, 0,
+    mf->pub_mem =  DkVirtualMemoryAlloc(NULL, size, PAL_ALLOC_UNTRUSTED,
             PAL_PROT((PROT_READ|PROT_WRITE), 0));
     if (mf->pub_mem == NULL) {
         rho_errno_warn(PAL_ERRNO, "mmap public");
@@ -352,9 +351,8 @@ smtcad_mdata_new_memfile(struct smtcad_mdata *mdata, const char *name)
     rho_memzero(mf, sizeof(*mf));
     memcpy(mf->name, name, strlen(name));
 
-    /* TODO: need to make this memory outside-of-enclave and SHARED */
-    tl = DkVirtualMemoryAlloc(NULL, sizeof(struct rho_ticketlock), 0,
-            PAL_PROT((PROT_READ|PROT_WRITE), 0));
+    tl = DkVirtualMemoryAlloc(NULL, sizeof(struct rho_ticketlock),
+            PAL_ALLOC_UNTRUSTED, PAL_PROT((PROT_READ|PROT_WRITE), 0));
     if (tl == NULL)
         rho_errno_die(PAL_ERRNO, "mmap");
 

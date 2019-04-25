@@ -107,7 +107,7 @@ static int sgx_ocall_map_untrusted(void * pms)
     ODEBUG(OCALL_MAP_UNTRUSTED, ms);
     addr = (void *) INLINE_SYSCALL(mmap, 6, NULL, ms->ms_size,
                                    ms->ms_prot,
-                                   MAP_FILE|MAP_SHARED,
+                                   MAP_SHARED,
                                    ms->ms_fd, ms->ms_offset);
     if (IS_ERR_P(addr))
         return -PAL_ERROR_NOMEM;

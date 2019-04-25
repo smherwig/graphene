@@ -36,6 +36,7 @@
 #include <asm/mman.h>
 
 #include "enclave_pages.h"
+#include "enclave_ocalls.h"
 
 #define PAL_VMA_MAX     64
 
@@ -76,33 +77,40 @@ int _DkVirtualMemoryAlloc (void ** paddr, uint64_t size, int alloc_type, int pro
     if ((alloc_type & PAL_ALLOC_INTERNAL) && addr)
         return -PAL_ERROR_INVAL;
 
+    if ((alloc_type & PAL_ALLOC_UNTRUSTED) && addr)
+        return -PAL_ERROR_INVAL;
+
     if (size == 0)
         __asm__ volatile ("int $3");
 
-    mem = get_reserved_pages(addr, size);
-    if (!mem)
-        return addr ? -PAL_ERROR_DENIED : -PAL_ERROR_NOMEM;
-    if (addr && mem != addr) {
-        // TODO: This case should be made impossible by fixing
-        // `get_reserved_pages` semantics.
-        free_pages(mem, size);
-        return -PAL_ERROR_INVAL; // `addr` was unaligned.
+    if (alloc_type & PAL_ALLOC_UNTRUSTED) {
+        return (ocall_map_untrusted(-1, 0, size, PROT_READ|PROT_WRITE, paddr));
+    } else {
+        mem = get_reserved_pages(addr, size);
+        if (!mem)
+            return addr ? -PAL_ERROR_DENIED : -PAL_ERROR_NOMEM;
+        if (addr && mem != addr) {
+            // TODO: This case should be made impossible by fixing
+            // `get_reserved_pages` semantics.
+            free_pages(mem, size);
+            return -PAL_ERROR_INVAL; // `addr` was unaligned.
+        }
+
+        memset(mem, 0, size);
+
+        if (alloc_type & PAL_ALLOC_INTERNAL) {
+            SGX_DBG(DBG_M, "pal allocates %p-%p for internal use\n", mem, mem + size);
+            _DkSpinLock(&pal_vma_lock);
+            assert(pal_nvmas < PAL_VMA_MAX);
+            pal_vmas[pal_nvmas].bottom = mem;
+            pal_vmas[pal_nvmas].top = mem + size;
+            pal_nvmas++;
+            _DkSpinUnlock(&pal_vma_lock);
+        }
+
+        *paddr = mem;
+        return 0;
     }
-
-    memset(mem, 0, size);
-
-    if (alloc_type & PAL_ALLOC_INTERNAL) {
-        SGX_DBG(DBG_M, "pal allocates %p-%p for internal use\n", mem, mem + size);
-        _DkSpinLock(&pal_vma_lock);
-        assert(pal_nvmas < PAL_VMA_MAX);
-        pal_vmas[pal_nvmas].bottom = mem;
-        pal_vmas[pal_nvmas].top = mem + size;
-        pal_nvmas++;
-        _DkSpinUnlock(&pal_vma_lock);
-    }
-
-    *paddr = mem;
-    return 0;
 }
 
 int _DkVirtualMemoryFree (void * addr, uint64_t size)
