@@ -115,6 +115,7 @@ struct smtcad_mdata {
 /******************************************
  * SERIALIZE/DESERIALIZE HELPERS
  ******************************************/
+
 static void
 smtcad_pack_assocdata(const struct smtcad_memfile *mf, void *ad)
 {
