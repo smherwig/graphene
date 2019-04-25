@@ -7,34 +7,6 @@
 
 #include <tcad.h>
 
-/* returns 0 on success, or an errno value on failure */
-static int
-tcad_do_rpc(struct rpc_agent *agent)
-{
-    int error = 0;
-
-    RHO_TRACE_ENTER();
-
-    /* make request */
-    error = rpc_agent_request(agent);
-    if (error != 0) {
-        /* RPC/transport error (EPROTO) */
-        rho_warn("RPC error");
-        goto done;
-    }
-
-    if (hdr->rh_code != 0) {
-        /* method error */
-        error = hdr->rh_code;
-        rho_errno_warn(error, "RPC returned an error");
-        goto done;
-    }
-
-done:
-    RHO_TRACE_EXIT();
-    return (error);
-}
-
 int
 tcad_create_entry(struct rpc_agent *agent, const char *name, void *data,
         size_t data_len, int *fd)
@@ -47,7 +19,7 @@ tcad_create_entry(struct rpc_agent *agent, const char *name, void *data,
     rho_buf_write_u32size_blob(buf, data, data_len);
     rpc_agent_autoset_bodylen(agent);
 
-    error = tcad_do_rpc(agent);
+    error = rpc_agent_request(agent);
     if (error != 0)
         goto done;
 
@@ -67,7 +39,7 @@ tcad_destroy_entry(struct rpc_agent *agent, int fd)
     rho_buf_writeu32be(buf, fd);
     rpc_agent_autoset_bodylen(agent);
 
-    error = tcad_do_rpc(agent);
+    error = rpc_agent_request(agent);
 
     return (error);
 }
@@ -84,7 +56,7 @@ tcad_cmp_and_get(struct rpc_agent *agent, int fd, int expected_count,
     rho_buf_write32be(buf, expected_count); 
     rpc_agent_autoset_bodylen(agent);
 
-    error = tcad_do_rpc(agent);
+    error = rpc_agent_request(agent);
     if (error != 0)
         goto done;
 
@@ -106,7 +78,7 @@ tcad_inc_and_set(struct rpc_agent *agent, int fd, void *data,
     rho_buf_write_u32size_blob(buf, data, data_len);
     rpc_agent_autoset_bodylen(agent);
 
-    error = tcad_do_rpc(agent);
+    error = rpc_agent_request(agent);
 
     return (error);
 }
@@ -117,7 +89,7 @@ tcad_new_fdtable(struct rpc_agent *agent)
     int error = 0;
 
     rpc_agent_new_msg(agent, TCAD_OP_NEW_FDTABLE);
-    error = tcad_do_rpc(agent);
+    error = rpc_agent_request(agent);
 
     return (error);
 } 
@@ -130,7 +102,7 @@ tcad_fork(struct rpc_agent *agent, uint64_t *child_ident)
 
     rpc_agent_new_msg(agent, TCAD_OP_FORK);
 
-    error = tcad_do_rpc(agent);
+    error = rpc_agent_request(agent);
     if (error != 0)
         goto done;
 
@@ -150,7 +122,7 @@ tcad_child_attach(struct rpc_agent *agent, uint64_t child_ident)
     rho_buf_writeu64be(buf, child_ident);
     rpc_agent_autoset_bodylen(agent);
 
-    error = tcad_do_rpc(agent);
+    error = rpc_agent_request(agent);
 
     return (error);
 }

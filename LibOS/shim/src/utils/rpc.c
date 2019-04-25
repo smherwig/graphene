@@ -314,12 +314,20 @@ rpc_agent_send_body(struct rpc_agent *agent)
 /*********************************************************
  * SIMPLE, SERIAL INTERFACE (e.g., NON EVENT-LOOP)
  *********************************************************/
+
 /* 
- * on success, ra_bodybuf is the response body 
- * TODO: what does this function return?
+ * Transport-level
+ *
+ * If the request completed, returns 0, ra_hdr contains
+ * the response header and ra_bodybuf contains the response
+ * body, if available.
+ *
+ * If the request did not complete (as due to a socket error),
+ * returns -1, PAL_ERRNO contains the Linux errno value.  In the case
+ * of error, ra_hdrbuf and ra_bodybuf are also cleared.
  */
 int
-rpc_agent_request(struct rpc_agent *agent)
+rpc_agent_transport(struct rpc_agent *agent)
 {
     int error = 0;
     ssize_t n = 0;
@@ -335,38 +343,65 @@ rpc_agent_request(struct rpc_agent *agent)
     n = rho_sock_sendn_buf(sock, hdrbuf, rho_buf_length(hdrbuf));
     if (n == -1) {
         error = -1;
-        goto done;
+        goto fail;
     }
 
     n = rho_sock_sendn_buf(sock, bodybuf, rho_buf_length(bodybuf));
     if (n == -1) {
         error = -1;
-        goto done;
+        goto fail;
     }
 
     rho_buf_clear(hdrbuf);
     rho_buf_clear(bodybuf);
 
     n = rho_sock_precvn_buf(sock, hdrbuf, RPC_HDR_LENGTH);
-    debug("rho_sock_prcevn_buf for the hdr returned %zd", n);
     if (n == -1) {
         error = -1;
-        goto done;
+        goto fail;
     }
 
     (void)rpc_agent_unpack_hdr(agent);
     if (hdr->rh_bodylen > 0) {
-        debug("response code=%lu, bodylen=%lu",
-                (unsigned long)hdr->rh_code, (unsigned long)hdr->rh_bodylen);
-        debug("receiving rpc body");
         n = rho_sock_precvn_buf(sock, bodybuf, hdr->rh_bodylen);
         if (n == -1) {
             error = -1;
-            goto done;
+            goto fail;
         }
     }
 
-done:
+    goto succeed;
+
+fail:
+    rho_buf_clear(hdrbuf);
+    rho_buf_clear(bodybuf);
+succeed:
     RHO_TRACE_EXIT();
+    return (error);
+}
+
+/* 
+ * Application-level
+ *
+ * Returns 0 if the RPC returns success; otherwise, returns an errno value.
+ */
+int
+rpc_agent_request(struct rpc_agent *agent)
+{
+    int error = 0;
+    struct rpc_hdr *hdr = &agent->ra_hdr;
+
+    error = rpc_agent_request(agent);
+    if (error != 0) {
+        /* XXX: funnel all socket errors into a single errno */
+        rho_errno_warn(PAL_ERRNO, "rpc socket error");
+        error = EREMOTEIO;
+
+    } else {
+        error = (int)hdr->rh_code;
+        if (error != 0)
+            rho_errno_warn(error, "rpc returned an error");
+    }
+
     return (error);
 }

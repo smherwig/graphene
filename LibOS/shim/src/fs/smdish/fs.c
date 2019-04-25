@@ -30,6 +30,7 @@
 #include <string.h>
 
 #include <rho_binascii.h>
+#include <rho_bitops.h>
 #include <rho_buf.h>
 #include <rho_log.h>
 #include <rho_mem.h>
@@ -39,6 +40,8 @@
 #include <rho_sock.h>
 #include <rho_ssl.h>
 #include <rho_str.h>
+
+#include <rpc.h>
 
 #define URI_MAX_SIZE    STR_SIZE
 
@@ -61,10 +64,6 @@
 
 #define SMDISH_MAX_NAME_SIZE     256
 
-struct smdish_client {
-    struct rpc_agent *agent;
-};
-
 struct smdish_memfile {
     char name[SMDISH_MAX_NAME_SIZE];
     size_t size;
@@ -86,57 +85,15 @@ struct smdish_mdata {
     size_t  ca_der_len;
     uint32_t fd_bitmap;
     struct smdish_memfile fd_tab[32];
-    struct smdish_client *client;
+    struct rpc_agent *agent;
 };
-
-static struct smdish_mdata * smdish_mdata_create(const char *uri,
-        unsigned char *ca_der, size_t ca_der_len);
-static void smdish_mdata_print(const struct smdish_mdata *mdata);
-static struct smdish_memfile * smdish_mdata_new_memfile(
-        struct smdish_mdata *mdata, const char *name);
-static struct smdish_memfile * smdish_mdata_memfile_by_name(
-        struct smdish_mdata *mdata, const char *name);
-
-static struct smdish_memfile * smdish_shim_handle_to_memfile(
-        const struct shim_handle *hdl);
-
-static struct smdish_client * smdish_client_open(const char *url,
-        unsigned char *ca_der, size_t ca_der_len);
-
-static void smdish_client_close(struct smdish_client *client);
-static int smdish_client_request(struct smdish_client *client,
-        uint32_t *status, uint32_t *bodylen);
 
 /********************************* 
  * RPC
+ *
+ * These functions return 0 on success,
+ * or a negative errno on failure.
  *********************************/
-static int
-smdish_do_rpc(struct rpc_agent *agent)
-{
-    int error = 0;
-
-    RHO_TRACE_ENTER();
-
-    /* make request */
-    error = rpc_agent_request(agent);
-    if (error != 0) {
-        /* RPC/transport error (EPROTO) */
-        rho_warn("RPC error");
-        goto done;
-    }
-
-    if (hdr->rh_code != 0) {
-        /* method error */
-        error = hdr->rh_code;
-        rho_errno_warn(error, "RPC returned an error");
-        goto done;
-    }
-
-done:
-    RHO_TRACE_EXIT();
-    return (error);
-}
-
 static int
 smdish_rpc_new_fdtable(struct rpc_agent *agent)
 {
@@ -145,7 +102,7 @@ smdish_rpc_new_fdtable(struct rpc_agent *agent)
     RHO_TRACE_ENTER();
 
     rpc_agent_new_msg(agent, SMDISH_OP_NEW_FDTABLE);
-    error = smdish_do_rpc(agent);
+    error = rpc_agent_request(agent);
 
     RHO_TRACE_EXIT();
     return (error);
@@ -161,17 +118,17 @@ smdish_rpc_fork(struct rpc_agent *agent, uint64_t *child_ident)
 
     rpc_agent_new_msg(agent, SMDISH_OP_FORK);
 
-    error = smdish_do_rpc(agent);
+    error = rpc_agent_request(agent);
     if (error != 0)
         goto done;
 
-    error = rho_buf_readu64be(buf, &child_ident);
+    error = rho_buf_readu64be(buf, child_ident);
 	if (error != 0)
 		error = EPROTO;
 
 done:
     RHO_TRACE_EXIT();
-    return (error);
+    return (-error);
 }
 
 static int
@@ -186,10 +143,10 @@ smdish_rpc_child_attach(struct rpc_agent *agent, uint64_t child_ident)
     rho_buf_writeu64be(buf, child_ident);
     rpc_agent_autoset_bodylen(agent);
 
-    error = smdish_do_rpc(agent);
+    error = rpc_agent_request(agent);
 
     RHO_TRACE_EXIT();
-    return (error);
+    return (-error);
 }
 
 static int
@@ -198,20 +155,23 @@ smdish_rpc_open(struct rpc_agent *agent, const char *name, uint32_t *fd)
     int error = 0;
     struct rho_buf *buf = agent->ra_bodybuf;
 
+    RHO_TRACE_ENTER();
+
     rpc_agent_new_msg(agent, SMDISH_OP_OPEN);
     rho_buf_write_u32size_str(buf, name);
     rpc_agent_autoset_bodylen(agent);
 
-    error = smdish_do_rpc(agent);
+    error = rpc_agent_request(agent);
     if (error != 0)
         goto done;
 
-    error = rho_buf_readu32be(buf, &fd);
+    error = rho_buf_readu32be(buf, fd);
     if (error != 0)
         error = EPROTO;
 
 done:
-    return (error);
+    RHO_TRACE_EXIT();
+    return (-error);
 }
 
 static int
@@ -223,41 +183,61 @@ smdish_rpc_close(struct rpc_agent *agent, uint32_t fd)
     RHO_TRACE_ENTER();
 
     rpc_agent_new_msg(agent, SMDISH_OP_CLOSE);
-    rho_buf_writeu32(buf, fd);
+    rho_buf_writeu32be(buf, fd);
     rpc_agent_autoset_bodylen(agent);
 
-    error = smdish_do_rpc(agent);
+    error = rpc_agent_request(agent);
 
-done:
     RHO_TRACE_EXIT();
-    return (error);
+    return (-error);
 }
 
 static int
-smdish_rpc_lock(struct rpc_agent *agent, uint32_t fd)
+smdish_rpc_lock(struct rpc_agent *agent, uint32_t fd, uint8_t *mem,
+        uint32_t memsize)
 {
     int error = 0;
     struct rho_buf *buf = agent->ra_bodybuf;
+    uint32_t size = 0;
 
     RHO_TRACE_ENTER();
     
     rpc_agent_new_msg(agent, SMDISH_OP_LOCK);
-    rho_buf_writeu32(buf, fd);
+    rho_buf_writeu32be(buf, fd);
     rpc_agent_autoset_bodylen(agent);
 
-    error = smdish_do_rpc(agent);
+    error = rpc_agent_request(agent);
     if (error != 0)
         goto done;
 
-	/* TODO: read mem */
+    /* file is a pure lock file */
+    if (mem == NULL)
+        goto done;
+
+    /* file has associated shared memory; copy-in the server's replica */
+    error = rho_buf_readu32be(buf, &size);
+    if (error == -1) {
+        error = EPROTO;
+        goto done;
+    }
+
+    RHO_ASSERT(size == memsize);
+
+    /* 
+     * FIXME: make sure buf has the correct amount of space before copying
+     * in
+     */
+    (void)rho_buf_read(buf, mem, size);
+    error = 0;
 
 done:
     RHO_TRACE_EXIT();
-    return (error);
+    return (-error);
 }
 
 static int
-smdish_rpc_unlock(struct rpc_agent *agent, uint32_t fd)
+smdish_rpc_unlock(struct rpc_agent *agent, uint32_t fd, uint8_t *mem,
+        uint32_t memsize)
 {
     int error = 0;
     struct rho_buf *buf = agent->ra_bodybuf;
@@ -265,21 +245,24 @@ smdish_rpc_unlock(struct rpc_agent *agent, uint32_t fd)
     RHO_TRACE_ENTER();
 
     rpc_agent_new_msg(agent, SMDISH_OP_UNLOCK);
-    rho_buf_writeu32(buf, fd);
-	/* TODO: write mem */
+    rho_buf_writeu32be(buf, fd);
+
+    if (mem != NULL) {
+        rho_buf_writeu32be(buf, memsize);
+        rho_buf_write(buf, mem, memsize);
+    }
     rpc_agent_autoset_bodylen(agent);
 
-    error = smdish_do_rpc(agent);
+    error = rpc_agent_request(agent);
 
     RHO_TRACE_EXIT();
-    return (error);
+    return (-error);
 }
 
 static int
 smdish_rpc_mmap(struct rpc_agent *agent, uint32_t fd, uint32_t size)
 {
     int error = 0;
-    struct rpc_hdr *hdr = &agent->ra_hdr;
     struct rho_buf *buf = agent->ra_bodybuf;
 
     RHO_TRACE_ENTER();
@@ -289,17 +272,17 @@ smdish_rpc_mmap(struct rpc_agent *agent, uint32_t fd, uint32_t size)
     rho_buf_writeu32be(buf, size);
     rpc_agent_autoset_bodylen(agent);
 
-    error = smdish_do_rpc(agent);
+    error = rpc_agent_request(agent);
 
     RHO_TRACE_EXIT();
-    return (error);
+    return (-error);
 }
 
+#if 0
 static int
 smdish_rpc_munmap(struct rpc_agent *agent, uint32_t fd)
 {
     int error = 0;
-    struct rpc_hdr *hdr = &agent->ra_hdr;
     struct rho_buf *buf = agent->ra_bodybuf;
 
     RHO_TRACE_ENTER();
@@ -308,110 +291,53 @@ smdish_rpc_munmap(struct rpc_agent *agent, uint32_t fd)
     rho_buf_writeu32be(buf, fd);
     rpc_agent_autoset_bodylen(agent);
 
-    error = smdish_do_rpc(agent);
+    error = rpc_agent_request(agent);
 
     RHO_TRACE_EXIT();
-    return (error);
+    return (-error);
 }
-
-
-/* TODO: smdish_rpc_munmap */
+#endif
 
 /********************************* 
  * MOUNT DATA
+ *
+ * Mount data contains the rpc agent
+ * and serves as a client-side fdtable
  *********************************/
 
-static int
-smdish_fd_bitmap_ffc(uint32_t bitmap)
-{
-    int i = 0;
-    int val = 0;
-
-    SMDISH_SEGMENTS_BITMAP_FOREACH(i, val, bitmap) {
-        if (val == 0)
-            return (i);
-    }
-
-    /* TODO: assert error, because bitmap is full */
-    return (-1);
-}
-
 static struct smdish_mdata *
-smdish_mdata_create(const char *uri, unsigned char *ca_der,
-        size_t ca_der_len)
+smdish_mdata_create(const char *uri, unsigned char *ca_der, size_t ca_der_len)
 {
     struct smdish_mdata *mdata = NULL;
-    
-    debug("> smdish_mdata_create\n");
 
-    mdata = rhoL_zalloc(sizeof(struct smdish_mdata));
+    RHO_TRACE_ENTER();
+
+    mdata = rhoL_zalloc(sizeof(*mdata));
     memcpy(mdata->url, uri, strlen(uri));
     if (ca_der != NULL) {
         memcpy(mdata->ca_der, ca_der, ca_der_len);
         mdata->ca_der_len = ca_der_len;
     }
 
-    debug("< smdish_mdata_create\n");
+    RHO_TRACE_EXIT();
     return (mdata);
 }
 
-static void
-smdish_mdata_print(const struct smdish_mdata *mdata)
-{
-    debug("smdish_mdata = {url: %s, ident:%llu, ca_der[0]:%02x, ca_der_len:%u}\n",
-            mdata->url, (unsigned long long)mdata->ident, mdata->ca_der[0],
-            mdata->ca_der_len);
-}
-
-static int
-smdish_memfile_initialize(struct smdish_memfile *mf, void **addr, size_t size)
-{
-    int error = 0;
-
-    if (mf->addr != NULL) {
-        error = -EEXIST;
-        goto done;
-    }
-
-    //mf->addr = rhoL_zalloc(size);
-
-done:
-    return (error);
-}
-
 static struct smdish_memfile *
-smdish_mdata_new_memfile(struct smdish_mdata *mdata, const char *name)
+smdish_mdata_getfile(struct smdish_mdata *mdata, uint32_t fd)
 {
-    int i = 0;
     struct smdish_memfile *mf = NULL;
 
-    i = smtcad_fd_bitmap_ffc(mdata->fd_bitmap);
-    if (i == -1)
-        goto done;  /* fd table full */
+    RHO_TRACE_ENTER();
 
-    RHO_BITOPS_SET((uint8_t *)&mdata->fd_bitmap, i);
-    mf = &(mdata->memfiles[i]);
-    rho_memzero(mf, sizeof(*mf));
-    memcpy(mf->name, name, strlen(name));
-    
-    /*
-     * I'm still groking Graphene's memory management (mm), but
-     * I think for mmap, Graphene's mm finds an address that should
-     * be good, and mmap is responsible for actually allocating at
-     * that address.
-     */
-    mf->addr = DkVirtualMemoryAlloc(*addr, size, 0, 
-            PAL_PROT((PROT_READ|PROT_WRITE), 0));
-    debug("addr=%p, *addr=%p, mf->addr=%p\n", addr, *addr, mf->addr);
-    if (mf->addr == NULL) {
-        error = -ENOMEM;
+    if (!RHO_BITOPS_ISSET((uint8_t *)&mdata->fd_bitmap, fd))
         goto done;
-    }
 
-    mf->size = size;
-    *addr = mf->addr;
+    mf = &(mdata->fd_tab[fd]);
+    RHO_ASSERT(mf != NULL);
 
-
+done:
+    RHO_TRACE_EXIT();
     return (mf);
 }
 
@@ -419,20 +345,21 @@ smdish_mdata_new_memfile(struct smdish_mdata *mdata, const char *name)
  * SEGMENT
  *********************************/
 
-static struct smdish_client *
-smdish_client_open(const char *url, unsigned char *ca_der, size_t ca_der_len)
+static struct rpc_agent *
+smdish_agent_open(const char *url, unsigned char *ca_der, size_t ca_der_len)
 {
-    struct smdish_client *client = NULL;
+    struct rpc_agent *agent = NULL;
+    struct rho_sock *sock = NULL;
     struct rho_ssl_params *params = NULL;
     struct rho_ssl_ctx *ctx = NULL;
 
-    debug("> smdish_client_open(url=%s)\n", url);
+    RHO_TRACE_ENTER();
 
-    client = rhoL_zalloc(sizeof(*client));
-    client->buf = rho_buf_create();
-    client->url = rhoL_strdup(url);
-    client->sock = rho_sock_open_url(url);
-    client->debug_cookie = rho_rand_u32();
+    sock = rho_sock_open_url(url);
+    if (sock == NULL) {
+        rho_warn("failed to connect to mdish server at \"%s\"", url);
+        goto done;
+    }
 
     if (ca_der != NULL) {
         debug("smdish client using TLS\n");
@@ -441,25 +368,15 @@ smdish_client_open(const char *url, unsigned char *ca_der, size_t ca_der_len)
         rho_ssl_params_set_protocol(params, RHO_SSL_PROTOCOL_TLSv1_2);
         rho_ssl_params_set_ca_der(params, ca_der, ca_der_len);
         ctx = rho_ssl_ctx_create(params);
-        rho_ssl_wrap(client->sock, ctx);
+        rho_ssl_wrap(sock, ctx);
         //rho_ssl_params_destroy(params);
     }
 
-    debug("< smdish_client_open\n");
-    return (client);
-}
+    agent = rpc_agent_create(sock);
 
-static void
-smdish_client_close(struct smdish_client *client)
-{
-    debug("> smdish_client_close(url=\"%s\")\n", client->url);
-
-    rho_sock_destroy(client->sock);
-    rhoL_free(client->url);
-    rho_buf_destroy(client->buf);
-    rhoL_free(client);
-
-    debug("< smdish_client_close\n");
+done:
+    RHO_TRACE_EXIT();
+    return (agent);
 }
 
 /********************************* 
@@ -481,9 +398,9 @@ smdish_mount(const char *uri, const char *root, void **mount_data)
     unsigned char *ca_der = NULL;
     ssize_t len = 0;
     struct smdish_mdata *mdata = NULL;
-    struct smdish_client *client = NULL;
+    struct rpc_agent *agent = NULL;
 
-    debug("> smdish_mount(uri=%s, root=%s, mount_data=*)\n", uri, root);
+    RHO_TRACE_ENTER("uri=\"%s\", root=\"%s\"", uri, root);
 
     len = get_config(root_config, "phoenix.ca_der", ca_hex, sizeof(ca_hex));
     if (len > 0) {
@@ -491,29 +408,44 @@ smdish_mount(const char *uri, const char *root, void **mount_data)
         ca_der = rhoL_malloc(len / 2);
         rho_binascii_hex2bin(ca_der, ca_hex);
     }
-    client = smdish_client_open(uri, ca_der, len / 2);
 
-    error = smdish_rpc_new_fdtable(client->agent);
+    agent = smdish_agent_open(uri, ca_der, len / 2);
+    if (agent != NULL) {
+        /* FIXME: better errno; what's in PAL_ERRNO? */
+        error = -ENXIO;
+        goto fail;
+    }
+
+    error = smdish_rpc_new_fdtable(agent);
+    if (error != 0)
+        goto fail;
 
     mdata = smdish_mdata_create(uri, ca_der, len / 2);
-    mdata->client = client;
+    mdata->agent = agent;
     *mount_data = mdata;
-    debug("setting smdish mount data (%p)\n", mdata);
 
-done:
-    /* TODO: need to propagate an error if we can't open the client */
+    goto succeed;
+
+fail:
+    if (agent != NULL)
+        rpc_agent_destroy(agent);
+
+succeed:
     if (ca_der != NULL)
         rhoL_free(ca_der);
-    debug("< smdish_mount\n");
+
+    RHO_TRACE_EXIT();
     return (error);
 }
 
 static int 
 smdish_unmount(void *mount_data)
 {
-    debug("> smdish_unmount\n");
+    RHO_TRACE_ENTER();
+
     (void)mount_data;
-    debug("< smdish_unmount\n");
+
+    RHO_TRACE_EXIT();
     return (-ENOSYS);
 }
 
@@ -522,18 +454,13 @@ smdish_close(struct shim_handle *hdl)
 {
     int error = 0;
     struct smdish_mdata *mdata = hdl->fs->data;
-    struct smdish_client *client = mdata->client;
-    uint32_t smdish_fd = 0;
+    uint32_t fd = hdl->info.smdish.fd;
 
-    smdish_fd = hdl->info.smdish.fd;
+    RHO_TRACE_ENTER();
 
-    debug("> smdish_close(fd=%u)\n", smdish_fd);
+    error = smdish_rpc_close(mdata->agent, fd);
 
-    error = smdish_rpc_close(client->agent, fd);
-
-done:
-    rho_buf_clear(buf);
-    debug("< smdish_close\n");
+    RHO_TRACE_EXIT();
     return (error);
 }
 
@@ -543,43 +470,37 @@ smdish_mmap(struct shim_handle *hdl, void **addr, size_t size,
 {
     int error = 0;
     struct smdish_mdata *mdata = hdl->fs->data;
-    struct smdish_client *client = mdata->client;
-    uint32_t smdish_fd = 0;
-    char name[SMDISH_MAX_NAME_LENGTH + 1] = { 0 };
+    uint32_t fd = hdl->info.smdish.fd;
     struct smdish_memfile *mf = NULL;
 
     (void)prot;
     (void)flags;
     (void)offset;
 
-    smdish_fd = hdl->info.smdish.fd;
-    rho_shim_dentry_relpath(hdl->dentry, name, sizeof(name));
+    RHO_TRACE_ENTER();
 
-    debug("> smdish_mmap(fd=%u (%s), size=%lu)\n",
-            smdish_fd, name, (unsigned long) size);
+    mf = smdish_mdata_getfile(mdata, fd);
+    if (mf == NULL) {
+        error = -EBADF;
+        goto done;
+    }
 
-    smdish_rpc_mmap(client->agent);
+    error = smdish_rpc_mmap(mdata->agent, fd, size);
+    if (error != 0)
+        goto done;
+
+    mf->addr = DkVirtualMemoryAlloc(*addr, size, 0,
+            PAL_PROT((PROT_READ|PROT_WRITE), 0));
+    if (mf->addr == NULL) {
+        error = -ENOMEM;
+        goto done;
+    }
+
+    mf->size = size;
+    *addr = mf->addr;
 
 done:
-    debug("< smdish_mmap\n");
-    return (error);
-}
-
-static int
-smdish_advlock(struct shim_handle *hdl, int op, struct flock *flock)
-{
-    int error = 0;
-
-    debug("> smdish_advlock(op=%d)\n", op);
-
-    if (flock->l_type == F_WRLCK)
-        error = smdish_advlock_lock(hdl, flock);
-    else if (flock->l_type == F_UNLCK)
-        error = smdish_advlock_unlock(hdl, flock);
-    else
-        error = -EINVAL;
-
-    debug("< smdish_advlock\n");
+    RHO_TRACE_EXIT();
     return (error);
 }
 
@@ -587,98 +508,26 @@ static int
 smdish_advlock_lock(struct shim_handle *hdl, struct flock *flock)
 {
     int error = 0;
-    uint32_t bodylen = 0;
-    uint32_t status = 0;
-    struct smdish_mdata *mdata = NULL;
-    struct smdish_client *client = NULL;
-    struct rho_buf *buf = NULL;
-    uint32_t smdish_fd = 0;
+    struct smdish_mdata *mdata = hdl->fs->data;
+    uint32_t fd = hdl->info.smdish.fd;
     struct smdish_memfile *mf = NULL;
 
-    smdish_fd = hdl->info.smdish.fd;
-    debug("> smdish_advlock_lock(fd=%u, hdl=%p, hdl->fs=%p, hdl->fs->data=%p)\n",
-            smdish_fd, hdl, hdl->fs, hdl->fs->data);
-    mf = smdish_shim_handle_to_memfile(hdl);
+    RHO_TRACE_ENTER();
 
-    mdata = hdl->fs->data;
-    client = mdata->client;
-    debug("smdish_advlock_lock: client=(%p)\n", client);
-    buf = client->buf;
-
-again:
-    rho_buf_clear(buf);
-    /* build request */
-    rho_buf_seek(buf, SMDISH_HEADER_LENGTH, SEEK_SET); 
-    rho_buf_writeu32be(buf, smdish_fd);
-    rho_buf_writeu32be(buf, SMDISH_LOCKOP_LOCK);
-
-    bodylen = rho_buf_length(buf) - SMDISH_HEADER_LENGTH;
-    rho_buf_rewind(buf);
-    smdish_pmarshal_hdr(buf, SMDISH_OP_FILE_ADVLOCK, bodylen);
-
-    /* make request */
-    error = smdish_client_request(client, &status, &bodylen);
-    debug("unlock {error=%d, status=%lu, bodylen=%lu}........................\n",
-            error, (unsigned long)status, (unsigned long)bodylen);
-    if (error != 0) {
-        error = -ERPC;
+    mf = smdish_mdata_getfile(mdata, fd);
+    if (mf == NULL) {
+        error = -EBADF;
         goto done;
     }
 
-    if (status == EAGAIN) {
-        /* 
-         * TODO: perhaps sleep here briefly for random amount of time
-         * before again trying to acquire the lock.
-         */
+    error = smdish_rpc_lock(mdata->agent, fd, mf->addr, mf->size);
+    while (error == (-EAGAIN)) {
         thread_sleep(100000);
-        debug("again try to unlock ........................\n");
-        goto again;
-    } else if (status != 0) {
-        error = -status;
-        goto done;
+        error = smdish_rpc_lock(mdata->agent , fd, mf->addr, mf->size);
     }
-
-
-    /*
-     * XXX: This is a little messy.  We have a few cases:
-     *
-     * case 0 - just a lock file
-     *
-     *          mf == NULL, bodylen == 0
-     *
-     * case 1 - lock file with associated memory, but this
-     *          is the first time locking, so don't download
-     *          the server's view of the memory (which would be
-     *          all zeroes)
-     *
-     *          mf != NULL, bodylen == 0
-     *
-     * case 2 - lock file with associated memroy, and this
-     *          is not the first tiem locking, so download
-     *          the server's view of the memory and make that
-     *          the client's view.
-     *
-     *          mf != NULL, bodylen > 0
-     */
-    if (bodylen == 0)
-        goto done;
-
-    if (bodylen != mf->size) {
-        debug("bodylen=%lu, mf->size=%lu\n", bodylen, mf->size);
-        /* TODO: how should we handle this error? 
-         * XXX: this might be the problem.
-         */
-        error = -ERPC;
-        goto done;
-    }
-
-    debug("smdish_advlock_lock: memcpy: %p <- %p\n",
-            mf->addr, rho_buf_raw(buf, 0, SEEK_SET));
-    memcpy(mf->addr, rho_buf_raw(buf, 0, SEEK_SET), bodylen);
 
 done:
-    rho_buf_clear(buf);
-    debug("< smdish_advlock_lock\n");
+    RHO_TRACE_EXIT();
     return (error);
 }
 
@@ -687,20 +536,40 @@ smdish_advlock_unlock(struct shim_handle *hdl, struct flock *flock)
 {
     int error = 0;
     struct smdish_mdata *mdata = hdl->fs->data;
-    struct smdish_client *client = mdata->client;
-    uint32_t smdish_fd = 0;
+    uint32_t fd = hdl->info.smdish.fd;
     struct smdish_memfile *mf = NULL;
 
-    smdish_fd = hdl->info.smdish.fd;
-    mf = smdish_shim_handle_to_memfile(hdl);
+    RHO_TRACE_ENTER();
 
-    debug("> smdish_advlock_unlock(fd=%u), mf->size:%lu\n",
-            smdish_fd, (unsigned long)mf->size);
+    mf = smdish_mdata_getfile(mdata, fd);
+    if (mf == NULL) {
+        error = -EBADF;
+        goto done;
+    }
 
-    error = smdish_rpc_unlock(client->agent, fd);
+    error = smdish_rpc_unlock(mdata->agent, fd, mf->addr, mf->size);
 
 done:
-    debug("< smdish_advlock_unlock\n");
+    RHO_TRACE_EXIT();
+    return (error);
+}
+
+
+static int
+smdish_advlock(struct shim_handle *hdl, int op, struct flock *flock)
+{
+    int error = 0;
+
+    RHO_TRACE_ENTER();
+
+    if (flock->l_type == F_WRLCK)
+        error = smdish_advlock_lock(hdl, flock);
+    else if (flock->l_type == F_UNLCK)
+        error = smdish_advlock_unlock(hdl, flock);
+    else
+        error = -EINVAL;
+
+    RHO_TRACE_EXIT();
     return (error);
 }
 
@@ -714,19 +583,23 @@ done:
 static int
 smdish_checkout(struct shim_handle *hdl)
 {
-    debug("> smdish_checkout\n");
+    RHO_TRACE_ENTER();
+
     debug("checkout hdl = {path:%s}\n", qstrgetstr(&hdl->path));
     hdl->fs = NULL;
-    debug("< smdish_checkout\n");
+
+    RHO_TRACE_EXIT();
     return (0);
 }
 
 static int
 smdish_checkin(struct shim_handle *hdl)
 {
-    debug("> smdish_checkin\n");
+    RHO_TRACE_ENTER();
+
     debug("checkin hdl = {path:%s}\n", qstrgetstr(&hdl->path));
-    debug("< smdish_checkin\n");
+
+    RHO_TRACE_EXIT();
     return (-ENOSYS);
 }
 
@@ -734,44 +607,23 @@ static int
 smdish_checkpoint(void **checkpoint, void *mount_data)
 {
     int error = 0;
-    uint32_t bodylen = 0;
-    uint32_t status = 0;
     struct smdish_mdata *mdata = mount_data;
-    struct smdish_client *client = mdata->client;
-    struct rho_buf *buf = client->buf;
-    uint64_t ident = 0;
+    uint64_t child_ident = 0;
 
-    debug("> smdish_checkpoint\n");
+    RHO_TRACE_ENTER();
     
-    rho_buf_rewind(buf);
-    smdish_pmarshal_hdr(buf, SMDISH_OP_FORK, 0);
-
     /* make request */
-    error = smdish_client_request(client, &status, &bodylen);
-    if (error != 0) {
-        error = -ERPC;
+    error = smdish_rpc_fork(mdata->agent, &child_ident);
+    if (error != 0)
         goto done;
-    }
 
-    if (status != 0) {
-        error = -status;
-        goto done;
-    }
+    debug("smdish child ident = %llu\n", (unsigned long long)child_ident);
 
-    error = rho_buf_readu64be(buf, &ident);
-    if (error == -1) {
-        error = -ERPC;
-        goto done;
-    }
-
-    debug("smdish child ident = %llu\n", (unsigned long long)ident);
-
-    mdata->ident = ident;
+    mdata->ident = child_ident;
     *checkpoint = mdata;
 
 done:
-    rho_buf_clear(buf);
-    debug("< smdish_checkpoint\n");
+    RHO_TRACE_EXIT();
     return (sizeof(struct smdish_mdata));
 }
 
@@ -780,49 +632,26 @@ smdish_migrate(void *checkpoint, void **mount_data)
 {
     int error = 0;
     struct smdish_mdata *mdata = NULL;
-    struct smdish_client *client = NULL;
-    struct rho_buf *buf = NULL;
-    uint32_t status = 0;
-    uint32_t bodylen = 0;
+    struct rpc_agent *agent = NULL;
 
-    debug("> smdish_migrate\n");
+    RHO_TRACE_ENTER();
 
     mdata = rhoL_zalloc(sizeof(struct smdish_mdata));
     memcpy(mdata, checkpoint, sizeof(struct smdish_mdata));
-    smdish_mdata_print(mdata);
 
     //smdish_client_close(mdata->client); 
-    client = smdish_client_open(mdata->url, 
+    agent = smdish_agent_open(mdata->url, 
             mdata->ca_der[0] == 0x00 ? NULL : mdata->ca_der,
             mdata->ca_der_len);
 
-    debug("smdish migrate: client=%p, mdata=%p\n", client, mdata);
+    mdata->agent = agent;
+    //buf = client->buf;
 
-    mdata->client = client;
-    buf = client->buf;
-
-    rho_buf_seek(buf, SMDISH_HEADER_LENGTH, SEEK_SET); 
-    rho_buf_writeu64be(buf, mdata->ident);
-    bodylen = rho_buf_length(buf) - SMDISH_HEADER_LENGTH;
-    rho_buf_rewind(buf);
-    smdish_pmarshal_hdr(buf, SMDISH_OP_CHILD_ATTACH, bodylen);
-    error = smdish_client_request(client, &status, &bodylen);
-    if (error != 0) {
-        error = -ERPC;
-        goto done;
-    }
-
-    if (status != 0) {
-        error = -status;
-        goto done;
-    }
-
+    error = smdish_rpc_child_attach(agent, mdata->ident);
     *mount_data = mdata;
 
-done:
-    rho_buf_clear(buf);
-    debug("< smdish_migrate\n");
-    return (0);
+    RHO_TRACE_EXIT();
+    return (error); /* return 0 on success */
 }
 
 /********************************* 
@@ -832,37 +661,27 @@ static int
 smdish_open(struct shim_handle *hdl, struct shim_dentry *dent, int flags)
 {
     int error = 0;
-    struct smdish_mdata *mdata = NULL;
-    struct smdish_client *client = NULL; 
+    struct smdish_mdata *mdata = dent->fs->data;
     uint32_t fd = 0;
-    char name[SMDISH_MAX_NAME_LENGTH + 1] = { 0 };
+    char name[SMDISH_MAX_NAME_SIZE] = { 0 };
 
-    debug("> smdish_open(hdl=(%p), dent=(%p), dent->fs=(%p), dent->fs->data=(%p), flags=0x%08x\n", 
-            hdl, dent, dent->fs, dent->fs->data, flags);
+    RHO_TRACE_ENTER();
 
-    rho_shim_dentry_print(dent);
-
-    //debug("hdl->fs->data=%p\n", hdl->fs->data);
-    debug("dent->fs->data=%p\n", dent->fs->data);
-    mdata = dent->fs->data;
-    smdish_mdata_print(mdata);
-    client = mdata->client;
-    buf = client->buf;
-
-    /* get path */
     rho_shim_dentry_relpath(dent, name, sizeof(name));
 
-    smdish_rpc_open(client->agent, name);
+    error = smdish_rpc_open(mdata->agent, name, &fd);
+    if (error != 0)
+        goto done;
 
-    /* fill in handle */
+    /* update client-side fdtab */
+
     hdl->type = TYPE_SMDISH;
     hdl->flags = flags;
     hdl->acc_mode = ACC_MODE(flags & O_ACCMODE);
     hdl->info.smdish.fd = fd;
 
 done:
-    rho_buf_clear(buf);
-    debug("< smdish_open\n");
+    RHO_TRACE_EXIT();
     return (error);
 }
 
@@ -872,7 +691,6 @@ smdish_lookup(struct shim_dentry *dent, bool force)
     debug("> smdish_lookup(dent=*, force=%d)\n", force);
     (void)force;
 
-    rho_shim_dentry_print(dent);
     debug("dent->fs=%p\n", dent->fs);
     debug("dent->fs->data=%p\n", dent->fs->data);
 
@@ -895,7 +713,6 @@ smdish_mode(struct shim_dentry *dent, mode_t *mode, bool force)
     debug("> smdish_mode\n");
     (void)mode;
 
-    rho_shim_dentry_print(dent);
     debug("dent->fs=%p\n", dent->fs);
     debug("dent->fs->data=%p\n", dent->fs->data);
     debug("mode=%p\n", mode);

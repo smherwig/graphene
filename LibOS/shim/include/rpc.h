@@ -53,6 +53,7 @@ void rpc_agent_send_hdr(struct rpc_agent *agent);
 void rpc_agent_send_body(struct rpc_agent *agent);
 void rpc_agent_send_msg(struct rpc_agent *agent);
 
+int rpc_agent_transport(struct rpc_agent *agent);
 int rpc_agent_request(struct rpc_agent *agent);
 
 void rpc_agent_new_msg(struct rpc_agent *agent, uint32_t code);
