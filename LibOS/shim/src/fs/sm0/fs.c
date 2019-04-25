@@ -372,18 +372,17 @@ sm0_close(struct shim_handle *hdl)
     int error = 0;
     struct sm0_mdata *mdata = hdl->fs->data;
     struct sm0_memfile *mf = NULL;
-    uint32_t fd = 0;
+    uint32_t fd = hdl->info.sm0.fd;
 
-    fd = hdl->info.sm0.fd;
+    RHO_TRACE_ENTER();
+
     RHO_ASSERT(RHO_BITOPS_ISSET((uint8_t *)&mdata->fd_bitmap, fd));
-
-    debug("> sm0_close(fd=%u)\n", fd);
 
     mf = &(mdata->fd_tab[fd]);
     sm0_memfile_clear(mf);
     RHO_BITOPS_CLR((uint8_t *)&mdata->fd_tab, fd);
 
-    debug("< sm0_close (ret=%d)\n", error);
+    RHO_TRACE_EXIT();
     return (error);
 }
 
@@ -395,13 +394,14 @@ sm0_mmap(struct shim_handle *hdl, void **addr, size_t size,
     struct sm0_mdata *mdata = hdl->fs->data;
     char name[TCAD_MAX_NAME_SIZE] = { 0 };
     struct sm0_memfile *mf = NULL;
-    uint32_t fd = 0;
+    uint32_t fd = hdl->info.sm0.fd;
 
     (void)prot;
     (void)flags;
     (void)offset;
 
-    fd = hdl->info.sm0.fd;
+    RHO_TRACE_ENTER();
+
     RHO_ASSERT(RHO_BITOPS_ISSET((uint8_t *)&mdata->fd_bitmap, fd));
 
     rho_shim_dentry_relpath(hdl->dentry, name, sizeof(name));
@@ -413,7 +413,7 @@ sm0_mmap(struct shim_handle *hdl, void **addr, size_t size,
     if (error == -1)
         error = -PAL_ERRNO;
 
-    debug("< sm0_mmap (ret=%d)\n", error);
+    RHO_TRACE_EXIT();
     return (error);
 }
 
@@ -421,14 +421,12 @@ static int
 sm0_advlock_lock(struct shim_handle *hdl, struct flock *flock)
 {
     struct sm0_mdata *mdata = NULL;
-    uint32_t fd = 0;
+    uint32_t fd = hdl->info.sm0.fd;
     struct sm0_memfile *mf = NULL;
 
-    fd = hdl->info.sm0.fd;
-    RHO_ASSERT(RHO_BITOPS_ISSET((uint8_t *)&mdata->fd_bitmap, fd));
+    RHO_TRACE_ENTER();
 
-    debug("> sm0_advlock_lock(fd=%u, hdl=%p, hdl->fs=%p, hdl->fs->data=%p)\n",
-            fd, hdl, hdl->fs, hdl->fs->data);
+    RHO_ASSERT(RHO_BITOPS_ISSET((uint8_t *)&mdata->fd_bitmap, fd));
 
     mf = &(mdata->fd_tab[fd]);
     mdata = hdl->fs->data;
@@ -436,7 +434,7 @@ sm0_advlock_lock(struct shim_handle *hdl, struct flock *flock)
     mf->turn = sm0_lockad_lock(mf->lockad);
     sm0_memfile_map_in(mf);
 
-    debug("< sm0_advlock_lock\n");
+    RHO_TRACE_EXIT();
     return (0);
 }
 
@@ -445,10 +443,11 @@ sm0_advlock_unlock(struct shim_handle *hdl, struct flock *flock)
 {
     int error = 0;
     struct sm0_mdata *mdata = hdl->fs->data;
-    uint32_t fd = 0;
+    uint32_t fd = hdl->info.sm0.fd;
     struct sm0_memfile *mf = NULL;
 
-    fd = hdl->info.sm0.fd;
+    RHO_TRACE_ENTER();
+
     RHO_ASSERT(RHO_BITOPS_ISSET((uint8_t *)&mdata->fd_bitmap, fd));
 
     mf = &(mdata->fd_tab[fd]);
@@ -459,7 +458,7 @@ sm0_advlock_unlock(struct shim_handle *hdl, struct flock *flock)
     sm0_memfile_map_out(mf);
     sm0_lockad_unlock(mf->lockad);
 
-    debug("< sm0_advlock_unlock (ret=%d)\n", error);
+    RHO_TRACE_EXIT();
     return (error);
 }
 
@@ -468,7 +467,7 @@ sm0_advlock(struct shim_handle *hdl, int op, struct flock *flock)
 {
     int error = 0;
 
-    debug("> sm0_advlock(op=%d)\n", op);
+    RHO_TRACE_ENTER();
 
     if (flock->l_type == F_WRLCK)
         error = sm0_advlock_lock(hdl, flock);
@@ -477,7 +476,7 @@ sm0_advlock(struct shim_handle *hdl, int op, struct flock *flock)
     else
         error = -EINVAL;
 
-    debug("< sm0_advlock\n");
+    RHO_TRACE_EXIT();
     return (error);
 }
 
@@ -487,14 +486,13 @@ sm0_checkpoint(void **checkpoint, void *mount_data)
     struct sm0_mdata *mdata = mount_data;
     uint64_t ident = 0;
 
-    debug("> sm0_checkpoint\n");
-
-    debug("sm0 child ident = %llu\n", (unsigned long long)ident);
+    RHO_TRACE_ENTER();
 
     mdata->ident = ident;
     *checkpoint = mdata;
 
-    debug("< sm0_checkpoint\n");
+    RHO_TRACE_ENTER();
+
     return (sizeof(struct sm0_mdata));
 }
 
@@ -503,13 +501,13 @@ sm0_migrate(void *checkpoint, void **mount_data)
 {
     struct sm0_mdata *mdata = NULL;
 
-    debug("> sm0_migrate\n");
+    RHO_TRACE_ENTER();
 
     mdata = rhoL_zalloc(sizeof(struct sm0_mdata));
     memcpy(mdata, checkpoint, sizeof(struct sm0_mdata));
     *mount_data = mdata;
 
-    debug("< sm0_migrate\n");
+    RHO_TRACE_EXIT();
     return (0);
 }
 
@@ -520,20 +518,13 @@ static int
 sm0_open(struct shim_handle *hdl, struct shim_dentry *dent, int flags)
 {
     int error = 0;
-    struct sm0_mdata *mdata = NULL;
+    struct sm0_mdata *mdata = dent->fs->data;
     uint32_t fd = 0;
     struct sm0_memfile *mf = NULL;
     char name[TCAD_MAX_NAME_SIZE] = { 0 };
 
-    debug("> sm0_open(hdl=(%p), dent=(%p), dent->fs=(%p), dent->fs->data=(%p), flags=0x%08x\n", 
-            hdl, dent, dent->fs, dent->fs->data, flags);
-    rho_shim_dentry_print(dent);
-    //debug("hdl->fs->data=%p\n", hdl->fs->data);
-    debug("dent->fs->data=%p\n", dent->fs->data);
+    RHO_TRACE_ENTER();
 
-    mdata = dent->fs->data;
-
-    /* get path */
     rho_shim_dentry_relpath(dent, name, sizeof(name));
 
     mf = sm0_mdata_new_memfile(mdata, name);
@@ -549,7 +540,7 @@ sm0_open(struct shim_handle *hdl, struct shim_dentry *dent, int flags)
     hdl->info.sm0.fd = fd;
 
 done:
-    debug("< sm0_open (ret=%d)\n", error);
+    RHO_TRACE_EXIT();
     return (error);
 }
 
