@@ -326,25 +326,23 @@ struct shim_epoll_handle {
 };
 
 struct shim_nextfs_handle {
+    /* remote fd */
     uint32_t    fd;
 };
 
 struct shim_smdish_handle {
+    /* remote fd */
     uint32_t    fd;
-    void        *shm;
-    size_t      shmsize;
 };
 
 struct shim_smtcad_handle {
+    /* remote fd */
     uint32_t    fd;
-    void        *shm;
-    size_t      shmsize;
 };
 
 struct shim_sm0_handle {
+    /* remote fd */
     uint32_t    fd;
-    void        *shm;
-    size_t      shmsize;
 };
 
 struct shim_mount;
