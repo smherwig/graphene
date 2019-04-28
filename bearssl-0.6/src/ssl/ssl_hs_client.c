@@ -3,6 +3,9 @@
 #include <stddef.h>
 #include <stdint.h>
 
+
+//void debug_printf (const char * fmt, ...);
+
 typedef struct {
 	uint32_t *dp;
 	uint32_t *rp;
@@ -907,6 +910,8 @@ br_ssl_hs_client_run(void *t0ctx)
 	uint32_t *dp, *rp;
 	const unsigned char *ip;
 
+    //debug_printf("br_ssl_hs_client_run -->\n");
+
 #define T0_LOCAL(x)    (*(rp - 2 - (x)))
 #define T0_POP()       (*-- dp)
 #define T0_POPi()      (*(int32_t *)(-- dp))
@@ -1206,13 +1211,21 @@ br_ssl_hs_client_run(void *t0ctx)
 	unsigned char tmp[48];
 	br_tls_prf_seed_chunk seed;
 
+    //debug_printf("br_ssl_hs_client_run::br_ssl_engine_get -->\n");
 	br_tls_prf_impl prf = br_ssl_engine_get_PRF(ENG, prf_id);
+    //debug_printf("br_ssl_hs_client_run::br_ssl_engine_get <--\n");
 	seed.data = tmp;
 	if (ENG->session.version >= BR_TLS12) {
+        //debug_printf("br_ssl_hs_client_run::br_multihash_out (prf) -->\n");
 		seed.len = br_multihash_out(&ENG->mhash, prf_id, tmp);
+        //debug_printf("br_ssl_hs_client_run::br_multihash_out (prf) <--\n");
 	} else {
+        //debug_printf("br_ssl_hs_client_run::br_multihash_out (md5) -->\n");
 		br_multihash_out(&ENG->mhash, br_md5_ID, tmp);
+        //debug_printf("br_ssl_hs_client_run::br_multihash_out (md5) <--\n");
+        //debug_printf("br_ssl_hs_client_run::br_multihash_out (sha1) -->\n");
 		br_multihash_out(&ENG->mhash, br_sha1_ID, tmp + 16);
+        //debug_printf("br_ssl_hs_client_run::br_multihash_out (sha1) <--\n");
 		seed.len = 36;
 	}
 	prf(ENG->pad, 12, ENG->session.master_secret,
@@ -1268,9 +1281,13 @@ br_ssl_hs_client_run(void *t0ctx)
 
 	size_t sig_len;
 
+    //debug_printf("br_ssl_hs_client_run::make_client_sign -->\n");
 	sig_len = make_client_sign(CTX);
+    //debug_printf("br_ssl_hs_client_run::make_client_sign <--\n");
 	if (sig_len == 0) {
+        //debug_printf("br_ssl_hs_client_run::br_ssl_engine_fail -->\n");
 		br_ssl_engine_fail(ENG, BR_ERR_INVALID_ALGORITHM);
+        //debug_printf("br_ssl_hs_client_run::br_ssl_engine_fail <--\n");
 		T0_CO();
 	}
 	T0_PUSH(sig_len);
@@ -1284,9 +1301,13 @@ br_ssl_hs_client_run(void *t0ctx)
 	unsigned ecdhe = T0_POP();
 	int x;
 
+    //debug_printf("br_ssl_hs_client_run::make_pms_ecdh -->\n");
 	x = make_pms_ecdh(CTX, ecdhe, prf_id);
+    //debug_printf("br_ssl_hs_client_run::make_pms_ecdh <--\n");
 	if (x < 0) {
+        //debug_printf("br_ssl_hs_client_run::br_ssl_engine_fail -->\n");
 		br_ssl_engine_fail(ENG, -x);
+        //debug_printf("br_ssl_hs_client_run::br_ssl_engine_fail <--\n");
 		T0_CO();
 	} else {
 		T0_PUSH(x);
@@ -1299,9 +1320,13 @@ br_ssl_hs_client_run(void *t0ctx)
 
 	int x;
 
+    //debug_printf("br_ssl_hs_client_run::make_pms_rsa -->\n");
 	x = make_pms_rsa(CTX, T0_POP());
+    //debug_printf("br_ssl_hs_client_run::make_pms_rsa <--\n");
 	if (x < 0) {
+        //debug_printf("br_ssl_hs_client_run::br_ssl_engine_fail -->\n");
 		br_ssl_engine_fail(ENG, -x);
+        //debug_printf("br_ssl_hs_client_run::br_ssl_engine_fail <--\n");
 		T0_CO();
 	} else {
 		T0_PUSH(x);
@@ -1314,10 +1339,14 @@ br_ssl_hs_client_run(void *t0ctx)
 
 	unsigned prf_id = T0_POP();
 
+    //debug_printf("br_ssl_hs_client_run::make_pms_static_ecdh -->\n");
 	if (make_pms_static_ecdh(CTX, prf_id) < 0) {
+        //debug_printf("br_ssl_hs_client_run::br_ssl_engine_fail -->\n");
 		br_ssl_engine_fail(ENG, BR_ERR_INVALID_ALGORITHM);
+        //debug_printf("br_ssl_hs_client_run::br_ssl_engine_fail <--\n");
 		T0_CO();
 	}
+    //debug_printf("br_ssl_hs_client_run::make_pms_static_ecdh <--\n");
 
 				}
 				break;
@@ -1351,7 +1380,9 @@ br_ssl_hs_client_run(void *t0ctx)
 			case 40: {
 				/* fail */
 
+    //debug_printf("br_ssl_hs_client_run::br_ssl_engine_fail -->\n");
 	br_ssl_engine_fail(ENG, (int)T0_POPi());
+    //debug_printf("br_ssl_hs_client_run::br_ssl_engine_fail <--\n");
 	T0_CO();
 
 				}
@@ -1359,7 +1390,9 @@ br_ssl_hs_client_run(void *t0ctx)
 			case 41: {
 				/* flush-record */
 
+    //debug_printf("br_ssl_hs_client_run::br_ssl_engine_flush_record -->\n");
 	br_ssl_engine_flush_record(ENG);
+    //debug_printf("br_ssl_hs_client_run::br_ssl_engine_flush_record <--\n");
 
 				}
 				break;
@@ -1393,7 +1426,9 @@ br_ssl_hs_client_run(void *t0ctx)
 	unsigned usages;
 
 	xc = *(ENG->x509ctx);
+    //debug_printf("br_ssl_hs_client_run::get_pkey -->\n");
 	pk = xc->get_pkey(ENG->x509ctx, &usages);
+    //debug_printf("br_ssl_hs_client_run::get_pkey <--\n");
 	if (pk == NULL) {
 		T0_PUSH(0);
 	} else {
@@ -1459,7 +1494,9 @@ br_ssl_hs_client_run(void *t0ctx)
 
 	size_t len = (size_t)T0_POP();
 	void *addr = (unsigned char *)ENG + (size_t)T0_POP();
+    //debug_printf("br_ssl_hs_client_run::br_hmac_drbg_generate -->\n");
 	br_hmac_drbg_generate(&ENG->rng, addr, len);
+    //debug_printf("br_ssl_hs_client_run::br_hmac_drbg_generate <--\n");
 
 				}
 				break;
@@ -1473,7 +1510,9 @@ br_ssl_hs_client_run(void *t0ctx)
 			case 52: {
 				/* multihash-init */
 
+    //debug_printf("br_ssl_hs_client_run::br_multihash_init -->\n");
 	br_multihash_init(&ENG->mhash);
+    //debug_printf("br_ssl_hs_client_run::br_multihash_init <--\n");
 
 				}
 				break;
@@ -1521,7 +1560,9 @@ br_ssl_hs_client_run(void *t0ctx)
 		}
 		memcpy((unsigned char *)ENG + addr, ENG->hbuf_in, clen);
 		if (ENG->record_type_in == BR_SSL_HANDSHAKE) {
+            //debug_printf("br_ssl_hs_client_run::br_multihash_update -->\n");
 			br_multihash_update(&ENG->mhash, ENG->hbuf_in, clen);
+            //debug_printf("br_ssl_hs_client_run::br_multihash_update <--\n");
 		}
 		T0_PUSH(addr + (uint32_t)clen);
 		T0_PUSH(len - (uint32_t)clen);
@@ -1539,7 +1580,9 @@ br_ssl_hs_client_run(void *t0ctx)
 
 		x = *ENG->hbuf_in ++;
 		if (ENG->record_type_in == BR_SSL_HANDSHAKE) {
+            //debug_printf("br_ssl_hs_client_run::br_multihash_update -->\n");
 			br_multihash_update(&ENG->mhash, &x, 1);
+            //debug_printf("br_ssl_hs_client_run::br_multihash_update <--\n");
 		}
 		T0_PUSH(x);
 		ENG->hlen_in --;
@@ -1650,8 +1693,10 @@ br_ssl_hs_client_run(void *t0ctx)
 	cipher_key_len = T0_POP();
 	prf_id = T0_POP();
 	is_client = T0_POP();
+    //debug_printf("br_ssl_hs_client_run::br_ssl_engine_switch_ccm_in -->\n");
 	br_ssl_engine_switch_ccm_in(ENG, is_client, prf_id,
 		ENG->iaes_ctrcbc, cipher_key_len, tag_len);
+    //debug_printf("br_ssl_hs_client_run::br_ssl_engine_switch_ccm_in <--\n");
 
 				}
 				break;
@@ -1665,8 +1710,10 @@ br_ssl_hs_client_run(void *t0ctx)
 	cipher_key_len = T0_POP();
 	prf_id = T0_POP();
 	is_client = T0_POP();
+    //debug_printf("br_ssl_hs_client_run::br_ssl_engine_switch_ccm_out -->\n");
 	br_ssl_engine_switch_ccm_out(ENG, is_client, prf_id,
 		ENG->iaes_ctrcbc, cipher_key_len, tag_len);
+    //debug_printf("br_ssl_hs_client_run::br_ssl_engine_switch_ccm_out <--\n");
 
 				}
 				break;
@@ -1679,8 +1726,10 @@ br_ssl_hs_client_run(void *t0ctx)
 	cipher_key_len = T0_POP();
 	prf_id = T0_POP();
 	is_client = T0_POP();
+    //debug_printf("br_ssl_hs_client_run::br_ssl_engine_switch_gcm_in -->\n");
 	br_ssl_engine_switch_gcm_in(ENG, is_client, prf_id,
 		ENG->iaes_ctr, cipher_key_len);
+    //debug_printf("br_ssl_hs_client_run::br_ssl_engine_switch_gcm_in <--\n");
 
 				}
 				break;
@@ -1693,8 +1742,10 @@ br_ssl_hs_client_run(void *t0ctx)
 	cipher_key_len = T0_POP();
 	prf_id = T0_POP();
 	is_client = T0_POP();
+    //debug_printf("br_ssl_hs_client_run::br_ssl_engine_switch_gcm_out -->\n");
 	br_ssl_engine_switch_gcm_out(ENG, is_client, prf_id,
 		ENG->iaes_ctr, cipher_key_len);
+    //debug_printf("br_ssl_hs_client_run::br_ssl_engine_switch_gcm_out <--\n");
 
 				}
 				break;
@@ -1709,8 +1760,10 @@ br_ssl_hs_client_run(void *t0ctx)
 	mac_id = T0_POP();
 	prf_id = T0_POP();
 	is_client = T0_POP();
+    //debug_printf("br_ssl_hs_client_run::br_ssl_engine_switch_cbc_in -->\n");
 	br_ssl_engine_switch_cbc_in(ENG, is_client, prf_id, mac_id,
 		aes ? ENG->iaes_cbcdec : ENG->ides_cbcdec, cipher_key_len);
+    //debug_printf("br_ssl_hs_client_run::br_ssl_engine_switch_cbc_in <--\n");
 
 				}
 				break;
@@ -1725,8 +1778,10 @@ br_ssl_hs_client_run(void *t0ctx)
 	mac_id = T0_POP();
 	prf_id = T0_POP();
 	is_client = T0_POP();
+    //debug_printf("br_ssl_hs_client_run::br_ssl_engine_switch_cbc_out -->\n");
 	br_ssl_engine_switch_cbc_out(ENG, is_client, prf_id, mac_id,
 		aes ? ENG->iaes_cbcenc : ENG->ides_cbcenc, cipher_key_len);
+    //debug_printf("br_ssl_hs_client_run::br_ssl_engine_switch_cbc_out <--\n");
 
 				}
 				break;
@@ -1737,7 +1792,9 @@ br_ssl_hs_client_run(void *t0ctx)
 
 	prf_id = T0_POP();
 	is_client = T0_POP();
+    //debug_printf("br_ssl_hs_client_run::br_ssl_engine_switch_chapol_in -->\n");
 	br_ssl_engine_switch_chapol_in(ENG, is_client, prf_id);
+    //debug_printf("br_ssl_hs_client_run::br_ssl_engine_switch_chapol_in <--\n");
 
 				}
 				break;
@@ -1748,7 +1805,9 @@ br_ssl_hs_client_run(void *t0ctx)
 
 	prf_id = T0_POP();
 	is_client = T0_POP();
+    //debug_printf("br_ssl_hs_client_run::br_ssl_engine_switch_chapol_out -->\n");
 	br_ssl_engine_switch_chapol_out(ENG, is_client, prf_id);
+    //debug_printf("br_ssl_hs_client_run::br_ssl_engine_switch_chapol_out <--\n");
 
 				}
 				break;
@@ -1912,4 +1971,6 @@ t0_exit:
 	((t0_context *)t0ctx)->dp = dp;
 	((t0_context *)t0ctx)->rp = rp;
 	((t0_context *)t0ctx)->ip = ip;
+
+    //debug_printf("br_ssl_hs_client_run <-->n");
 }

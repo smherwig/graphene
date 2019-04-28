@@ -25,6 +25,8 @@
 #define BR_POWER_ASM_MACROS   1
 #include "inner.h"
 
+void debug_printf(const char *fmt, ...);
+
 #if BR_POWER8
 
 /* see bearssl_block.h */
@@ -32,8 +34,10 @@ void
 br_aes_pwr8_ctr_init(br_aes_pwr8_ctr_keys *ctx,
 	const void *key, size_t len)
 {
+    debug_printf("br_aes_pwr8_ctr_init -->\n");
 	ctx->vtable = &br_aes_pwr8_ctr_vtable;
 	ctx->num_rounds = br_aes_pwr8_keysched(ctx->skey.skni, key, len);
+    debug_printf("br_aes_pwr8_ctr_init <--\n");
 }
 
 static void

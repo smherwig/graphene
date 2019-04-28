@@ -25,6 +25,8 @@
 #define BR_ENABLE_INTRINSICS   1
 #include "inner.h"
 
+void debug_printf(const char *fmt, ...);
+
 #if BR_AES_X86NI
 
 /* see bearssl_block.h */
@@ -39,8 +41,12 @@ void
 br_aes_x86ni_ctr_init(br_aes_x86ni_ctr_keys *ctx,
 	const void *key, size_t len)
 {
+    debug_printf("br_aes_x86_ni_ctr_init -->\n");
 	ctx->vtable = &br_aes_x86ni_ctr_vtable;
+    debug_printf("br_aes_x86_ni_ctr_init::br_aes_x86ni_keysched_enc -->\n");
 	ctx->num_rounds = br_aes_x86ni_keysched_enc(ctx->skey.skni, key, len);
+    debug_printf("br_aes_x86_ni_ctr_init::br_aes_x86ni_keysched_enc <--\n");
+    debug_printf("br_aes_x86_ni_ctr_init <--\n");
 }
 
 BR_TARGETS_X86_UP

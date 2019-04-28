@@ -25,6 +25,8 @@
 #define BR_ENABLE_INTRINSICS   1
 #include "inner.h"
 
+void debug_printf(const char *fmt, ...);
+
 /*
  * This code contains the AES key schedule implementation using the
  * AES-NI opcodes.
@@ -50,11 +52,17 @@ BR_TARGET("sse2,aes")
 static inline __m128i
 expand_step128(__m128i k, __m128i k2)
 {
+	__m128i ret;
+    debug_printf("expand_step128 -->\n");
+
 	k = _mm_xor_si128(k, _mm_slli_si128(k, 4));
 	k = _mm_xor_si128(k, _mm_slli_si128(k, 4));
 	k = _mm_xor_si128(k, _mm_slli_si128(k, 4));
 	k2 = _mm_shuffle_epi32(k2, 0xFF);
-	return _mm_xor_si128(k, k2);
+
+	ret = _mm_xor_si128(k, k2);
+    debug_printf("expand_step128 <--\n");
+    return (ret);
 }
 
 BR_TARGET("sse2,aes")
@@ -62,6 +70,8 @@ static inline void
 expand_step192(__m128i *t1, __m128i *t2, __m128i *t3)
 {
 	__m128i t4;
+
+    debug_printf("expand_step192 -->\n");
 
 	*t2 = _mm_shuffle_epi32(*t2, 0x55);
 	t4 = _mm_slli_si128(*t1, 0x4);
@@ -75,6 +85,8 @@ expand_step192(__m128i *t1, __m128i *t2, __m128i *t3)
 	t4 = _mm_slli_si128(*t3, 0x4);
 	*t3 = _mm_xor_si128(*t3, t4);
 	*t3 = _mm_xor_si128(*t3, *t2);
+
+    debug_printf("expand_step192 <--\n");
 }
 
 BR_TARGET("sse2,aes")
@@ -82,6 +94,8 @@ static inline void
 expand_step256_1(__m128i *t1, __m128i *t2)
 {
 	__m128i t4;
+
+    debug_printf("expand_step256 -->\n");
 
 	*t2 = _mm_shuffle_epi32(*t2, 0xFF);
 	t4 = _mm_slli_si128(*t1, 0x4);
@@ -91,6 +105,8 @@ expand_step256_1(__m128i *t1, __m128i *t2)
 	t4 = _mm_slli_si128(t4, 0x4);
 	*t1 = _mm_xor_si128(*t1, t4);
 	*t1 = _mm_xor_si128(*t1, *t2);
+
+    debug_printf("expand_step256 <--\n");
 }
 
 BR_TARGET("sse2,aes")
@@ -98,6 +114,8 @@ static inline void
 expand_step256_2(__m128i *t1, __m128i *t3)
 {
 	__m128i t2, t4;
+
+    debug_printf("expand_step256_2 -->\n");
 
 	t4 = _mm_aeskeygenassist_si128(*t1, 0x0);
 	t2 = _mm_shuffle_epi32(t4, 0xAA);
@@ -108,6 +126,8 @@ expand_step256_2(__m128i *t1, __m128i *t3)
 	t4 = _mm_slli_si128(t4, 0x4);
 	*t3 = _mm_xor_si128(*t3, t4);
 	*t3 = _mm_xor_si128(*t3, t2);
+
+    debug_printf("expand_step256_2 <--\n");
 }
 
 /*
@@ -121,12 +141,17 @@ x86ni_keysched(__m128i *sk, const void *key, size_t len)
 {
 	const unsigned char *kb;
 
+    debug_printf("x86ni_keysched(len=%lu) -->\n", (unsigned long)len);
+
 #define KEXP128(k, i, rcon)   do { \
+        debug_printf("KEXP128 -->\n"); \
 		k = expand_step128(k, _mm_aeskeygenassist_si128(k, rcon)); \
 		sk[i] = k; \
+        debug_printf("KEXP128 <--\n"); \
 	} while (0)
 
 #define KEXP192(i, rcon1, rcon2)   do { \
+        debug_printf("KEXP192 -->\n"); \
 		sk[(i) + 0] = t1; \
 		sk[(i) + 1] = t3; \
 		t2 = _mm_aeskeygenassist_si128(t3, rcon1); \
@@ -139,14 +164,17 @@ x86ni_keysched(__m128i *sk, const void *key, size_t len)
 			_mm_castsi128_pd(t3), 1)); \
 		t2 = _mm_aeskeygenassist_si128(t3, rcon2); \
 		expand_step192(&t1, &t2, &t3); \
+        debug_printf("KEXP192 <--\n"); \
 	} while (0)
 
 #define KEXP256(i, rcon)   do { \
+        debug_printf("KEXP256 -->\n"); \
 		sk[(i) + 0] = t3; \
 		t2 = _mm_aeskeygenassist_si128(t3, rcon); \
 		expand_step256_1(&t1, &t2); \
 		sk[(i) + 1] = t1; \
 		expand_step256_2(&t1, &t3); \
+        debug_printf("KEXP256 <--\n"); \
 	} while (0)
 
 	kb = key;
@@ -154,7 +182,9 @@ x86ni_keysched(__m128i *sk, const void *key, size_t len)
 		__m128i t1, t2, t3;
 
 	case 16:
+        debug_printf("x86ni_keysched(len=16):_mm_loadu_si128 -->\n");
 		t1 = _mm_loadu_si128((const void *)kb);
+        debug_printf("x86ni_keysched(len=16):_mm_loadu_si128 <--\n");
 		sk[0] = t1;
 		KEXP128(t1,  1, 0x01);
 		KEXP128(t1,  2, 0x02);
@@ -212,8 +242,14 @@ br_aes_x86ni_keysched_enc(unsigned char *skni, const void *key, size_t len)
 	__m128i sk[15];
 	unsigned num_rounds;
 
+    debug_printf("br_aes_x86ni_keysched_enc -->\n");
+
+    debug_printf("br_aes_x86ni_keysched_enc::x86ni_keysched -->\n");
 	num_rounds = x86ni_keysched(sk, key, len);
+    debug_printf("br_aes_x86ni_keysched_enc::x86ni_keysched <--\n");
 	memcpy(skni, sk, (num_rounds + 1) << 4);
+
+    debug_printf("br_aes_x86ni_keysched_enc <--\n");
 	return num_rounds;
 }
 

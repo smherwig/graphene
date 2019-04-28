@@ -33,7 +33,6 @@
 
 #include <rho_binascii.h>
 #include <rho_bitops.h>
-#include <rho_buf.h>
 #include <rho_endian.h>
 #include <rho_log.h>
 #include <rho_mem.h>
@@ -49,21 +48,6 @@
 #include <rpc.h>
 #include <tcad.h>
 
-#define URI_MAX_SIZE    STR_SIZE
-
-#define TTY_FILE_MODE   0666
-
-#define FILE_BUFMAP_SIZE (PAL_CB(pagesize) * 4)
-#define FILE_BUF_SIZE (PAL_CB(pagesize))
-
-/*****/
-
-/* TODO: move to errno.h */
-#define ERPC                            999
-
-#define SM0_LOCKOP_LOCK       1
-#define SM0_LOCKOP_UNLOCK     2
-
 #define SM0_IV_SIZE 12
 #define SM0_KEY_SIZE 32
 
@@ -75,25 +59,24 @@ struct sm0_lockad {
 
 struct sm0_memfile {
     char name[TCAD_MAX_NAME_SIZE];
+    /* ---- */
     size_t size;
     void *pub_mem;
     void *priv_mem;
-    uint8_t key[32];
+    uint8_t key[SM0_KEY_SIZE];
     struct sm0_lockad *lockad;
-    int turn;
 };
 
 /*
- * For now, we have a hard limit of 32 memfiles opened.
+ * FIXME:
+ * We have a hard limit of 32 memfiles opened.
  * The implementation is simplistic because the struct
  * is (I believe) shallow-copied during migration/fork,
- * and a more robus data structure (with internal pointers)
+ * and a more robust data structure (with internal pointers)
  * would require additional work to reconstitute during
  * migration/fork.
  */
 struct sm0_mdata {
-    char url[512];           /* URL for server */
-    uint64_t ident;             /* auth cookie for child */
     uint32_t fd_bitmap;
     struct sm0_memfile fd_tab[32];
 };
@@ -140,7 +123,7 @@ sm0_lockad_destroy(struct sm0_lockad *lockad)
 static int
 sm0_lockad_lock(struct sm0_lockad *lockad)
 {
-    int my_turn;
+    int my_turn = 0;
     struct rho_ticketlock *tl = &lockad->tl;
 
     my_turn = rho_atomic_fetch_inc(&tl->ticket_number);
@@ -163,6 +146,7 @@ static void
 sm0_encrypt(uint8_t *data, size_t data_len, const uint8_t *key,
         const uint8_t *iv)
 {
+#if 0
     br_aes_x86ni_ctr_keys ctx;
     uint32_t cc = 0;
     uint32_t cc_out = 0;
@@ -174,12 +158,14 @@ sm0_encrypt(uint8_t *data, size_t data_len, const uint8_t *key,
     (void)cc_out;
 
     RHO_TRACE_EXIT();
+#endif
 }
 
 static void
 sm0_decrypt(uint8_t *data, size_t data_len, const uint8_t *key,
         const uint8_t *iv)
 {
+#if 0
     br_aes_x86ni_ctr_keys ctx;
     uint32_t cc = 0;
     uint32_t cc_out = 0;
@@ -191,15 +177,16 @@ sm0_decrypt(uint8_t *data, size_t data_len, const uint8_t *key,
     (void)cc_out;
 
     RHO_TRACE_EXIT();
+#endif
 }
 
 /******************************************
  * MEMFILE
  *
- * A MEMFILE is either a file that acts as
- * a lock, or a file that acts as a lock
- * with some associated memory.
+ * A MEMFILE is either a lock file or a lock
+ * file with associated shared memory.
  ******************************************/ 
+
 static int
 sm0_memfile_make_map(struct sm0_memfile *mf, size_t size)
 {
@@ -288,8 +275,10 @@ sm0_memfile_map_out(struct sm0_memfile *mf)
 /**********************************************************
  * MOUNT DATA
  *
- * (acts like a fs-specific file descriptor table
+ * Data for the mount point.  sm0 uses it as an fs-specific
+ * file descriptor table.
  **********************************************************/
+
 static int
 sm0_fd_bitmap_ffc(uint32_t bitmap)
 {
@@ -312,7 +301,7 @@ sm0_mdata_create(void)
     
     RHO_TRACE_ENTER();
 
-    mdata = rhoL_zalloc(sizeof(struct sm0_mdata));
+    mdata = rhoL_zalloc(sizeof(*mdata));
 
     RHO_TRACE_EXIT();
     return (mdata);
@@ -342,36 +331,26 @@ done:
  * FILE/FILESYSTEM OPERATIONS
  *********************************/
 
-/*
- * Mount should allocated a struct sm0_mountdata and return it
- * in the mount_data out parameter.
- *
- * uri is the host URI for the resource to be "mounted", and
- * root is the guest mountpoint.
- */
 static int
 sm0_mount(const char *uri, const char *root, void **mount_data)
 {
-    int error = 0;
     struct sm0_mdata *mdata = NULL;
 
-    debug("> sm0_mount(uri=%s, root=%s, mount_data=*)\n", uri, root);
+    RHO_TRACE_ENTER("uri=\"%s\", root=\"%s\"", uri, root);
 
     mdata = sm0_mdata_create();
     *mount_data = mdata;
-    debug("setting sm0 mount data (%p)\n", mdata);
 
-    debug("< sm0_mount\n");
-    return (error);
+    RHO_TRACE_EXIT();
+    return (0);
 }
 
 static int
 sm0_close(struct shim_handle *hdl)
 {
-    int error = 0;
     struct sm0_mdata *mdata = hdl->fs->data;
-    struct sm0_memfile *mf = NULL;
     uint32_t fd = hdl->info.sm0.fd;
+    struct sm0_memfile *mf = NULL;
 
     RHO_TRACE_ENTER();
 
@@ -382,7 +361,7 @@ sm0_close(struct shim_handle *hdl)
     RHO_BITOPS_CLR((uint8_t *)&mdata->fd_tab, fd);
 
     RHO_TRACE_EXIT();
-    return (error);
+    return (0);
 }
 
 static int
@@ -391,9 +370,8 @@ sm0_mmap(struct shim_handle *hdl, void **addr, size_t size,
 {
     int error = 0;
     struct sm0_mdata *mdata = hdl->fs->data;
-    char name[TCAD_MAX_NAME_SIZE] = { 0 };
-    struct sm0_memfile *mf = NULL;
     uint32_t fd = hdl->info.sm0.fd;
+    struct sm0_memfile *mf = NULL;
 
     (void)prot;
     (void)flags;
@@ -402,10 +380,6 @@ sm0_mmap(struct shim_handle *hdl, void **addr, size_t size,
     RHO_TRACE_ENTER();
 
     RHO_ASSERT(RHO_BITOPS_ISSET((uint8_t *)&mdata->fd_bitmap, fd));
-
-    rho_shim_dentry_relpath(hdl->dentry, name, sizeof(name));
-    debug("> sm0_mmap(fd=%u (%s), size=%lu)\n",
-            fd, name, (unsigned long) size);
 
     mf = &(mdata->fd_tab[fd]);
     error = sm0_memfile_make_map(mf, size);
@@ -419,18 +393,18 @@ sm0_mmap(struct shim_handle *hdl, void **addr, size_t size,
 static int
 sm0_advlock_lock(struct shim_handle *hdl, struct flock *flock)
 {
-    struct sm0_mdata *mdata = NULL;
+    struct sm0_mdata *mdata = hdl->fs->data;
     uint32_t fd = hdl->info.sm0.fd;
     struct sm0_memfile *mf = NULL;
+
+    (void)flock;
 
     RHO_TRACE_ENTER();
 
     RHO_ASSERT(RHO_BITOPS_ISSET((uint8_t *)&mdata->fd_bitmap, fd));
 
     mf = &(mdata->fd_tab[fd]);
-    mdata = hdl->fs->data;
-
-    mf->turn = sm0_lockad_lock(mf->lockad);
+    (void)sm0_lockad_lock(mf->lockad);
     sm0_memfile_map_in(mf);
 
     RHO_TRACE_EXIT();
@@ -440,31 +414,35 @@ sm0_advlock_lock(struct shim_handle *hdl, struct flock *flock)
 static int
 sm0_advlock_unlock(struct shim_handle *hdl, struct flock *flock)
 {
-    int error = 0;
     struct sm0_mdata *mdata = hdl->fs->data;
     uint32_t fd = hdl->info.sm0.fd;
     struct sm0_memfile *mf = NULL;
+
+    (void)flock;
 
     RHO_TRACE_ENTER();
 
     RHO_ASSERT(RHO_BITOPS_ISSET((uint8_t *)&mdata->fd_bitmap, fd));
 
+    /* 
+     * FIXME: should we return an error if the client does not
+     * possess the lock?
+     */
+
     mf = &(mdata->fd_tab[fd]);
-
-    debug("> sm0_advlock_unlock(fd=%u), mf->size:%lu\n",
-            fd, (unsigned long)mf->size);
-
     sm0_memfile_map_out(mf);
     sm0_lockad_unlock(mf->lockad);
 
     RHO_TRACE_EXIT();
-    return (error);
+    return (0);
 }
 
 static int
 sm0_advlock(struct shim_handle *hdl, int op, struct flock *flock)
 {
     int error = 0;
+
+    (void)op;
 
     RHO_TRACE_ENTER();
 
@@ -483,16 +461,14 @@ static int
 sm0_checkpoint(void **checkpoint, void *mount_data)
 {
     struct sm0_mdata *mdata = mount_data;
-    uint64_t ident = 0;
 
     RHO_TRACE_ENTER();
 
-    mdata->ident = ident;
     *checkpoint = mdata;
 
     RHO_TRACE_ENTER();
 
-    return (sizeof(struct sm0_mdata));
+    return (sizeof(*mdata));
 }
 
 static int
@@ -513,19 +489,21 @@ sm0_migrate(void *checkpoint, void **mount_data)
 /********************************* 
  * DIRECTORY OPERATIONS
  *********************************/
+
 static int
 sm0_open(struct shim_handle *hdl, struct shim_dentry *dent, int flags)
 {
     int error = 0;
     struct sm0_mdata *mdata = dent->fs->data;
     uint32_t fd = 0;
-    struct sm0_memfile *mf = NULL;
     char name[TCAD_MAX_NAME_SIZE] = { 0 };
+    struct sm0_memfile *mf = NULL;
 
     RHO_TRACE_ENTER();
 
     rho_shim_dentry_relpath(dent, name, sizeof(name));
 
+    /* TODO: we need this call to return an fd */
     mf = sm0_mdata_new_memfile(mdata, name);
     if (mf == NULL) {
         error = -ENFILE;
@@ -593,17 +571,17 @@ sm0_unlink(struct shim_dentry *dir, struct shim_dentry *dent)
 }
 
 struct shim_fs_ops sm0_fs_ops = {
-        .mount       = &sm0_mount,      /**/
-        .close       = &sm0_close,      /**/
-        .mmap        = &sm0_mmap,       /**/
+        .mount       = &sm0_mount,
+        .close       = &sm0_close,
+        .mmap        = &sm0_mmap,
         .advlock     = &sm0_advlock,
-        .checkpoint  = &sm0_checkpoint, /**/
-        .migrate     = &sm0_migrate,    /**/
+        .checkpoint  = &sm0_checkpoint,
+        .migrate     = &sm0_migrate,
     };
 
 struct shim_d_ops sm0_d_ops = {
-        .open       = &sm0_open,        /**/
-        .lookup     = &sm0_lookup,      /**/
-        .mode       = &sm0_mode,        /**/
-        .unlink     = &sm0_unlink,      /**/
+        .open       = &sm0_open,
+        .lookup     = &sm0_lookup,
+        .mode       = &sm0_mode,
+        .unlink     = &sm0_unlink,
     };

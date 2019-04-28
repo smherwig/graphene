@@ -24,13 +24,17 @@
 
 #include "inner.h"
 
+void debug_printf(const char *fmt, ...);
+
 /* see bearssl_block.h */
 void
 br_aes_big_ctr_init(br_aes_big_ctr_keys *ctx,
 	const void *key, size_t len)
 {
+    debug_printf("br_aes_big_ctr_init -->\n");
 	ctx->vtable = &br_aes_big_ctr_vtable;
 	ctx->num_rounds = br_aes_keysched(ctx->skey, key, len);
+    debug_printf("br_aes_big_ctr_init <--\n");
 }
 
 static void

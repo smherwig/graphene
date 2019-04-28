@@ -282,6 +282,8 @@
 #define MAX_OUT_OVERHEAD    85
 #define MAX_IN_OVERHEAD    325
 
+//void debug_printf (const char * fmt, ...);
+
 /* see inner.h */
 void
 br_ssl_engine_fail(br_ssl_engine_context *rc, int err)
@@ -313,6 +315,8 @@ make_ready_out(br_ssl_engine_context *rc)
 {
 	size_t a, b;
 
+    //debug_printf("make_ready_out -->\n");
+
 	a = 5;
 	b = rc->obuf_len - a;
 	rc->out.vtable->max_plaintext(&rc->out.vtable, &a, &b);
@@ -325,6 +329,8 @@ make_ready_out(br_ssl_engine_context *rc)
 	if (rc->iomode == BR_IO_OUT) {
 		rc->iomode = BR_IO_INOUT;
 	}
+
+    //debug_printf("make_ready_out <--\n");
 }
 
 /* see inner.h */
@@ -902,10 +908,12 @@ sendrec_buf(const br_ssl_engine_context *rc, size_t *len)
 static void
 sendrec_ack(br_ssl_engine_context *rc, size_t len)
 {
+    //debug_printf("sendrec_ack -->\n");
 	rc->oxb = (rc->oxa += len);
 	if (rc->oxa == rc->oxc) {
 		make_ready_out(rc);
 	}
+    //debug_printf("sendrec_ack <--n");
 }
 
 /*
@@ -915,6 +923,7 @@ sendrec_ack(br_ssl_engine_context *rc, size_t len)
 static inline int
 has_rec_tosend(const br_ssl_engine_context *rc)
 {
+    //debug_printf("has_rec_to_send\n");
 	return rc->oxa == rc->oxb && rc->oxa != rc->oxc;
 }
 
@@ -1035,6 +1044,7 @@ br_ssl_engine_set_suites(br_ssl_engine_context *cc,
 static void
 jump_handshake(br_ssl_engine_context *cc, int action)
 {
+    //debug_printf("jump_handshake(action=%d) -->\n", action);
 	/*
 	 * We use a loop because the handshake processor actions may
 	 * allow for more actions; namely, if the processor reads all
@@ -1050,7 +1060,9 @@ jump_handshake(br_ssl_engine_context *cc, int action)
 		 * get called with an explicit close or renegotiation
 		 * while there is application data ready to be read).
 		 */
+        //debug_printf("jump_handshake::recvpld_buf -->\n");
 		cc->hbuf_in = recvpld_buf(cc, &hlen_in);
+        //debug_printf("jump_handshake::recvpld_buf <--\n");
 		if (cc->hbuf_in != NULL
 			&& cc->record_type_in == BR_SSL_APPLICATION_DATA)
 		{
@@ -1063,7 +1075,9 @@ jump_handshake(br_ssl_engine_context *cc, int action)
 		 * buffered output, then it MUST be some application
 		 * data, so the processor cannot write to it.
 		 */
+        //debug_printf("jump_handshake::sendpld_buf -->\n");
 		cc->saved_hbuf_out = cc->hbuf_out = sendpld_buf(cc, &hlen_out);
+        //debug_printf("jump_handshake::sendpld_buf <--\n");
 		if (cc->hbuf_out != NULL && br_ssl_engine_has_pld_to_send(cc)) {
 			hlen_out = 0;
 		}
@@ -1077,15 +1091,22 @@ jump_handshake(br_ssl_engine_context *cc, int action)
 		cc->hlen_in = hlen_in;
 		cc->hlen_out = hlen_out;
 		cc->action = action;
+        //debug_printf("jump_handshake::cc->hsrun -->\n");
 		cc->hsrun(&cc->cpu);
+        //debug_printf("jump_handshake::cc->hsrun <--\n");
 		if (br_ssl_engine_closed(cc)) {
+            //debug_printf("jump_handshake <--\n");
 			return;
 		}
 		if (cc->hbuf_out != cc->saved_hbuf_out) {
+            //debug_printf("jump_handshake::sendpld_ack -->\n");
 			sendpld_ack(cc, cc->hbuf_out - cc->saved_hbuf_out);
+            //debug_printf("jump_handshake::sendpld_ack <--\n");
 		}
 		if (hlen_in != cc->hlen_in) {
+            //debug_printf("jump_handshake::recvpld_ack -->\n");
 			recvpld_ack(cc, hlen_in - cc->hlen_in);
+            //debug_printf("jump_handshake::recvpld_ack <--\n");
 			if (cc->hlen_in == 0) {
 				/*
 				 * We read all data bytes, which may have
@@ -1100,6 +1121,7 @@ jump_handshake(br_ssl_engine_context *cc, int action)
 		}
 		break;
 	}
+    //debug_printf("jump_handshake <--\n");
 }
 
 /* see inner.h */
@@ -1164,13 +1186,17 @@ br_ssl_engine_sendrec_buf(const br_ssl_engine_context *cc, size_t *len)
 void
 br_ssl_engine_sendrec_ack(br_ssl_engine_context *cc, size_t len)
 {
+    //debug_printf("br_ssl_engine_sendrec_ack -->\n");
 	sendrec_ack(cc, len);
 	if (len != 0 && !has_rec_tosend(cc)
 		&& (cc->record_type_out != BR_SSL_APPLICATION_DATA
 		|| (cc->application_data & 1) == 0))
 	{
+        //debug_printf("br_ssl_engine_sendrec_ack::jump_handshake -->\n");
 		jump_handshake(cc, 0);
+        //debug_printf("br_ssl_engine_sendrec_ack::jump_handshake <--\n");
 	}
+    //debug_printf("br_ssl_engine_sendrec_ack <--\n");
 }
 
 /* see bearssl_ssl.h */
@@ -1470,16 +1496,26 @@ br_ssl_engine_switch_gcm_out(br_ssl_engine_context *cc,
 	unsigned char kb[72];
 	unsigned char *cipher_key, *iv;
 
+    //debug_printf("br_ssl_engine_switch_gcm_out -->\n");
+
+    //debug_printf("br_ssl_engine_switch_gcm_out::compute_key_block -->\n");
 	compute_key_block(cc, prf_id, cipher_key_len + 4, kb);
+    //debug_printf("br_ssl_engine_switch_gcm_out::compute_key_block <--\n");
 	if (is_client) {
+        //debug_printf("br_ssl_engine_switch_gcm_out::is client\n");
 		cipher_key = &kb[0];
 		iv = &kb[cipher_key_len << 1];
 	} else {
+        //debug_printf("br_ssl_engine_switch_gcm_out::is not client\n");
 		cipher_key = &kb[cipher_key_len];
 		iv = &kb[(cipher_key_len << 1) + 4];
 	}
+    //debug_printf("br_ssl_engine_switch_gcm_out::cc->igcm_out->init -->\n");
 	cc->igcm_out->init(&cc->out.gcm.vtable.out,
 		bc_impl, cipher_key, cipher_key_len, cc->ighash, iv);
+    //debug_printf("br_ssl_engine_switch_gcm_out::cc->igcm_out->init <--\n");
+
+    //debug_printf("br_ssl_engine_switch_gcm_out <--\n");
 }
 
 /* see inner.h */

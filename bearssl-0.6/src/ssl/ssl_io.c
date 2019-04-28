@@ -24,6 +24,8 @@
 
 #include "inner.h"
 
+// void debug_printf (const char * fmt, ...);
+
 /* see bearssl_ssl.h */
 void
 br_sslio_init(br_sslio_context *ctx,
@@ -54,7 +56,9 @@ run_until(br_sslio_context *ctx, unsigned target)
 	for (;;) {
 		unsigned state;
 
+        //debug_printf("run_until::br_ssl_engine_current_state -->\n");
 		state = br_ssl_engine_current_state(ctx->engine);
+        //debug_printf("run_until::br_ssl_engine_current_state <--\n");
 		if (state & BR_SSL_CLOSED) {
 			return -1;
 		}
@@ -68,8 +72,12 @@ run_until(br_sslio_context *ctx, unsigned target)
 			size_t len;
 			int wlen;
 
+            //debug_printf("run_until::br_ssl_engine_sendrec_buf -->\n");
 			buf = br_ssl_engine_sendrec_buf(ctx->engine, &len);
+            //debug_printf("run_until::br_ssl_engine_sendrec_buf <--\n");
+            //debug_printf("run_until::low_write -->\n");
 			wlen = ctx->low_write(ctx->write_context, buf, len);
+            //debug_printf("run_until::low_write <-- (%d)\n", wlen);
 			if (wlen < 0) {
 				/*
 				 * If we received a close_notify and we
@@ -85,7 +93,9 @@ run_until(br_sslio_context *ctx, unsigned target)
 				return -1;
 			}
 			if (wlen > 0) {
+                //debug_printf("run_until::br_ssl_engine_sendrec_ack -->\n");
 				br_ssl_engine_sendrec_ack(ctx->engine, wlen);
+                //debug_printf("run_until::br_ssl_engine_sendrec_ack <--\n");
 			}
 			continue;
 		}
@@ -194,15 +204,29 @@ br_sslio_write(br_sslio_context *ctx, const void *src, size_t len)
 	if (len == 0) {
 		return 0;
 	}
+
+    //debug_printf("br_sslio_write A\n");
+
 	if (run_until(ctx, BR_SSL_SENDAPP) < 0) {
 		return -1;
 	}
+
+    //debug_printf("br_sslio_write B\n");
+
 	buf = br_ssl_engine_sendapp_buf(ctx->engine, &alen);
 	if (alen > len) {
 		alen = len;
 	}
+
+    //debug_printf("br_sslio_write C\n");
+
 	memcpy(buf, src, alen);
+
+    //debug_printf("br_sslio_write D\n");
+
 	br_ssl_engine_sendapp_ack(ctx->engine, alen);
+
+    //debug_printf("br_sslio_write E\n");
 	return (int)alen;
 }
 

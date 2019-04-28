@@ -43,15 +43,6 @@
 
 #include <rpc.h>
 
-#define URI_MAX_SIZE    STR_SIZE
-
-#define TTY_FILE_MODE   0666
-
-#define FILE_BUFMAP_SIZE (PAL_CB(pagesize) * 4)
-#define FILE_BUF_SIZE (PAL_CB(pagesize))
-
-/*****/
-
 #define SMDISH_OP_NEW_FDTABLE    0
 #define SMDISH_OP_FORK           1
 #define SMDISH_OP_CHILD_ATTACH   2
@@ -105,7 +96,7 @@ smdish_rpc_new_fdtable(struct rpc_agent *agent)
     error = rpc_agent_request(agent);
 
     RHO_TRACE_EXIT();
-    return (error);
+    return (-error);
 }
 
 static int
@@ -260,7 +251,8 @@ smdish_rpc_unlock(struct rpc_agent *agent, uint32_t fd, uint8_t *mem,
 }
 
 static int
-smdish_rpc_mmap(struct rpc_agent *agent, uint32_t fd, uint32_t size)
+smdish_rpc_mmap(struct rpc_agent *agent, uint32_t fd, uint32_t size,
+        uint32_t *mapfd)
 {
     int error = 0;
     struct rho_buf *buf = agent->ra_bodybuf;
@@ -274,6 +266,17 @@ smdish_rpc_mmap(struct rpc_agent *agent, uint32_t fd, uint32_t size)
 
     error = rpc_agent_request(agent);
 
+    if (error != 0)
+        goto done;
+
+    error = rho_buf_readu32be(buf, mapfd);
+    if (error == -1) {
+        error = EPROTO;
+        goto done;
+    }
+
+
+done:
     RHO_TRACE_EXIT();
     return (-error);
 }
@@ -304,6 +307,20 @@ smdish_rpc_munmap(struct rpc_agent *agent, uint32_t fd)
  * Mount data contains the rpc agent
  * and serves as a client-side fdtable
  *********************************/
+static int
+smdish_fd_bitmap_ffc(uint32_t bitmap)
+{
+    int i = 0;
+    int val = 0;
+
+    RHO_BITOPS_FOREACH(i, val, (uint8_t *)&bitmap, sizeof(bitmap)) {
+        if (val == 0)
+            return (i);
+    }
+
+    /* TODO: assert error, because bitmap is full */
+    return (-1);
+}
 
 static struct smdish_mdata *
 smdish_mdata_create(const char *uri, unsigned char *ca_der, size_t ca_der_len)
@@ -330,11 +347,35 @@ smdish_mdata_getfile(struct smdish_mdata *mdata, uint32_t fd)
 
     RHO_TRACE_ENTER();
 
-    if (!RHO_BITOPS_ISSET((uint8_t *)&mdata->fd_bitmap, fd))
+    if (!RHO_BITOPS_ISSET((uint8_t *)&mdata->fd_bitmap, fd)) {
+        rho_warn("fd %lu is not an open descriptor", (unsigned long)fd);
         goto done;
+    }
 
     mf = &(mdata->fd_tab[fd]);
     RHO_ASSERT(mf != NULL);
+
+done:
+    RHO_TRACE_EXIT();
+    return (mf);
+}
+
+static struct smdish_memfile *
+smdish_mdata_new_memfile(struct smdish_mdata *mdata, const char *name)
+{
+    int i = 0;
+    struct smdish_memfile *mf = NULL;
+
+    RHO_TRACE_ENTER();
+
+    i = smdish_fd_bitmap_ffc(mdata->fd_bitmap);
+    if (i == -1)
+        goto done;  /* fd table full */
+
+    RHO_BITOPS_SET((uint8_t *)&mdata->fd_bitmap, i);
+    mf = &(mdata->fd_tab[i]);
+    rho_memzero(mf, sizeof(*mf));
+    memcpy(mf->name, name, strlen(name));
 
 done:
     RHO_TRACE_EXIT();
@@ -410,7 +451,7 @@ smdish_mount(const char *uri, const char *root, void **mount_data)
     }
 
     agent = smdish_agent_open(uri, ca_der, len / 2);
-    if (agent != NULL) {
+    if (agent == NULL) {
         /* FIXME: better errno; what's in PAL_ERRNO? */
         error = -ENXIO;
         goto fail;
@@ -472,12 +513,14 @@ smdish_mmap(struct shim_handle *hdl, void **addr, size_t size,
     struct smdish_mdata *mdata = hdl->fs->data;
     uint32_t fd = hdl->info.smdish.fd;
     struct smdish_memfile *mf = NULL;
+    uint32_t mapfd = 0;
 
     (void)prot;
     (void)flags;
     (void)offset;
 
-    RHO_TRACE_ENTER();
+    RHO_TRACE_ENTER("smdish fd=%lu, size=%lu",
+        (unsigned long)fd, (unsigned long)size);
 
     mf = smdish_mdata_getfile(mdata, fd);
     if (mf == NULL) {
@@ -485,7 +528,7 @@ smdish_mmap(struct shim_handle *hdl, void **addr, size_t size,
         goto done;
     }
 
-    error = smdish_rpc_mmap(mdata->agent, fd, size);
+    error = smdish_rpc_mmap(mdata->agent, fd, size, &mapfd);
     if (error != 0)
         goto done;
 
@@ -500,7 +543,7 @@ smdish_mmap(struct shim_handle *hdl, void **addr, size_t size,
     *addr = mf->addr;
 
 done:
-    RHO_TRACE_EXIT();
+    RHO_TRACE_EXIT("error=%d", error);
     return (error);
 }
 
@@ -664,6 +707,7 @@ smdish_open(struct shim_handle *hdl, struct shim_dentry *dent, int flags)
     struct smdish_mdata *mdata = dent->fs->data;
     uint32_t fd = 0;
     char name[SMDISH_MAX_NAME_SIZE] = { 0 };
+    struct smdish_memfile *mf = NULL;
 
     RHO_TRACE_ENTER();
 
@@ -673,7 +717,11 @@ smdish_open(struct shim_handle *hdl, struct shim_dentry *dent, int flags)
     if (error != 0)
         goto done;
 
-    /* update client-side fdtab */
+    mf = smdish_mdata_new_memfile(mdata, name);
+    if (mf == NULL) {
+        error = -ENFILE;
+        goto done;
+    }
 
     hdl->type = TYPE_SMDISH;
     hdl->flags = flags;

@@ -66,7 +66,7 @@ rpc_agent_unpack_hdr(struct rpc_agent *agent)
     agent->ra_hdr.rh_bodylen = bodylen;
     rho_buf_clear(buf);
 
-    debug("rh_code=%lu, rh_bodylen=%lu",
+    debug("rh_code=%lu, rh_bodylen=%lu\n",
             (unsigned long)agent->ra_hdr.rh_code,
             (unsigned long)agent->ra_hdr.rh_bodylen);
 
@@ -208,7 +208,7 @@ rpc_agent_recv_hdr(struct rpc_agent *agent)
         agent->ra_state = RPC_STATE_CLOSED;
     } else if ((size_t)got == need) {
         (void)rpc_agent_unpack_hdr(agent);
-        debug("bodylen: %lu", (unsigned long)rpc_agent_get_bodylen(agent));
+        debug("bodylen: %lu\n", (unsigned long)rpc_agent_get_bodylen(agent));
         if (rpc_agent_get_bodylen(agent) > 0)
             agent->ra_state = RPC_STATE_RECV_BODY;
         else
@@ -340,12 +340,14 @@ rpc_agent_transport(struct rpc_agent *agent)
 
     rpc_agent_ready_send(agent);
 
+    debug("rpc: send header\n");
     n = rho_sock_sendn_buf(sock, hdrbuf, rho_buf_length(hdrbuf));
     if (n == -1) {
         error = -1;
         goto fail;
     }
 
+    debug("rpc: send body\n");
     n = rho_sock_sendn_buf(sock, bodybuf, rho_buf_length(bodybuf));
     if (n == -1) {
         error = -1;
@@ -355,6 +357,7 @@ rpc_agent_transport(struct rpc_agent *agent)
     rho_buf_clear(hdrbuf);
     rho_buf_clear(bodybuf);
 
+    debug("rpc: recv hdr\n");
     n = rho_sock_precvn_buf(sock, hdrbuf, RPC_HDR_LENGTH);
     if (n == -1) {
         error = -1;
@@ -363,6 +366,7 @@ rpc_agent_transport(struct rpc_agent *agent)
 
     (void)rpc_agent_unpack_hdr(agent);
     if (hdr->rh_bodylen > 0) {
+        debug("rpc: recv body\n");
         n = rho_sock_precvn_buf(sock, bodybuf, hdr->rh_bodylen);
         if (n == -1) {
             error = -1;
@@ -391,12 +395,11 @@ rpc_agent_request(struct rpc_agent *agent)
     int error = 0;
     struct rpc_hdr *hdr = &agent->ra_hdr;
 
-    error = rpc_agent_request(agent);
+    error = rpc_agent_transport(agent);
     if (error != 0) {
         /* XXX: funnel all socket errors into a single errno */
         rho_errno_warn(PAL_ERRNO, "rpc socket error");
         error = EREMOTEIO;
-
     } else {
         error = (int)hdr->rh_code;
         if (error != 0)

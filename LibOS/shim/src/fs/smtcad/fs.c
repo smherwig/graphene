@@ -49,15 +49,6 @@
 #include <rpc.h>
 #include <tcad.h>
 
-#define URI_MAX_SIZE    STR_SIZE
-
-#define TTY_FILE_MODE   0666
-
-#define FILE_BUFMAP_SIZE (PAL_CB(pagesize) * 4)
-#define FILE_BUF_SIZE (PAL_CB(pagesize))
-
-/*****/
-
 #define SMTCAD_COUNTER_SIZE 4
 #define SMTCAD_IV_SIZE 12
 #define SMTCAD_KEY_SIZE 32
@@ -158,6 +149,7 @@ static void
 smtcad_encrypt(uint8_t *data, size_t data_len, const uint8_t *key,
         const uint8_t *iv, uint8_t *tag)
 {
+#if 0
     br_aes_x86ni_ctr_keys ctx;
     br_gcm_context gc;
 
@@ -168,12 +160,14 @@ smtcad_encrypt(uint8_t *data, size_t data_len, const uint8_t *key,
     br_gcm_flip(&gc);
     br_gcm_run(&gc, 1, data, data_len); /* encrypts in-place */
     br_gcm_get_tag(&gc, tag);
+#endif
 }
 
 static void
 smtcad_decrypt(uint8_t *data, size_t data_len, const uint8_t *key,
         const uint8_t *iv, uint8_t *tag)
 {
+#if 0
     br_aes_x86ni_ctr_keys ctx;
     br_gcm_context gc;
 
@@ -184,6 +178,7 @@ smtcad_decrypt(uint8_t *data, size_t data_len, const uint8_t *key,
     br_gcm_flip(&gc);
     br_gcm_run(&gc, 0, data, data_len); /* encrypts in-place */
     br_gcm_get_tag(&gc, tag);
+#endif
 }
 
 /******************************************
@@ -387,7 +382,7 @@ smtcad_mount(const char *uri, const char *root, void **mount_data)
     struct smtcad_mdata *mdata = NULL;
     struct rpc_agent *agent = NULL;
 
-    debug("> smtcad_mount(uri=%s, root=%s, mount_data=*)\n", uri, root);
+    RHO_TRACE_ENTER("uri=\"%s\", root=\"%s\"", uri, root);
 
     len = get_config(root_config, "phoenix.ca_der", ca_hex, sizeof(ca_hex));
     if (len > 0) {
@@ -401,12 +396,12 @@ smtcad_mount(const char *uri, const char *root, void **mount_data)
     mdata = smtcad_mdata_create(uri, ca_der, len / 2);
     mdata->agent = agent;
     *mount_data = mdata;
-    debug("setting smtcad mount data (%p)\n", mdata);
 
     /* TODO: need to propagate an error if we can't open the client */
     if (ca_der != NULL)
         rhoL_free(ca_der);
-    debug("< smtcad_mount\n");
+
+    RHO_TRACE_EXIT();
     return (error);
 }
 
@@ -439,7 +434,6 @@ smtcad_mmap(struct shim_handle *hdl, void **addr, size_t size,
 {
     int error = 0;
     struct smtcad_mdata *mdata = hdl->fs->data;
-    char name[TCAD_MAX_NAME_SIZE] = { 0 };
     struct smtcad_memfile *mf = NULL;
     uint32_t fd = hdl->info.smtcad.fd;
 
@@ -450,10 +444,6 @@ smtcad_mmap(struct shim_handle *hdl, void **addr, size_t size,
     RHO_TRACE_ENTER();
 
     RHO_ASSERT(RHO_BITOPS_ISSET((uint8_t *)&mdata->fd_bitmap, fd));
-
-    rho_shim_dentry_relpath(hdl->dentry, name, sizeof(name));
-    debug("> smtcad_mmap(fd=%u (%s), size=%lu)\n",
-            fd, name, (unsigned long) size);
 
     mf = &(mdata->fd_tab[fd]);
     error = smtcad_memfile_make_map(mf, size);
@@ -563,7 +553,7 @@ smtcad_checkpoint(void **checkpoint, void *mount_data)
     *checkpoint = mdata;
 
     RHO_TRACE_EXIT();
-    return (sizeof(struct smtcad_mdata));
+    return (sizeof(*mdata));
 }
 
 static int
@@ -691,17 +681,17 @@ smtcad_unlink(struct shim_dentry *dir, struct shim_dentry *dent)
 }
 
 struct shim_fs_ops smtcad_fs_ops = {
-        .mount       = &smtcad_mount,      /**/
-        .close       = &smtcad_close,      /**/
-        .mmap        = &smtcad_mmap,       /**/
+        .mount       = &smtcad_mount,
+        .close       = &smtcad_close,
+        .mmap        = &smtcad_mmap,
         .advlock     = &smtcad_advlock,
-        .checkpoint  = &smtcad_checkpoint, /**/
-        .migrate     = &smtcad_migrate,    /**/
+        .checkpoint  = &smtcad_checkpoint,
+        .migrate     = &smtcad_migrate,
     };
 
 struct shim_d_ops smtcad_d_ops = {
-        .open       = &smtcad_open,        /**/
-        .lookup     = &smtcad_lookup,      /**/
-        .mode       = &smtcad_mode,        /**/
-        .unlink     = &smtcad_unlink,      /**/
+        .open       = &smtcad_open,
+        .lookup     = &smtcad_lookup,
+        .mode       = &smtcad_mode,
+        .unlink     = &smtcad_unlink,
     };

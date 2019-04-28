@@ -171,7 +171,7 @@ rho_sock_sendn(struct rho_sock *sock, const void *buf, size_t n)
     const char *p = NULL;
 
     p = buf;
-    for (tot  = 0; tot < n; ) {
+    for (tot = 0; tot < n; ) {
         nw = rho_sock_send(sock, p, n - tot);
         if (nw == -1)
             return (-1);
