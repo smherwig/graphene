@@ -62,6 +62,26 @@
 #define SMTCAD_AD_IV_POS       SMTCAD_AD_KEY_POS + SMTCAD_KEY_SIZE
 #define SMTCAD_AD_TAG_POS      SMTCAD_AD_IV_POS + SMTCAD_IV_SIZE
 
+/*
+ * FIXME:
+ *  We have an issue where the open creates an associated data of all
+ *  zeros that gets uploaded to the server; mmap locally updates the
+ *  associatd data but does not contact the server; lock downloads
+ *  the blank associated data, and thus the decryption (or, realy, the tag)
+ *  fails.
+ */
+
+/* 
+ * fd_refcnt is inc'd on open and dec'd on close
+ * map_refcnt is inc'd on map and dec'd on munmap
+ *
+ * Arguably, map_refcnt coudl be a bool; that is, a value
+ * > 1 doesn't make sense.
+ *
+ * TODO: see if you can move this into the handle itself.
+ * Currently, we're relying on keeping the handle's smtcad.fd
+ * and this struct's fd member in sync.
+ */
 struct smtcad_memfile {
     char name[TCAD_MAX_NAME_SIZE];
     size_t size;
@@ -71,6 +91,9 @@ struct smtcad_memfile {
     uint8_t key[SMTCAD_KEY_SIZE];
     uint8_t tag[SMTCAD_TAG_SIZE];
     struct rho_ticketlock *tl;
+    int fd_refcnt;
+    int map_refcnt;
+    int fd;
     int turn;
 };
 
@@ -81,6 +104,8 @@ struct smtcad_memfile {
  * and a more robus data structure (with internal pointers)
  * would require additional work to reconstitute during
  * migration/fork.
+ *
+ * fd_bitmap is a map of the remote descriptors we have open.
  */
 struct smtcad_mdata {
     char url[512];           /* URL for server */
@@ -102,17 +127,25 @@ smtcad_pack_assocdata(const struct smtcad_memfile *mf, void *ad)
 {
     int32_t turn_be = htobe32(mf->turn);
 
+    RHO_TRACE_ENTER();
+
     memcpy(ad,                    &turn_be, sizeof(turn_be));
     memcpy(ad + SMTCAD_AD_KEY_POS, mf->key, SMTCAD_KEY_SIZE);
     memcpy(ad + SMTCAD_AD_IV_POS,  mf->iv,  SMTCAD_IV_SIZE);
     memcpy(ad + SMTCAD_AD_TAG_POS, mf->tag, SMTCAD_TAG_SIZE);
+
+    RHO_TRACE_EXIT();
 }
 
 static void
 smtcad_unpack_assocdata(const void *ad, struct smtcad_memfile *mf)
 {
+    RHO_TRACE_ENTER();
+
     memcpy(mf->iv,  ad + SMTCAD_AD_IV_POS,  SMTCAD_IV_SIZE);
     memcpy(mf->tag, ad + SMTCAD_AD_TAG_POS, SMTCAD_TAG_SIZE);
+
+    RHO_TRACE_EXIT();
 }
 
 static struct rpc_agent *
@@ -151,16 +184,28 @@ smtcad_encrypt(uint8_t *data, size_t data_len, const uint8_t *key,
 {
 #if 0
     br_aes_x86ni_ctr_keys ctx;
+#endif
+    br_aes_big_ctr_keys ctx;
     br_gcm_context gc;
 
+    RHO_TRACE_ENTER();
+
+#if 0 
     br_aes_x86ni_ctr_init(&ctx, key, SMTCAD_KEY_SIZE);
+#endif 
+    br_aes_big_ctr_init(&ctx, key, SMTCAD_KEY_SIZE);
+
+#if 0
     br_gcm_init(&gc, &ctx.vtable, br_ghash_pclmul);
+#endif
+    br_gcm_init(&gc, &ctx.vtable, br_ghash_ctmul64);
     br_gcm_reset(&gc, iv, SMTCAD_IV_SIZE); 
     /* use br_gc_aad_inject, if needed */
     br_gcm_flip(&gc);
     br_gcm_run(&gc, 1, data, data_len); /* encrypts in-place */
     br_gcm_get_tag(&gc, tag);
-#endif
+
+    RHO_TRACE_EXIT();
 }
 
 static void
@@ -169,16 +214,28 @@ smtcad_decrypt(uint8_t *data, size_t data_len, const uint8_t *key,
 {
 #if 0
     br_aes_x86ni_ctr_keys ctx;
+#endif
+    br_aes_big_ctr_keys ctx;
     br_gcm_context gc;
 
+    RHO_TRACE_ENTER();
+
+#if 0
     br_aes_x86ni_ctr_init(&ctx, key, SMTCAD_KEY_SIZE);
+#endif
+    br_aes_big_ctr_init(&ctx, key, SMTCAD_KEY_SIZE);
+
+#if 0
     br_gcm_init(&gc, &ctx.vtable, br_ghash_pclmul);
+#endif
+    br_gcm_init(&gc, &ctx.vtable, br_ghash_ctmul64);
     br_gcm_reset(&gc, iv, SMTCAD_IV_SIZE); 
     /* use br_gc_aad_inject, if needed */
     br_gcm_flip(&gc);
     br_gcm_run(&gc, 0, data, data_len); /* encrypts in-place */
     br_gcm_get_tag(&gc, tag);
-#endif
+
+    RHO_TRACE_EXIT();
 }
 
 /******************************************
@@ -188,12 +245,13 @@ smtcad_decrypt(uint8_t *data, size_t data_len, const uint8_t *key,
  * a lock, or a file that acts as a lock
  * with some associated memory.
  ******************************************/ 
+
 static int
 smtcad_memfile_make_map(struct smtcad_memfile *mf, size_t size)
 {
     int error = 0;
 
-    RHO_TRACE_ENTER();
+    RHO_TRACE_ENTER("size=%lu", size);
 
     mf->size = size;
 
@@ -217,6 +275,7 @@ smtcad_memfile_make_map(struct smtcad_memfile *mf, size_t size)
     rho_rand_bytes(mf->key, SMTCAD_KEY_SIZE);
     smtcad_encrypt(mf->priv_mem, mf->size, mf->key, mf->iv, mf->tag);
     memcpy(mf->pub_mem, mf->priv_mem, mf->size);
+    mf->map_refcnt = 1;
 
     goto succeed;
 
@@ -224,7 +283,7 @@ fail:
     if (mf->pub_mem != NULL)
         DkVirtualMemoryFree(mf->pub_mem, size);
 succeed:
-    RHO_TRACE_EXIT();
+    RHO_TRACE_EXIT("error=%d", error);
     return (error);
 }
 
@@ -233,14 +292,20 @@ smtcad_memfile_clear(struct smtcad_memfile *mf)
 {
     RHO_TRACE_ENTER();
 
-    if (mf->pub_mem != NULL)
+    if (mf->pub_mem != NULL) {
+        debug("freeing pub_mem\n");
         DkVirtualMemoryFree(mf->pub_mem, mf->size);
+    }
 
-    if (mf->priv_mem != NULL)
+    if (mf->priv_mem != NULL) {
+        debug("freeing priv_mem\n");
         DkVirtualMemoryFree(mf->priv_mem, mf->size);
+    }
 
-    if (mf->tl != NULL)
-        DkVirtualMemoryFree(mf->tl, sizeof(struct rho_ticketlock));
+    if (mf->tl != NULL) {
+        debug("freeing ticketlock\n");
+        DkVirtualMemoryFree(mf->tl, ALIGN_UP(sizeof(struct rho_ticketlock)));
+    }
 
     rho_memzero(mf, sizeof(*mf));
 
@@ -259,7 +324,7 @@ smtcad_memfile_map_in(struct smtcad_memfile *mf)
     memcpy(mf->priv_mem, mf->pub_mem, mf->size);
     smtcad_decrypt(mf->priv_mem, mf->size, mf->key, mf->iv, actual_tag);
     if (!rho_mem_equal(mf->tag, actual_tag, SMTCAD_TAG_SIZE)) {
-        rho_warn("on memfile \"%s\"map in, tag does not match trusted tag",
+        rho_warn("on memfile \"%s\" map in, tag does not match trusted tag",
                 mf->name);
         error = -EBADE;  /* invalid exchange */
     }
@@ -329,36 +394,68 @@ smtcad_mdata_print(const struct smtcad_mdata *mdata)
 }
 
 static struct smtcad_memfile *
-smtcad_mdata_new_memfile(struct smtcad_mdata *mdata, const char *name)
+smtcad_mdata_get_memfile(struct smtcad_mdata *mdata, uint32_t fd)
 {
-    int i = 0;
     struct smtcad_memfile *mf = NULL;
-    struct rho_ticketlock *tl = NULL;
 
     RHO_TRACE_ENTER();
 
-    i = smtcad_fd_bitmap_ffc(mdata->fd_bitmap);
-    if (i == -1)
-        goto done;  /* fd table full */
+    if (!RHO_BITOPS_ISSET((uint8_t *)&mdata->fd_bitmap, fd)) {
+        rho_warn("fd %lu is not an open descriptor", (unsigned long)fd);
+        goto done;
+    }
 
-    RHO_BITOPS_SET((uint8_t *)&mdata->fd_bitmap, i);
-    mf = &(mdata->fd_tab[i]);
-    rho_memzero(mf, sizeof(*mf));
-    memcpy(mf->name, name, strlen(name));
-
-    tl = DkVirtualMemoryAlloc(NULL, sizeof(struct rho_ticketlock),
-            PAL_ALLOC_UNTRUSTED, PAL_PROT((PROT_READ|PROT_WRITE), 0));
-    if (tl == NULL)
-        rho_errno_die(PAL_ERRNO, "mmap");
-
-    tl->ticket_number = 0;
-    tl->turn = 0;
-
-    mf->tl = tl;
+    mf = &(mdata->fd_tab[fd]);
+    RHO_ASSERT(mf != NULL);
 
 done:
     RHO_TRACE_EXIT();
     return (mf);
+}
+
+static struct smtcad_memfile *
+smtcad_mdata_find_memfile(struct smtcad_mdata *mdata,
+        const char *name)
+{
+    size_t i = 0;
+    int val = 0;
+    struct smtcad_memfile *mf = NULL;
+
+    RHO_TRACE_ENTER("name=\"%s\"", name);
+
+    RHO_BITOPS_FOREACH(i, val, (uint8_t *)&mdata->fd_bitmap, 32) {
+        if (val) {
+            mf = &(mdata->fd_tab[i]);
+            if (rho_str_equal(mf->name, name))
+                goto done;
+        }
+    }
+    mf = NULL;
+
+done:
+    RHO_TRACE_EXIT("mf=%p", mf);
+    return (mf);
+}
+
+static int
+smtcad_mdata_set_fd(struct smtcad_mdata *mdata, uint32_t fd,
+        const struct smtcad_memfile *mf)
+{
+    int error = 0;
+
+    RHO_TRACE_ENTER();
+
+    if (RHO_BITOPS_ISSET((uint8_t *)&mdata->fd_bitmap, fd)) {
+        error = -1;
+        goto done;
+    }
+
+    RHO_BITOPS_SET((uint8_t *)&mdata->fd_bitmap, fd);
+    mdata->fd_tab[fd] = *mf;
+
+done:
+    RHO_TRACE_EXIT("error=%d", error);
+    return (error);
 }
 
 /********************************* 
@@ -415,15 +512,22 @@ smtcad_close(struct shim_handle *hdl)
 
     RHO_TRACE_ENTER();
 
-    RHO_ASSERT(RHO_BITOPS_ISSET((uint8_t *)&mdata->fd_bitmap, fd));
+    mf = smtcad_mdata_get_memfile(mdata, fd);
+    if (mf == NULL) {
+        error = -EBADF;
+        goto done;
+    }
 
-    mf = &(mdata->fd_tab[fd]);
-    smtcad_memfile_clear(mf);
-    RHO_BITOPS_CLR((uint8_t *)&mdata->fd_tab, fd);
-    error = tcad_destroy_entry(mdata->agent, fd);
-    if (error != 0)
-        error = -error;
+    mf->fd_refcnt--;
+    if (mf->fd_refcnt == 0 && mf->map_refcnt == 0) {
+        smtcad_memfile_clear(mf);
+        RHO_BITOPS_CLR((uint8_t *)&mdata->fd_tab, fd);
+        error = tcad_destroy_entry(mdata->agent, fd);
+        if (error != 0)
+            error = -error;
+    }
 
+done:
     RHO_TRACE_EXIT();
     return (error);
 }
@@ -447,9 +551,14 @@ smtcad_mmap(struct shim_handle *hdl, void **addr, size_t size,
 
     mf = &(mdata->fd_tab[fd]);
     error = smtcad_memfile_make_map(mf, size);
-    if (error == -1)
+    if (error == -1) {
         error = -PAL_ERRNO;
+        goto done;
+    }
 
+    *addr = mf->priv_mem;
+
+done:
     RHO_TRACE_EXIT();
     return (error);
 }
@@ -458,7 +567,7 @@ static int
 smtcad_advlock_lock(struct shim_handle *hdl, struct flock *flock)
 {
     int error = 0;
-    struct smtcad_mdata *mdata = NULL;
+    struct smtcad_mdata *mdata = hdl->fs->data;
     uint32_t fd = hdl->info.smtcad.fd;
     struct smtcad_memfile *mf = NULL;
     uint8_t ad[SMTCAD_AD_SIZE] = {0};
@@ -468,21 +577,34 @@ smtcad_advlock_lock(struct shim_handle *hdl, struct flock *flock)
 
     RHO_ASSERT(RHO_BITOPS_ISSET((uint8_t *)&mdata->fd_bitmap, fd));
 
+    debug("A\n");
+
     mf = &(mdata->fd_tab[fd]);
-    mdata = hdl->fs->data;
+
+    debug("B\n");
 
     mf->turn = rho_ticketlock_lock(mf->tl);
+
+    debug("C\n");
+
     error = tcad_cmp_and_get(mdata->agent, fd, mf->turn, ad, &ad_size);
+    debug("D\n");
     if (error != 0) {
         error = -error;
         goto done;
     }
+    debug("E\n");
         
     smtcad_unpack_assocdata(ad, mf);
+
+    debug("F\n");
+
     error = smtcad_memfile_map_in(mf);
 
+    debug("G\n");
+
 done:
-    RHO_TRACE_EXIT();
+    RHO_TRACE_EXIT("error=%d", error);
     return (error);
 }
 
@@ -592,40 +714,58 @@ static int
 smtcad_open(struct shim_handle *hdl, struct shim_dentry *dent, int flags)
 {
     int error = 0;
+    struct smtcad_mdata * mdata = dent->fs->data;
+    char name[TCAD_MAX_NAME_SIZE] = {0};
     uint8_t ad[SMTCAD_AD_SIZE] = {0};
-    struct smtcad_mdata *mdata = NULL;
     uint32_t fd = 0;
-    struct smtcad_memfile *mf = NULL;
-    char name[TCAD_MAX_NAME_SIZE] = { 0 };
+    struct smtcad_memfile *pmf;
+    struct smtcad_memfile newmf;
 
     RHO_TRACE_ENTER();
 
-    mdata = dent->fs->data;
-    smtcad_mdata_print(mdata);
-
-    /* get path */
     rho_shim_dentry_relpath(dent, name, sizeof(name));
 
-    mf = smtcad_mdata_new_memfile(mdata, name);
-    if (mf == NULL) {
-        error = -ENFILE;
-        goto done;
+    pmf = smtcad_mdata_find_memfile(mdata, name);
+    if (pmf != NULL) {
+        fd = pmf->fd;
+        pmf->fd_refcnt++;
+        goto succeed;
     }
 
-    smtcad_pack_assocdata(mf, ad);
+    memset(&newmf, 0x00, sizeof(struct smtcad_memfile));
+    memcpy(newmf.name, name, strlen(name));
+    newmf.fd_refcnt = 1;
+
+    smtcad_pack_assocdata(&newmf, ad);
     error = tcad_create_entry(mdata->agent, name, ad, sizeof(ad), &fd);
     if (error != 0) {
         error= -error;
-        goto done;
+        goto fail;
     }
 
+    newmf.tl = DkVirtualMemoryAlloc(NULL, ALIGN_UP(sizeof(struct rho_ticketlock)),
+            PAL_ALLOC_UNTRUSTED, PAL_PROT((PROT_READ|PROT_WRITE), 0));
+    if (newmf.tl == NULL)
+        rho_errno_die(PAL_ERRNO, "mmap");
+
+    newmf.tl->ticket_number = 0;
+    newmf.tl->turn = 0;
+
+    error = smtcad_mdata_set_fd(mdata, fd, &newmf);
+    if (error == -1) {
+        error = -ENFILE;
+        /* TODO: if this fails, we need to delloacte the ticketlock */
+        goto fail;
+    }
+
+succeed:
     /* fill in handle */
     hdl->type = TYPE_SMTCAD;
     hdl->flags = flags;
     hdl->acc_mode = ACC_MODE(flags & O_ACCMODE);
     hdl->info.smtcad.fd = fd;
 
-done:
+fail:
     RHO_TRACE_EXIT();
     return (error);
 }
