@@ -21,14 +21,14 @@
 rpc_queue_t* g_rpc_queue;  /* pointer to untrusted queue */
 
 static void* alloc_in_user(void* ptr, uint64_t size) {
-    if (!sgx_is_within_enclave(ptr, size))
+    if (!sgx_is_completely_within_enclave(ptr, size))
         return ptr;
 
     return sgx_ocalloc(size);
 }
 
 static void* copy_to_user(const void* ptr, uint64_t size) {
-    if (!sgx_is_within_enclave(ptr, size))
+    if (!sgx_is_completely_within_enclave(ptr, size))
         return (void*)ptr;
 
     void* tmp = sgx_ocalloc(size);
@@ -37,8 +37,8 @@ static void* copy_to_user(const void* ptr, uint64_t size) {
 }
 
 static void copy_from_user(void* ptr, const void* user_ptr, uint64_t size) {
-    if (sgx_is_within_enclave(user_ptr, size) ||
-            !sgx_is_within_enclave(ptr, size))
+    if (sgx_is_completely_within_enclave(user_ptr, size) ||
+            !sgx_is_completely_within_enclave(ptr, size))
         return;
 
     memcpy(ptr, user_ptr, size);
@@ -89,7 +89,7 @@ static int sgx_exitless_ocall(int code, void* ms) {
                     ms->ms_timeout = OCALL_NO_TIMEOUT;
 
                     int ret = sgx_ocall(OCALL_FUTEX, ms);
-                    if (ret < 0 && ret != -PAL_ERROR_TRYAGAIN)
+                    if (ret < 0 && ret != -EAGAIN)
                         return -ENOMEM;
                 }
             } while ((c = atomic_cmpxchg(&req->lock, REQ_UNLOCKED, REQ_LOCKED_WITH_WAITERS)));
@@ -136,11 +136,17 @@ static int sgx_exitless_ocall(int code, void* ms) {
 
 int ocall_exit(int exitcode)
 {
-    int retval = 0;
     int64_t code = exitcode;
-    sgx_ocall(OCALL_EXIT, (void *) code);
+    // There are two reasons for this loop:
+    //  1. Ocalls can be interuppted.
+    //  2. We can't trust the outside to actually exit, so we need to ensure
+    //     that we never return even when the outside tries to trick us.
+    while (true) {
+        sgx_ocall(OCALL_EXIT, (void *) code);
+    }
+
     /* NOTREACHED */
-    return retval;
+    return 0;
 }
 
 int ocall_print_string (const char * str, unsigned int length)
@@ -150,7 +156,7 @@ int ocall_print_string (const char * str, unsigned int length)
 
     if (!str || length <= 0) {
         sgx_ocfree_frame(frame);
-        return -PAL_ERROR_DENIED;
+        return -EPERM;
     }
 
     ms_ocall_print_string_t * ms = sgx_ocalloc(sizeof(*ms));
@@ -173,9 +179,9 @@ int ocall_alloc_untrusted (uint64_t size, void ** mem)
 
     retval = sgx_exitless_ocall(OCALL_ALLOC_UNTRUSTED, ms);
     if (!retval) {
-        if (sgx_is_within_enclave(ms->ms_mem, size)) {
+        if (!sgx_is_completely_outside_enclave(ms->ms_mem, size)) {
             sgx_ocfree_frame(frame);
-            return -PAL_ERROR_DENIED;
+            return -EPERM;
         }
         *mem = ms->ms_mem;
     }
@@ -199,9 +205,9 @@ int ocall_map_untrusted (int fd, uint64_t offset,
 
     retval = sgx_exitless_ocall(OCALL_MAP_UNTRUSTED, ms);
     if (!retval) {
-        if (sgx_is_within_enclave(ms->ms_mem, size)) {
+        if (!sgx_is_completely_outside_enclave(ms->ms_mem, size)) {
             sgx_ocfree_frame(frame);
-            return -PAL_ERROR_DENIED;
+            return -EPERM;
         }
         *mem = ms->ms_mem;
     }
@@ -215,9 +221,9 @@ int ocall_unmap_untrusted (const void * mem, uint64_t size)
     int retval = 0;
     void* frame = sgx_ocget_frame();
 
-    if (sgx_is_within_enclave(mem, size)) {
+    if (!sgx_is_completely_outside_enclave(mem, size)) {
         sgx_ocfree_frame(frame);
-        return -PAL_ERROR_INVAL;
+        return -EINVAL;
     }
 
     ms_ocall_unmap_untrusted_t * ms = sgx_ocalloc(sizeof(*ms));
@@ -291,9 +297,9 @@ int ocall_read (int fd, void * buf, unsigned int count)
 
     void * obuf = NULL;
 
-    if (count > 4096) {
+    if (count > PRESET_PAGESIZE) {
         retval = ocall_alloc_untrusted(ALLOC_ALIGNUP(count), &obuf);
-        if (retval < 0)
+        if (IS_ERR(retval))
             return retval;
     }
 
@@ -325,7 +331,7 @@ int ocall_write (int fd, const void * buf, unsigned int count)
 
     void * obuf = NULL;
 
-    if (count > 4096) {
+    if (count > PRESET_PAGESIZE) {
         retval = ocall_alloc_untrusted(ALLOC_ALIGNUP(count), &obuf);
         if (retval < 0)
             return retval;
@@ -519,9 +525,9 @@ int ocall_futex (int * futex, int op, int val,
     int retval = 0;
     void* frame = sgx_ocget_frame();
 
-    if (sgx_is_within_enclave(futex, sizeof(int))) {
+    if (!sgx_is_completely_outside_enclave(futex, sizeof(int))) {
         sgx_ocfree_frame(frame);
-        return -PAL_ERROR_INVAL;
+        return -EINVAL;
     }
 
     ms_ocall_futex_t * ms = sgx_ocalloc(sizeof(*ms));
@@ -576,10 +582,10 @@ int ocall_sock_listen (int domain, int type, int protocol,
     retval = sgx_exitless_ocall(OCALL_SOCK_LISTEN, ms);
     if (retval >= 0) {
         if (addrlen && (
-            sgx_is_within_enclave(ms->ms_addr, bind_len) ||
+            !sgx_is_completely_outside_enclave(ms->ms_addr, bind_len) ||
             ms->ms_addrlen > bind_len)) {
             sgx_ocfree_frame(frame);
-            return -PAL_ERROR_DENIED;
+            return -EPERM;
         }
 
         if (addr) {
@@ -609,10 +615,10 @@ int ocall_sock_accept (int sockfd, struct sockaddr * addr,
 
     retval = sgx_exitless_ocall(OCALL_SOCK_ACCEPT, ms);
     if (retval >= 0) {
-        if (len && (sgx_is_within_enclave(ms->ms_addr, len) ||
+        if (len && (!sgx_is_completely_outside_enclave(ms->ms_addr, len) ||
                     ms->ms_addrlen > len)) {
             sgx_ocfree_frame(frame);
-            return -PAL_ERROR_DENIED;
+            return -EPERM;
         }
 
         if (addr) {
@@ -650,10 +656,10 @@ int ocall_sock_connect (int domain, int type, int protocol,
     retval = sgx_exitless_ocall(OCALL_SOCK_CONNECT, ms);
     if (retval >= 0) {
         if (bind_len && (
-            sgx_is_within_enclave(ms->ms_bind_addr, bind_len) ||
+            !sgx_is_completely_outside_enclave(ms->ms_bind_addr, bind_len) ||
             ms->ms_bind_addrlen > bind_len)) {
             sgx_ocfree_frame(frame);
-            return -PAL_ERROR_DENIED;
+            return -EPERM;
         }
 
         if (bind_addr) {
@@ -673,13 +679,11 @@ int ocall_sock_recv (int sockfd, void * buf, unsigned int count,
                      struct sockaddr * addr, unsigned int * addrlen)
 {
     int retval = 0;
-    void* frame = sgx_ocget_frame();
-
-    unsigned int len = addrlen ? *addrlen : 0;
     void * obuf = NULL;
+    void* frame = sgx_ocget_frame();
+    unsigned int len = addrlen ? *addrlen : 0;
 
-    /* FIXME: assumes len is small */
-    if ((count + len) > 4096) {
+    if ((count + len) > PRESET_PAGESIZE) {
         retval = ocall_alloc_untrusted(ALLOC_ALIGNUP(count), &obuf);
         if (retval < 0)
             return retval;
@@ -697,10 +701,10 @@ int ocall_sock_recv (int sockfd, void * buf, unsigned int count,
 
     retval = sgx_exitless_ocall(OCALL_SOCK_RECV, ms);
     if (retval >= 0) {
-        if (len && (sgx_is_within_enclave(ms->ms_addr, len) ||
+        if (len && (!sgx_is_completely_outside_enclave(ms->ms_addr, len) ||
                     ms->ms_addrlen > len)) {
             sgx_ocfree_frame(frame);
-            return -PAL_ERROR_DENIED;
+            return -EPERM;
         }
 
         copy_from_user(addr, ms->ms_addr, ms->ms_addrlen);
@@ -725,7 +729,7 @@ int ocall_sock_send (int sockfd, const void * buf, unsigned int count,
     void* frame = sgx_ocget_frame();
     void * obuf = NULL;
 
-    if (count > 4096) {
+    if ((count + addrlen) > PRESET_PAGESIZE) {
         retval = ocall_alloc_untrusted(ALLOC_ALIGNUP(count), &obuf);
         if (retval < 0)
             return retval;
@@ -767,10 +771,10 @@ int ocall_sock_recv_fd (int sockfd, void * buf, unsigned int count,
 
     retval = sgx_exitless_ocall(OCALL_SOCK_RECV_FD, ms);
     if (retval >= 0) {
-        if (sgx_is_within_enclave(ms->ms_fds, sizeof(int) * (*nfds)) ||
+        if (!sgx_is_completely_outside_enclave(ms->ms_fds, sizeof(int) * (*nfds)) ||
             ms->ms_nfds > (*nfds)) {
             sgx_ocfree_frame(frame);
-            return -PAL_ERROR_DENIED;
+            return -EPERM;
         }
 
         copy_from_user(buf, ms->ms_buf, retval);

@@ -50,10 +50,9 @@ debug_fputch (void * f, int ch, void * b)
     buf->buf[buf->end++] = ch;
 
     if (ch == '\n') {
-        if (debug_fputs(NULL, buf->buf, buf->end) == -1)
-            return -1;
+        int ret = debug_fputs(NULL, buf->buf, buf->end);
         buf->end = buf->start;
-        return 0;
+        return ret;
     }
 
 #if DEBUGBUF_BREAK == 1
@@ -69,6 +68,7 @@ debug_fputch (void * f, int ch, void * b)
 #else
     if (buf->end == DEBUGBUF_SIZE) {
         debug_fputs(NULL, buf->buf, buf->end);
+        buf->end = buf->start;
     }
 #endif
 
@@ -78,7 +78,7 @@ debug_fputch (void * f, int ch, void * b)
 void debug_puts (const char * str)
 {
     int len = strlen(str);
-    struct debug_buf * buf = SHIM_GET_TLS()->debug_buf;
+    struct debug_buf * buf = shim_get_tls()->debug_buf;
 
     while (len) {
         int rem = DEBUGBUF_SIZE - 4 - buf->end;
@@ -109,12 +109,12 @@ void debug_puts (const char * str)
 
 void debug_putch (int ch)
 {
-    debug_fputch(NULL, ch, SHIM_GET_TLS()->debug_buf);
+    debug_fputch(NULL, ch, shim_get_tls()->debug_buf);
 }
 
 void debug_vprintf (const char * fmt, va_list * ap)
 {
-    vfprintfmt((void *) debug_fputch, NULL, SHIM_GET_TLS()->debug_buf,
+    vfprintfmt((void *) debug_fputch, NULL, shim_get_tls()->debug_buf,
                fmt, ap);
 }
 
@@ -134,7 +134,7 @@ void debug_setprefix (shim_tcb_t * tcb)
     struct debug_buf * buf = tcb->debug_buf;
     buf->start = buf->end = 0;
 
-    if (tcb->tid && !IS_INTERNAL_TID(tcb->tid))
+    if (tcb->tid && !is_internal_tid(tcb->tid))
         fprintfmt(debug_fputch, NULL, buf, TID_PREFIX, tcb->tid);
     else if (cur_process.vmid)
         fprintfmt(debug_fputch, NULL, buf, VMID_PREFIX,

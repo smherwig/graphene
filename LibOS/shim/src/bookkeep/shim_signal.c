@@ -54,7 +54,7 @@ allocate_signal_log (struct shim_thread * thread, int sig)
         tail = (tail == MAX_SIGNAL_LOG - 1) ? 0 : tail + 1;
     } while (atomic_cmpxchg(&log->tail, old_tail, tail) == tail);
 
-    debug("signal_logs[%d]: head=%d, tail=%d (counter = %d)\n", sig - 1,
+    debug("signal_logs[%d]: head=%d, tail=%d (counter = %ld)\n", sig - 1,
           head, tail, thread->has_signal.counter + 1);
 
     atomic_inc(&thread->has_signal);
@@ -145,7 +145,7 @@ void __store_context (shim_tcb_t * tcb, PAL_CONTEXT * pal_context,
 
 void deliver_signal (siginfo_t * info, PAL_CONTEXT * context)
 {
-    shim_tcb_t * tcb = SHIM_GET_TLS();
+    shim_tcb_t * tcb = shim_get_tls();
     assert(tcb);
 
     // Signals should not be delivered before the user process starts
@@ -201,7 +201,7 @@ void deliver_signal (siginfo_t * info, PAL_CONTEXT * context)
 #define IP eip
 #endif
 
-static inline bool is_internal(PAL_CONTEXT * context)
+static inline bool context_is_internal(PAL_CONTEXT * context)
 {
     return context &&
         (void *) context->IP >= (void *) &__code_address &&
@@ -212,25 +212,25 @@ static inline void internal_fault(const char* errstr,
                                   PAL_NUM addr, PAL_CONTEXT * context)
 {
     IDTYPE tid = get_cur_tid();
-    if (is_internal(context))
-        sys_printf("%s at %p (IP = +0x%lx, VMID = %u, TID = %u)\n", errstr,
+    if (context_is_internal(context))
+        sys_printf("%s at 0x%08lx (IP = +0x%lx, VMID = %u, TID = %u)\n", errstr,
                    addr, (void *) context->IP - (void *) &__load_address,
-                   cur_process.vmid, IS_INTERNAL_TID(tid) ? 0 : tid);
+                   cur_process.vmid, is_internal_tid(tid) ? 0 : tid);
     else
-        sys_printf("%s at %p (IP = %p, VMID = %u, TID = %u)\n", errstr,
+        sys_printf("%s at 0x%08lx (IP = 0x%08lx, VMID = %u, TID = %u)\n", errstr,
                    addr, context ? context->IP : 0,
-                   cur_process.vmid, IS_INTERNAL_TID(tid) ? 0 : tid);
+                   cur_process.vmid, is_internal_tid(tid) ? 0 : tid);
 
     pause();
 }
 
 static void arithmetic_error_upcall (PAL_PTR event, PAL_NUM arg, PAL_CONTEXT * context)
 {
-    if (IS_INTERNAL_TID(get_cur_tid()) || is_internal(context)) {
+    if (is_internal_tid(get_cur_tid()) || context_is_internal(context)) {
         internal_fault("Internal arithmetic fault", arg, context);
     } else {
         if (context)
-            debug("arithmetic fault at %p\n", context->IP);
+            debug("arithmetic fault at 0x%08lx\n", context->IP);
 
         deliver_signal(ALLOC_SIGINFO(SIGFPE, FPE_INTDIV,
                                      si_addr, (void *) arg), context);
@@ -240,7 +240,7 @@ static void arithmetic_error_upcall (PAL_PTR event, PAL_NUM arg, PAL_CONTEXT * c
 
 static void memfault_upcall (PAL_PTR event, PAL_NUM arg, PAL_CONTEXT * context)
 {
-    shim_tcb_t * tcb = SHIM_GET_TLS();
+    shim_tcb_t * tcb = shim_get_tls();
     assert(tcb);
 
     if (tcb->test_range.cont_addr && arg
@@ -251,13 +251,13 @@ static void memfault_upcall (PAL_PTR event, PAL_NUM arg, PAL_CONTEXT * context)
         goto ret_exception;
     }
 
-    if (IS_INTERNAL_TID(get_cur_tid()) || is_internal(context)) {
+    if (is_internal_tid(get_cur_tid()) || context_is_internal(context)) {
         internal_fault("Internal memory fault", arg, context);
         goto ret_exception;
     }
 
     if (context)
-        debug("memory fault at %p (IP = %p)\n", arg, context->IP);
+        debug("memory fault at 0x%08lx (IP = 0x%08lx)\n", arg, context->IP);
 
     struct shim_vma_val vma;
     int signo = SIGSEGV;
@@ -314,7 +314,7 @@ bool test_user_memory (void * addr, size_t size, bool write)
     if (!size)
         return false;
 
-    shim_tcb_t * tcb = SHIM_GET_TLS();
+    shim_tcb_t * tcb = shim_get_tls();
     assert(tcb && tcb->tp);
     __disable_preempt(tcb);
 
@@ -358,7 +358,7 @@ ret_fault:
  */
 bool test_user_string (const char * addr)
 {
-    shim_tcb_t * tcb = SHIM_GET_TLS();
+    shim_tcb_t * tcb = shim_get_tls();
     assert(tcb && tcb->tp);
     __disable_preempt(tcb);
 
@@ -399,12 +399,12 @@ static void illegal_upcall (PAL_PTR event, PAL_NUM arg, PAL_CONTEXT * context)
 {
     struct shim_vma_val vma;
 
-    if (!IS_INTERNAL_TID(get_cur_tid()) &&
-        !is_internal(context) &&
+    if (!is_internal_tid(get_cur_tid()) &&
+        !context_is_internal(context) &&
         !(lookup_vma((void *) arg, &vma)) &&
         !(vma.flags & VMA_INTERNAL)) {
         if (context)
-            debug("illegal instruction at %p\n", context->IP);
+            debug("illegal instruction at 0x%08lx\n", context->IP);
 
         deliver_signal(ALLOC_SIGINFO(SIGILL, ILL_ILLOPC,
                                      si_addr, (void *) arg), context);
@@ -416,7 +416,7 @@ static void illegal_upcall (PAL_PTR event, PAL_NUM arg, PAL_CONTEXT * context)
 
 static void quit_upcall (PAL_PTR event, PAL_NUM arg, PAL_CONTEXT * context)
 {
-    if (!IS_INTERNAL_TID(get_cur_tid())) {
+    if (!is_internal_tid(get_cur_tid())) {
         deliver_signal(ALLOC_SIGINFO(SIGTERM, SI_USER, si_pid, 0), NULL);
     }
     DkExceptionReturn(event);
@@ -424,7 +424,7 @@ static void quit_upcall (PAL_PTR event, PAL_NUM arg, PAL_CONTEXT * context)
 
 static void suspend_upcall (PAL_PTR event, PAL_NUM arg, PAL_CONTEXT * context)
 {
-    if (!IS_INTERNAL_TID(get_cur_tid())) {
+    if (!is_internal_tid(get_cur_tid())) {
         deliver_signal(ALLOC_SIGINFO(SIGINT, SI_USER, si_pid, 0), NULL);
     }
     DkExceptionReturn(event);
@@ -432,11 +432,11 @@ static void suspend_upcall (PAL_PTR event, PAL_NUM arg, PAL_CONTEXT * context)
 
 static void resume_upcall (PAL_PTR event, PAL_NUM arg, PAL_CONTEXT * context)
 {
-    shim_tcb_t * tcb = SHIM_GET_TLS();
+    shim_tcb_t * tcb = shim_get_tls();
     if (!tcb || !tcb->tp)
         return;
 
-    if (!IS_INTERNAL_TID(get_cur_tid())) {
+    if (!is_internal_tid(get_cur_tid())) {
         __disable_preempt(tcb);
         if ((tcb->context.preempt & ~SIGNAL_DELAYED) > 1) {
             tcb->context.preempt |= SIGNAL_DELAYED;
@@ -588,7 +588,7 @@ void __handle_signal (shim_tcb_t * tcb, int sig, ucontext_t * uc)
 
 void handle_signal (bool delayed_only)
 {
-    shim_tcb_t * tcb = SHIM_GET_TLS();
+    shim_tcb_t * tcb = shim_get_tls();
     assert(tcb);
 
     struct shim_thread * thread = (struct shim_thread *) tcb->tp;
@@ -600,7 +600,7 @@ void handle_signal (bool delayed_only)
     __disable_preempt(tcb);
 
     if ((tcb->context.preempt & ~SIGNAL_DELAYED) > 1) {
-        debug("signal delayed (%d)\n", tcb->context.preempt & ~SIGNAL_DELAYED);
+        debug("signal delayed (%ld)\n", tcb->context.preempt & ~SIGNAL_DELAYED);
         tcb->context.preempt |= SIGNAL_DELAYED;
     } else if (!(delayed_only && !(tcb->context.preempt & SIGNAL_DELAYED))) {
         __handle_signal(tcb, 0, NULL);

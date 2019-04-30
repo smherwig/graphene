@@ -1,6 +1,4 @@
-#!/usr/bin/env python2
-
-import sys, os, subprocess, re, time
+import sys, os, subprocess, re, time, signal
 
 class Result:
     def __init__(self, out, log, code):
@@ -50,29 +48,19 @@ class Regression:
                 if self.prepare:
                     self.prepare(args)
 
-                time.sleep(0.1)
-
                 p = subprocess.Popen(args,
                                      stdout=subprocess.PIPE,
-                                     stderr=subprocess.PIPE)
-
-                sleep_time = 0
-                finish = False
-                while sleep_time < self.timeout:
-                    time.sleep(0.001)
-                    if p.poll() is not None:
-                        finish = True
-                        break
-                    sleep_time += 1
-
-                if not finish and p.poll() is None:
+                                     stderr=subprocess.PIPE,
+                                     preexec_fn=os.setpgrp)
+                try:
+                    out, log = p.communicate(timeout=self.timeout * 0.001)
+                except subprocess.TimeoutExpired:
                     timed_out = True
-                    p.kill()
+                    os.killpg(p.pid, signal.SIGKILL)
+                    out, log = p.communicate()
 
-                time.sleep(0.1)
-
-                out = p.stdout.read()
-                log = p.stderr.read()
+                out = out.decode('utf-8')
+                log = log.decode('utf-8')
 
                 outputs.append(Result(out, log, p.returncode))
 
@@ -81,23 +69,23 @@ class Regression:
                 for (name, check, ignore_failure, times) in self.runs[combined_args]:
                     if run_times == times:
                         result = check(outputs)
-                        if result:
-                            print '\033[92m[Success       ]\033[0m', name
+                        if not timed_out and result:
+                            print('\033[92m[Success       ]\033[0m', name)
                         else:
                             if ignore_failure:
-                                print '[Fail (Ignored)]', name
+                                print('[Fail (Ignored)]', name)
                             else:
-                                print '\033[93m[Fail          ]\033[0m', name
+                                print('\033[93m[Fail          ]\033[0m', name)
                                 something_failed = 1
-                            if timed_out : print 'Test timed out!'
+                            if timed_out : print('Test timed out!')
                             keep_log = True
-                            
+
                 if self.keep_log and keep_log:
                     sargs = [re.sub(r"\W", '_', a).strip('_') for a in args]
                     filename = 'log-' + '_'.join(sargs) + '_' + time.strftime("%Y%m%d_%H%M%S")
                     with open(filename, 'w') as f:
                         f.write(log + out)
-                    print 'keep log to %s' % (filename)
+                    print('keep log to %s' % (filename))
         if something_failed:
             return -1
         else:

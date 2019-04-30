@@ -24,6 +24,7 @@
  */
 
 #include <shim_internal.h>
+#include <shim_table.h>
 #include <shim_tls.h>
 #include <shim_thread.h>
 #include <shim_handle.h>
@@ -53,7 +54,7 @@ const unsigned int glibc_version = GLIBC_VERSION;
 
 static void handle_failure (PAL_PTR event, PAL_NUM arg, PAL_CONTEXT * context)
 {
-    SHIM_GET_TLS()->pal_errno = (arg <= PAL_ERROR_BOUND) ? arg : 0;
+    shim_get_tls()->pal_errno = (arg <= PAL_ERROR_BOUND) ? arg : 0;
 }
 
 void __abort(void) {
@@ -156,7 +157,7 @@ long int glibc_option (const char * opt)
     if (strcmp_static(opt, "heap_size")) {
         ssize_t ret = get_config(root_config, "glibc.heap_size", cfg, CONFIG_MAX);
         if (ret <= 0) {
-            debug("no glibc option: %s (err=%d)\n", opt, ret);
+            debug("no glibc option: %s (err=%ld)\n", opt, ret);
             return -ENOENT;
         }
 
@@ -172,7 +173,6 @@ void * migrated_memory_start;
 void * migrated_memory_end;
 void * migrated_shim_addr;
 
-void * initial_stack;
 const char ** initial_envp __attribute_migratable;
 
 char ** library_paths;
@@ -216,7 +216,7 @@ void allocate_tls (void * tcb_location, bool user, struct shim_thread * thread)
     }
 
     DkSegmentRegister(PAL_SEGMENT_FS, tcb);
-    assert(SHIM_TLS_CHECK_CANARY());
+    assert(shim_tls_check_canary());
 }
 
 void populate_tls (void * tcb_location, bool user)
@@ -224,7 +224,7 @@ void populate_tls (void * tcb_location, bool user)
     __libc_tcb_t * tcb = (__libc_tcb_t *) tcb_location;
     assert(tcb);
     tcb->tcb = tcb;
-    copy_tcb(&tcb->shim_tcb, SHIM_GET_TLS());
+    copy_tcb(&tcb->shim_tcb, shim_get_tls());
 
     struct shim_thread * thread = (struct shim_thread *) tcb->shim_tcb.tp;
     if (thread) {
@@ -233,7 +233,7 @@ void populate_tls (void * tcb_location, bool user)
     }
 
     DkSegmentRegister(PAL_SEGMENT_FS, tcb);
-    assert(SHIM_TLS_CHECK_CANARY());
+    assert(shim_tls_check_canary());
 }
 
 DEFINE_PROFILE_OCCURENCE(alloc_stack, memory);
@@ -272,12 +272,14 @@ void * allocate_stack (size_t size, size_t protect_size, bool user)
     INC_PROFILE_OCCURENCE(alloc_stack_count);
 
     stack += protect_size;
+    // Ensure proper alignment for process' initial stack pointer value.
+    stack += (16 - (uintptr_t)stack % 16) % 16;
     DkVirtualMemoryProtect(stack, size, PAL_PROT_READ|PAL_PROT_WRITE);
 
     if (bkeep_mprotect(stack, size, PROT_READ|PROT_WRITE, flags) < 0)
         return NULL;
 
-    debug("allocated stack at %p (size = %d)\n", stack, size);
+    debug("allocated stack at %p (size = %ld)\n", stack, size);
     return stack;
 }
 
@@ -286,6 +288,7 @@ static int populate_user_stack (void * stack, size_t stack_size,
                                 int ** argcpp,
                                 const char *** argvp, const char *** envpp)
 {
+    const int argc = **argcpp;
     const char ** argv = *argvp, ** envp = *envpp;
     const char ** new_argv = NULL, ** new_envp = NULL;
     elf_auxv_t *new_auxp = NULL;
@@ -342,6 +345,7 @@ copy_envp:
     size_t move_size = stack_bottom - stack;
     *argcpp = stack_top - move_size;
     *argcpp = ALIGN_DOWN_PTR(*argcpp, 16UL);
+    **argcpp = argc;
     size_t shift = (void*)(*argcpp) - stack;
 
     memmove(*argcpp, stack, move_size);
@@ -531,7 +535,7 @@ struct shim_profile profile_root;
     } while (0)
 
 
-static void * __process_auxv (elf_auxv_t * auxp)
+static elf_auxv_t* __process_auxv (elf_auxv_t * auxp)
 {
     elf_auxv_t * av;
 
@@ -674,7 +678,7 @@ DEFINE_PROFILE_INTERVAL(init_signal,                init);
 
 extern PAL_HANDLE thread_start_event;
 
-int shim_init (int argc, void * args, void ** return_stack)
+__attribute__((noreturn)) void* shim_init (int argc, void * args)
 {
     debug_handle = PAL_CB(debug_stream);
     cur_process.vmid = (IDTYPE) PAL_CB(process_id);
@@ -708,9 +712,7 @@ int shim_init (int argc, void * args, void ** return_stack)
 
     /* call to figure out where the arguments are */
     FIND_ARG_COMPONENTS(args, argc, argv, envp, auxp);
-    initial_stack = __process_auxv(auxp);
-    int nauxv = (elf_auxv_t *) initial_stack - auxp;
-    FIND_LAST_STACK(initial_stack);
+    int nauxv = __process_auxv(auxp) - auxp;
 
 #ifdef PROFILE
     set_profile_enabled(envp);
@@ -789,7 +791,7 @@ restore:
         if (!DkStreamWrite(PAL_CB(parent_process), 0,
                            sizeof(struct newproc_response),
                            &res, NULL))
-            return -PAL_ERRNO;
+            shim_do_exit(-PAL_ERRNO);
     }
 
     debug("shim process initialized\n");
@@ -818,7 +820,7 @@ restore:
     if (thread_start_event)
         DkEventSet(thread_start_event);
 
-    shim_tcb_t * cur_tcb = SHIM_GET_TLS();
+    shim_tcb_t * cur_tcb = shim_get_tls();
     struct shim_thread * cur_thread = (struct shim_thread *) cur_tcb->tp;
 
     if (cur_tcb->context.sp)
@@ -827,9 +829,7 @@ restore:
     if (cur_thread->exec)
         execute_elf_object(cur_thread->exec,
                            argcp, argp, nauxv, auxp);
-
-    *return_stack = initial_stack;
-    return 0;
+    shim_do_exit(0);
 }
 
 static int create_unique (int (*mkname) (char *, size_t, void *),
@@ -1141,7 +1141,7 @@ int shim_clean (void)
 
 #ifdef PROFILE
     if (ENTER_TIME) {
-        switch (SHIM_GET_TLS()->context.syscall_nr) {
+        switch (shim_get_tls()->context.syscall_nr) {
             case __NR_exit_group:
                 SAVE_PROFILE_INTERVAL_SINCE(syscall_exit_group, ENTER_TIME);
                 break;

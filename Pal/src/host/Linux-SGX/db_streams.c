@@ -29,6 +29,7 @@
 #include "pal.h"
 #include "pal_internal.h"
 #include "pal_linux.h"
+#include "pal_linux_error.h"
 #include "pal_debug.h"
 #include "pal_error.h"
 #include "api.h"
@@ -285,9 +286,9 @@ int _DkSendHandle (PAL_HANDLE hdl, PAL_HANDLE cargo)
     ret = ocall_sock_send(ch, &hdl_hdr, sizeof(struct hdl_header), NULL, 0);
 
     // Unlock is error
-    if (ret < 0) {
+    if (IS_ERR(ret)) {
         free(hdl_data);
-        return ret;
+        return unix_to_pal_error(ERRNO(ret));
     }
 
     //  Send message
@@ -295,7 +296,7 @@ int _DkSendHandle (PAL_HANDLE hdl, PAL_HANDLE cargo)
                              fds, nfds);
 
     free(hdl_data);
-    return (ret < 0) ? -PAL_ERROR_DENIED : 0;
+    return IS_ERR(ret) ? unix_to_pal_error(ERRNO(ret)) : 0;
 }
 
 /* _DkRecvHandle for internal use. Receive and return a PAL_HANDLE over the
@@ -316,12 +317,28 @@ int _DkReceiveHandle(PAL_HANDLE hdl, PAL_HANDLE * cargo)
     int ret = ocall_sock_recv(ch, &hdl_hdr, sizeof(struct hdl_header), NULL,
                               NULL);
 
-    if (ret < 0 || ret < sizeof(struct hdl_header)) {
+    if (IS_ERR(ret))
+        return unix_to_pal_error(ERRNO(ret));
+    if (ret < sizeof(struct hdl_header)) {
+        /*
+         * This code block is just in case to cover all the possibilities
+         * to shield Iago attack.
+         * We know that the file descriptor is an unix domain socket with
+         * blocking mode and that the sender, _DkSendHandle() above, sends the
+         * header with single sendto syscall by ocall_sock_send() which
+         * transfers a message atomically.
+         *
+         * read size == 0: return error for the caller to try again.
+         *                 It should result in EINTR.
+         *
+         * read size > 0: return error for the caller to give up this file
+         *                descriptor.
+         *                If the header can't be send atomically for some
+         *                reason, the sender should get EMSGSIZE.
+         */
         if (!ret)
             return -PAL_ERROR_TRYAGAIN;
-
-        if (ret != -PAL_ERROR_INTERRUPTED)
-            return ret;
+        return -PAL_ERROR_DENIED;
     }
 
     // initialize variables to get body
@@ -337,8 +354,8 @@ int _DkReceiveHandle(PAL_HANDLE hdl, PAL_HANDLE * cargo)
     ret = ocall_sock_recv_fd(ch, buffer, hdl_hdr.data_size,
                              fds, &nfds);
 
-    if (ret < 0)
-        return ret;
+    if (IS_ERR(ret))
+        return unix_to_pal_error(ERRNO(ret));
 
     PAL_HANDLE handle = NULL;
     ret = handle_deserialize(&handle, buffer, hdl_hdr.data_size);

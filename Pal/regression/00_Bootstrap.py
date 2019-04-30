@@ -1,16 +1,11 @@
-#!/usr/bin/env python2
-
 import os, sys, mmap
 from regression import Regression
 
 loader = os.environ['PAL_LOADER']
-try:
-    sgx = os.environ['SGX_RUN']
-except KeyError:
-    sgx = False
+sgx = os.environ.get('SGX_RUN') == '1'
 
 def manifest_file(file):
-    if 'SGX_RUN' in os.environ and os.environ['SGX_RUN'] == '1':
+    if sgx:
         return file + '.manifest.sgx'
     else:
         return file + '.manifest'
@@ -97,7 +92,7 @@ regression.add_check(name="Dotdot handled properly",
     check=lambda res: "User Program Started" in res[0].log)
 rv = regression.run_checks()
 if rv: sys.exit(rv)
-    
+
 
 # Running Bootstrap2
 regression = Regression(loader, manifest_file("Bootstrap2"))
@@ -184,7 +179,7 @@ if rv: sys.exit(rv)
 regression = Regression(loader, "fakenews")
 
 regression.add_check(name="Error on missing executable and manifest",
-    check=lambda res: "Executable not found" in res[0].log and 
+    check=lambda res: "Executable not found" in res[0].log and
                      any([line.startswith("USAGE: ") for line  in res[0].log]))
 
 rv = regression.run_checks()

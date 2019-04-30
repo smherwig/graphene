@@ -1,4 +1,7 @@
-pal-sgx
+/asm-offsets.h
+/generated-offsets.s
+/generated_offsets.py
+/pal-sgx
 
 *.pem
 *.pub
