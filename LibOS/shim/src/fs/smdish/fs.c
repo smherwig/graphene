@@ -341,7 +341,7 @@ smdish_mdata_create(const char *uri, unsigned char *ca_der, size_t ca_der_len)
 }
 
 static struct smdish_memfile *
-smdish_mdata_getfile(struct smdish_mdata *mdata, uint32_t fd)
+smdish_mdata_get_memfile(struct smdish_mdata *mdata, uint32_t fd)
 {
     struct smdish_memfile *mf = NULL;
 
@@ -522,7 +522,7 @@ smdish_mmap(struct shim_handle *hdl, void **addr, size_t size,
     RHO_TRACE_ENTER("smdish fd=%lu, size=%lu",
         (unsigned long)fd, (unsigned long)size);
 
-    mf = smdish_mdata_getfile(mdata, fd);
+    mf = smdish_mdata_get_memfile(mdata, fd);
     if (mf == NULL) {
         error = -EBADF;
         goto done;
@@ -557,7 +557,7 @@ smdish_advlock_lock(struct shim_handle *hdl, struct flock *flock)
 
     RHO_TRACE_ENTER();
 
-    mf = smdish_mdata_getfile(mdata, fd);
+    mf = smdish_mdata_get_memfile(mdata, fd);
     if (mf == NULL) {
         error = -EBADF;
         goto done;
@@ -584,7 +584,7 @@ smdish_advlock_unlock(struct shim_handle *hdl, struct flock *flock)
 
     RHO_TRACE_ENTER();
 
-    mf = smdish_mdata_getfile(mdata, fd);
+    mf = smdish_mdata_get_memfile(mdata, fd);
     if (mf == NULL) {
         error = -EBADF;
         goto done;
