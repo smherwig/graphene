@@ -8,6 +8,50 @@
 #include <tcad.h>
 
 int
+tcad_new_fdtable(struct rpc_agent *agent)
+{
+    int error = 0;
+
+    rpc_agent_new_msg(agent, TCAD_OP_NEW_FDTABLE);
+    error = rpc_agent_request(agent);
+
+    return (error);
+} 
+
+int
+tcad_fork(struct rpc_agent *agent, uint64_t *child_ident)
+{
+    int error = 0;
+    struct rho_buf *buf = agent->ra_bodybuf;
+
+    rpc_agent_new_msg(agent, TCAD_OP_FORK);
+
+    error = rpc_agent_request(agent);
+    if (error != 0)
+        goto done;
+
+    rho_buf_readu64be(buf, child_ident);
+
+done:
+    return (error);
+}
+
+int
+tcad_child_attach(struct rpc_agent *agent, uint64_t child_ident)
+{
+    int error = 0;
+    struct rho_buf *buf = agent->ra_bodybuf;
+
+    rpc_agent_new_msg(agent, TCAD_OP_CHILD_ATTACH);
+    rho_buf_writeu64be(buf, child_ident);
+    rpc_agent_autoset_bodylen(agent);
+
+    error = rpc_agent_request(agent);
+
+    return (error);
+}
+
+int
 tcad_create_entry(struct rpc_agent *agent, const char *name, void *data,
         size_t data_len, int *fd)
 {
@@ -37,6 +81,23 @@ tcad_destroy_entry(struct rpc_agent *agent, int fd)
 
     rpc_agent_new_msg(agent, TCAD_OP_DESTROY_ENTRY);
     rho_buf_writeu32be(buf, fd);
+    rpc_agent_autoset_bodylen(agent);
+
+    error = rpc_agent_request(agent);
+
+    return (error);
+}
+
+int
+tcad_set(struct rpc_agent *agent, int fd, void *data,
+        size_t data_len)
+{
+    int error = 0;
+    struct rho_buf *buf = agent->ra_bodybuf;
+
+    rpc_agent_new_msg(agent, TCAD_OP_SET);
+    rho_buf_writeu32be(buf, fd);
+    rho_buf_write_u32size_blob(buf, data, data_len);
     rpc_agent_autoset_bodylen(agent);
 
     error = rpc_agent_request(agent);
@@ -76,50 +137,6 @@ tcad_inc_and_set(struct rpc_agent *agent, int fd, void *data,
     rpc_agent_new_msg(agent, TCAD_OP_INC_AND_SET);
     rho_buf_writeu32be(buf, fd);
     rho_buf_write_u32size_blob(buf, data, data_len);
-    rpc_agent_autoset_bodylen(agent);
-
-    error = rpc_agent_request(agent);
-
-    return (error);
-}
-
-int
-tcad_new_fdtable(struct rpc_agent *agent)
-{
-    int error = 0;
-
-    rpc_agent_new_msg(agent, TCAD_OP_NEW_FDTABLE);
-    error = rpc_agent_request(agent);
-
-    return (error);
-} 
-
-int
-tcad_fork(struct rpc_agent *agent, uint64_t *child_ident)
-{
-    int error = 0;
-    struct rho_buf *buf = agent->ra_bodybuf;
-
-    rpc_agent_new_msg(agent, TCAD_OP_FORK);
-
-    error = rpc_agent_request(agent);
-    if (error != 0)
-        goto done;
-
-    rho_buf_readu64be(buf, child_ident);
-
-done:
-    return (error);
-}
-
-int
-tcad_child_attach(struct rpc_agent *agent, uint64_t child_ident)
-{
-    int error = 0;
-    struct rho_buf *buf = agent->ra_bodybuf;
-
-    rpc_agent_new_msg(agent, TCAD_OP_CHILD_ATTACH);
-    rho_buf_writeu64be(buf, child_ident);
     rpc_agent_autoset_bodylen(agent);
 
     error = rpc_agent_request(agent);

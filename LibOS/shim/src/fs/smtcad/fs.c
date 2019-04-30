@@ -62,15 +62,6 @@
 #define SMTCAD_AD_IV_POS       SMTCAD_AD_KEY_POS + SMTCAD_KEY_SIZE
 #define SMTCAD_AD_TAG_POS      SMTCAD_AD_IV_POS + SMTCAD_IV_SIZE
 
-/*
- * FIXME:
- *  We have an issue where the open creates an associated data of all
- *  zeros that gets uploaded to the server; mmap locally updates the
- *  associatd data but does not contact the server; lock downloads
- *  the blank associated data, and thus the decryption (or, realy, the tag)
- *  fails.
- */
-
 /* 
  * fd_refcnt is inc'd on open and dec'd on close
  * map_refcnt is inc'd on map and dec'd on munmap
@@ -182,23 +173,13 @@ static void
 smtcad_encrypt(uint8_t *data, size_t data_len, const uint8_t *key,
         const uint8_t *iv, uint8_t *tag)
 {
-#if 0
     br_aes_x86ni_ctr_keys ctx;
-#endif
-    br_aes_big_ctr_keys ctx;
     br_gcm_context gc;
 
     RHO_TRACE_ENTER();
 
-#if 0 
     br_aes_x86ni_ctr_init(&ctx, key, SMTCAD_KEY_SIZE);
-#endif 
-    br_aes_big_ctr_init(&ctx, key, SMTCAD_KEY_SIZE);
-
-#if 0
     br_gcm_init(&gc, &ctx.vtable, br_ghash_pclmul);
-#endif
-    br_gcm_init(&gc, &ctx.vtable, br_ghash_ctmul64);
     br_gcm_reset(&gc, iv, SMTCAD_IV_SIZE); 
     /* use br_gc_aad_inject, if needed */
     br_gcm_flip(&gc);
@@ -212,23 +193,13 @@ static void
 smtcad_decrypt(uint8_t *data, size_t data_len, const uint8_t *key,
         const uint8_t *iv, uint8_t *tag)
 {
-#if 0
     br_aes_x86ni_ctr_keys ctx;
-#endif
-    br_aes_big_ctr_keys ctx;
     br_gcm_context gc;
 
     RHO_TRACE_ENTER();
 
-#if 0
     br_aes_x86ni_ctr_init(&ctx, key, SMTCAD_KEY_SIZE);
-#endif
-    br_aes_big_ctr_init(&ctx, key, SMTCAD_KEY_SIZE);
-
-#if 0
     br_gcm_init(&gc, &ctx.vtable, br_ghash_pclmul);
-#endif
-    br_gcm_init(&gc, &ctx.vtable, br_ghash_ctmul64);
     br_gcm_reset(&gc, iv, SMTCAD_IV_SIZE); 
     /* use br_gc_aad_inject, if needed */
     br_gcm_flip(&gc);
@@ -273,6 +244,7 @@ smtcad_memfile_make_map(struct smtcad_memfile *mf, size_t size)
 
     rho_rand_bytes(mf->iv, SMTCAD_IV_SIZE);
     rho_rand_bytes(mf->key, SMTCAD_KEY_SIZE);
+
     smtcad_encrypt(mf->priv_mem, mf->size, mf->key, mf->iv, mf->tag);
     memcpy(mf->pub_mem, mf->priv_mem, mf->size);
     mf->map_refcnt = 1;
@@ -540,6 +512,7 @@ smtcad_mmap(struct shim_handle *hdl, void **addr, size_t size,
     struct smtcad_mdata *mdata = hdl->fs->data;
     struct smtcad_memfile *mf = NULL;
     uint32_t fd = hdl->info.smtcad.fd;
+    uint8_t ad[SMTCAD_AD_SIZE] = {0};
 
     (void)prot;
     (void)flags;
@@ -553,6 +526,15 @@ smtcad_mmap(struct shim_handle *hdl, void **addr, size_t size,
     error = smtcad_memfile_make_map(mf, size);
     if (error == -1) {
         error = -PAL_ERRNO;
+        goto done;
+    }
+
+    smtcad_pack_assocdata(mf, ad);
+    error = tcad_set(mdata->agent, fd, ad, sizeof(ad));
+    debug("D\n");
+    if (error != 0) {
+        error = -error;
+        /* FIXME: needs to dealloc map */
         goto done;
     }
 
@@ -577,31 +559,17 @@ smtcad_advlock_lock(struct shim_handle *hdl, struct flock *flock)
 
     RHO_ASSERT(RHO_BITOPS_ISSET((uint8_t *)&mdata->fd_bitmap, fd));
 
-    debug("A\n");
-
     mf = &(mdata->fd_tab[fd]);
-
-    debug("B\n");
-
     mf->turn = rho_ticketlock_lock(mf->tl);
 
-    debug("C\n");
-
     error = tcad_cmp_and_get(mdata->agent, fd, mf->turn, ad, &ad_size);
-    debug("D\n");
     if (error != 0) {
         error = -error;
         goto done;
     }
-    debug("E\n");
-        
     smtcad_unpack_assocdata(ad, mf);
 
-    debug("F\n");
-
     error = smtcad_memfile_map_in(mf);
-
-    debug("G\n");
 
 done:
     RHO_TRACE_EXIT("error=%d", error);
