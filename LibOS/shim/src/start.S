@@ -51,6 +51,7 @@ shim_start:
    which grow downwards).  */
 
     pushq %rbp
+    pushq %rbp
     movq %rsp, %rdx
 
     movq shim_init@GOTPCREL(%rip), %r11
