@@ -15,14 +15,13 @@ RHO_DECLS_BEGIN
 #define TCAD_MAX_VALUE_SIZE     4096
 
 /* RPC odcodes */
-#define TCAD_OP_CREATE_ENTRY    0
-#define TCAD_OP_DESTROY_ENTRY   1
-#define TCAD_OP_CMP_AND_GET     2
-#define TCAD_OP_INC_AND_SET     3
-#define TCAD_OP_FORK            4
-#define TCAD_OP_CHILD_ATTACH    5
-#define TCAD_OP_NEW_FDTABLE     6
-
+#define TCAD_OP_NEW_FDTABLE     0
+#define TCAD_OP_FORK            1
+#define TCAD_OP_CHILD_ATTACH    2
+#define TCAD_OP_CREATE_ENTRY    3
+#define TCAD_OP_DESTROY_ENTRY   4
+#define TCAD_OP_CMP_AND_GET     5
+#define TCAD_OP_INC_AND_SET     6
 
 int tcad_create_entry(struct rpc_agent *agent, const char *name,
         void *data, size_t data_len, int *fd);
