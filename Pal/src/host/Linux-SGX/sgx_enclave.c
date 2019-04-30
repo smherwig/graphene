@@ -105,10 +105,19 @@ static int sgx_ocall_map_untrusted(void * pms)
     ms_ocall_map_untrusted_t * ms = (ms_ocall_map_untrusted_t *) pms;
     void * addr;
     ODEBUG(OCALL_MAP_UNTRUSTED, ms);
-    addr = (void *) INLINE_SYSCALL(mmap, 6, NULL, ms->ms_size,
-                                   ms->ms_prot,
-                                   MAP_SHARED,
-                                   ms->ms_fd, ms->ms_offset);
+
+    if (ms->ms_fd == -1) {
+        addr = (void *) INLINE_SYSCALL(mmap, 6, NULL, ms->ms_size,
+                                       ms->ms_prot,
+                                       MAP_ANONYMOUS|MAP_SHARED,
+                                       ms->ms_fd, ms->ms_offset);
+    } else {
+        addr = (void *) INLINE_SYSCALL(mmap, 6, NULL, ms->ms_size,
+                                       ms->ms_prot,
+                                       MAP_FILE|MAP_SHARED,
+                                       ms->ms_fd, ms->ms_offset);
+    }
+
     if (IS_ERR_P(addr))
         return -PAL_ERROR_NOMEM;
 
