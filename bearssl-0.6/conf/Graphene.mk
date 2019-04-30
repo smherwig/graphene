@@ -38,7 +38,7 @@ MKDIR = mkdir -p
 
 # C compiler and flags.
 CC = cc
-CFLAGS = -W -Wall -Os -fPIC -fno-builtin -U_FORTIFY_SOURCE -DBR_GRAPHENE=1
+CFLAGS = -W -Wall -Os -fPIC -fno-builtin -U_FORTIFY_SOURCE -DBR_GRAPHENE=1 -ggdb
 CCOUT = -c -o 
 
 # Static library building tool.
