@@ -520,9 +520,12 @@ smtcad_mmap(struct shim_handle *hdl, void **addr, size_t size,
 
     RHO_TRACE_ENTER();
 
-    RHO_ASSERT(RHO_BITOPS_ISSET((uint8_t *)&mdata->fd_bitmap, fd));
+    mf = smtcad_mdata_get_memfile(mdata, fd);
+    if (mf == NULL) {
+        error = -EBADF;
+        goto done;
+    }
 
-    mf = &(mdata->fd_tab[fd]);
     error = smtcad_memfile_make_map(mf, size);
     if (error == -1) {
         error = -PAL_ERRNO;
@@ -531,7 +534,6 @@ smtcad_mmap(struct shim_handle *hdl, void **addr, size_t size,
 
     smtcad_pack_assocdata(mf, ad);
     error = tcad_set(mdata->agent, fd, ad, sizeof(ad));
-    debug("D\n");
     if (error != 0) {
         error = -error;
         /* FIXME: needs to dealloc map */
@@ -555,11 +557,16 @@ smtcad_advlock_lock(struct shim_handle *hdl, struct flock *flock)
     uint8_t ad[SMTCAD_AD_SIZE] = {0};
     size_t ad_size = 0;
 
+    (void)flock;
+
     RHO_TRACE_ENTER();
 
-    RHO_ASSERT(RHO_BITOPS_ISSET((uint8_t *)&mdata->fd_bitmap, fd));
+    mf = smtcad_mdata_get_memfile(mdata, fd); 
+    if (mf == NULL) {
+        error = -EBADF;
+        goto done;
+    }
 
-    mf = &(mdata->fd_tab[fd]);
     mf->turn = rho_ticketlock_lock(mf->tl);
 
     error = tcad_cmp_and_get(mdata->agent, fd, mf->turn, ad, &ad_size);
@@ -587,9 +594,11 @@ smtcad_advlock_unlock(struct shim_handle *hdl, struct flock *flock)
 
     RHO_TRACE_EXIT();
 
-    RHO_ASSERT(RHO_BITOPS_ISSET((uint8_t *)&mdata->fd_bitmap, fd));
-
-    mf = &(mdata->fd_tab[fd]);
+    mf = smtcad_mdata_get_memfile(mdata, fd); 
+    if (mf == NULL) {
+        error = -EBADF;
+        goto done;
+    }
 
     smtcad_memfile_map_out(mf);
     smtcad_pack_assocdata(mf, ad);
