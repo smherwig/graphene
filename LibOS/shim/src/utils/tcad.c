@@ -53,7 +53,7 @@ tcad_child_attach(struct rpc_agent *agent, uint64_t child_ident)
 
 int
 tcad_create_entry(struct rpc_agent *agent, const char *name, void *data,
-        size_t data_len, int *fd)
+        size_t data_len, uint32_t *fd)
 {
     int error = 0;
     struct rho_buf *buf = agent->ra_bodybuf;
@@ -74,7 +74,7 @@ done:
 }
 
 int
-tcad_destroy_entry(struct rpc_agent *agent, int fd)
+tcad_destroy_entry(struct rpc_agent *agent, uint32_t fd)
 {
     int error = 0;
     struct rho_buf *buf = agent->ra_bodybuf;
@@ -89,7 +89,7 @@ tcad_destroy_entry(struct rpc_agent *agent, int fd)
 }
 
 int
-tcad_set(struct rpc_agent *agent, int fd, void *data,
+tcad_set(struct rpc_agent *agent, uint32_t fd, void *data,
         size_t data_len)
 {
     int error = 0;
@@ -106,7 +106,7 @@ tcad_set(struct rpc_agent *agent, int fd, void *data,
 }
 
 int
-tcad_cmp_and_get(struct rpc_agent *agent, int fd, int expected_count,
+tcad_cmp_and_get(struct rpc_agent *agent, uint32_t fd, int expected_count,
         void *data, size_t *data_len)
 {
     int error = 0;
@@ -128,7 +128,7 @@ done:
 }
 
 int
-tcad_inc_and_set(struct rpc_agent *agent, int fd, void *data,
+tcad_inc_and_set(struct rpc_agent *agent, uint32_t fd, void *data,
         size_t data_len)
 {
     int error = 0;
