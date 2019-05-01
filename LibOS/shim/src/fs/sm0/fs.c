@@ -65,6 +65,9 @@ struct sm0_memfile {
     void *priv_mem;
     uint8_t key[SM0_KEY_SIZE];
     struct sm0_lockad *lockad;
+    int fd_refcnt;
+    int map_refcnt;
+    int fd;
 };
 
 /*
@@ -94,7 +97,7 @@ sm0_lockad_create(void)
     RHO_TRACE_ENTER();
 
     lockad =  DkVirtualMemoryAlloc(NULL, 
-            sizeof(struct sm0_lockad), PAL_ALLOC_UNTRUSTED, 
+            ALIGN_UP(sizeof(struct sm0_lockad)), PAL_ALLOC_UNTRUSTED, 
             PAL_PROT((PROT_READ|PROT_WRITE), 0));
 
     if (lockad == NULL) {
@@ -115,7 +118,7 @@ sm0_lockad_destroy(struct sm0_lockad *lockad)
 {
     RHO_TRACE_ENTER();
     
-    DkVirtualMemoryFree(lockad, sizeof(struct sm0_lockad)); 
+    DkVirtualMemoryFree(lockad, ALIGN_UP(sizeof(struct sm0_lockad))); 
 
     RHO_TRACE_EXIT();
 }
@@ -146,7 +149,6 @@ static void
 sm0_encrypt(uint8_t *data, size_t data_len, const uint8_t *key,
         const uint8_t *iv)
 {
-#if 0
     br_aes_x86ni_ctr_keys ctx;
     uint32_t cc = 0;
     uint32_t cc_out = 0;
@@ -158,14 +160,12 @@ sm0_encrypt(uint8_t *data, size_t data_len, const uint8_t *key,
     (void)cc_out;
 
     RHO_TRACE_EXIT();
-#endif
 }
 
 static void
 sm0_decrypt(uint8_t *data, size_t data_len, const uint8_t *key,
         const uint8_t *iv)
 {
-#if 0
     br_aes_x86ni_ctr_keys ctx;
     uint32_t cc = 0;
     uint32_t cc_out = 0;
@@ -177,7 +177,6 @@ sm0_decrypt(uint8_t *data, size_t data_len, const uint8_t *key,
     (void)cc_out;
 
     RHO_TRACE_EXIT();
-#endif
 }
 
 /******************************************
@@ -186,6 +185,42 @@ sm0_decrypt(uint8_t *data, size_t data_len, const uint8_t *key,
  * A MEMFILE is either a lock file or a lock
  * file with associated shared memory.
  ******************************************/ 
+static int
+sm0_fd_bitmap_ffc(uint32_t bitmap)
+{
+    int i = 0;
+    int val = 0;
+
+    RHO_BITOPS_FOREACH(i, val, (uint8_t *)&bitmap, sizeof(bitmap)) {
+        if (val == 0)
+            return (i);
+    }
+
+    /* TODO: assert error, because bitmap is full */
+    return (-1);
+}
+
+static struct sm0_memfile *
+sm0_mdata_new_memfile(struct sm0_mdata *mdata, const char *name)
+{
+    int i = 0;
+    struct sm0_memfile *mf = NULL;
+
+    i = sm0_fd_bitmap_ffc(mdata->fd_bitmap);
+    if (i == -1)
+        goto done;  /* fd table full */
+
+    RHO_BITOPS_SET((uint8_t *)&mdata->fd_bitmap, i);
+    mf = &(mdata->fd_tab[i]);
+    rho_memzero(mf, sizeof(*mf));
+    memcpy(mf->name, name, strlen(name));
+    mf->lockad = sm0_lockad_create();
+    mf->fd_refcnt = 1;
+    mf->fd = (uint32_t)i;
+
+done:
+    return (mf);
+}
 
 static int
 sm0_memfile_make_map(struct sm0_memfile *mf, size_t size)
@@ -216,6 +251,8 @@ sm0_memfile_make_map(struct sm0_memfile *mf, size_t size)
     rho_rand_bytes(mf->key, SM0_KEY_SIZE);
     sm0_encrypt(mf->priv_mem, mf->size, mf->key, mf->lockad->iv);
     memcpy(mf->pub_mem, mf->priv_mem, mf->size);
+
+    mf->map_refcnt = 1;
 
     goto succeed;
 
@@ -277,23 +314,7 @@ sm0_memfile_map_out(struct sm0_memfile *mf)
  *
  * Data for the mount point.  sm0 uses it as an fs-specific
  * file descriptor table.
- **********************************************************/
-
-static int
-sm0_fd_bitmap_ffc(uint32_t bitmap)
-{
-    int i = 0;
-    int val = 0;
-
-    RHO_BITOPS_FOREACH(i, val, (uint8_t *)&bitmap, sizeof(bitmap)) {
-        if (val == 0)
-            return (i);
-    }
-
-    /* TODO: assert error, because bitmap is full */
-    return (-1);
-}
-
+ **********************************************************/ 
 static struct sm0_mdata *
 sm0_mdata_create(void)
 {
@@ -308,22 +329,46 @@ sm0_mdata_create(void)
 }
 
 static struct sm0_memfile *
-sm0_mdata_new_memfile(struct sm0_mdata *mdata, const char *name)
+sm0_mdata_get_memfile(struct sm0_mdata *mdata, uint32_t fd)
 {
-    int i = 0;
     struct sm0_memfile *mf = NULL;
 
-    i = sm0_fd_bitmap_ffc(mdata->fd_bitmap);
-    if (i == -1)
-        goto done;  /* fd table full */
+    RHO_TRACE_ENTER();
 
-    RHO_BITOPS_SET((uint8_t *)&mdata->fd_bitmap, i);
-    mf = &(mdata->fd_tab[i]);
-    rho_memzero(mf, sizeof(*mf));
-    memcpy(mf->name, name, strlen(name));
-    mf->lockad = sm0_lockad_create();
+    if (!RHO_BITOPS_ISSET((uint8_t *)&mdata->fd_bitmap, fd)) {
+        rho_warn("fd %lu is not an open descriptor", (unsigned long)fd);
+        goto done;
+    }
+
+    mf = &(mdata->fd_tab[fd]);
+    RHO_ASSERT(mf != NULL);
 
 done:
+    RHO_TRACE_EXIT();
+    return (mf);
+}
+
+static struct sm0_memfile *
+sm0_mdata_find_memfile(struct sm0_mdata *mdata,
+        const char *name)
+{
+    size_t i = 0;
+    int val = 0;
+    struct sm0_memfile *mf = NULL;
+
+    RHO_TRACE_ENTER("name=\"%s\"", name);
+
+    RHO_BITOPS_FOREACH(i, val, (uint8_t *)&mdata->fd_bitmap, 32) {
+        if (val) {
+            mf = &(mdata->fd_tab[i]);
+            if (rho_str_equal(mf->name, name))
+                goto done;
+        }
+    }
+    mf = NULL;
+
+done:
+    RHO_TRACE_EXIT("mf=%p", mf);
     return (mf);
 }
 
@@ -348,20 +393,28 @@ sm0_mount(const char *uri, const char *root, void **mount_data)
 static int
 sm0_close(struct shim_handle *hdl)
 {
+    int error = 0;
     struct sm0_mdata *mdata = hdl->fs->data;
     uint32_t fd = hdl->info.sm0.fd;
     struct sm0_memfile *mf = NULL;
 
     RHO_TRACE_ENTER();
 
-    RHO_ASSERT(RHO_BITOPS_ISSET((uint8_t *)&mdata->fd_bitmap, fd));
+    mf = sm0_mdata_get_memfile(mdata, fd);
+    if (mf == NULL) {
+        error = -EBADF;
+        goto done;
+    }
 
-    mf = &(mdata->fd_tab[fd]);
-    sm0_memfile_clear(mf);
-    RHO_BITOPS_CLR((uint8_t *)&mdata->fd_tab, fd);
+    mf->fd_refcnt--;
+    if (mf->fd_refcnt == 0 && mf->map_refcnt == 0) {
+        sm0_memfile_clear(mf);
+        RHO_BITOPS_CLR((uint8_t *)&mdata->fd_tab, fd);
+    }
 
+done:
     RHO_TRACE_EXIT();
-    return (0);
+    return (error);
 }
 
 static int
@@ -379,13 +432,28 @@ sm0_mmap(struct shim_handle *hdl, void **addr, size_t size,
 
     RHO_TRACE_ENTER();
 
-    RHO_ASSERT(RHO_BITOPS_ISSET((uint8_t *)&mdata->fd_bitmap, fd));
+    mf = sm0_mdata_get_memfile(mdata, fd);
+    if (mf == NULL) {
+        error = -EBADF;
+        goto done;
+    }
 
-    mf = &(mdata->fd_tab[fd]);
+    /* 
+     * TODO: what if mf->map_refcnt is nonzero (i.e.,
+     * the caller is mapping a file that has already
+     * been mapped?
+     */
+
     error = sm0_memfile_make_map(mf, size);
-    if (error == -1)
+    if (error == -1) {
         error = -PAL_ERRNO;
+        /* FIXME: needs to dealloc map */
+        goto done;
+    }
 
+    *addr = mf->priv_mem;
+
+done:
     RHO_TRACE_EXIT();
     return (error);
 }
@@ -393,6 +461,7 @@ sm0_mmap(struct shim_handle *hdl, void **addr, size_t size,
 static int
 sm0_advlock_lock(struct shim_handle *hdl, struct flock *flock)
 {
+    int error = 0;
     struct sm0_mdata *mdata = hdl->fs->data;
     uint32_t fd = hdl->info.sm0.fd;
     struct sm0_memfile *mf = NULL;
@@ -401,19 +470,24 @@ sm0_advlock_lock(struct shim_handle *hdl, struct flock *flock)
 
     RHO_TRACE_ENTER();
 
-    RHO_ASSERT(RHO_BITOPS_ISSET((uint8_t *)&mdata->fd_bitmap, fd));
+    mf = sm0_mdata_get_memfile(mdata, fd); 
+    if (mf == NULL) {
+        error = -EBADF;
+        goto done;
+    }
 
-    mf = &(mdata->fd_tab[fd]);
     (void)sm0_lockad_lock(mf->lockad);
     sm0_memfile_map_in(mf);
 
+done:
     RHO_TRACE_EXIT();
-    return (0);
+    return (error);
 }
 
 static int
 sm0_advlock_unlock(struct shim_handle *hdl, struct flock *flock)
 {
+    int error = 0;
     struct sm0_mdata *mdata = hdl->fs->data;
     uint32_t fd = hdl->info.sm0.fd;
     struct sm0_memfile *mf = NULL;
@@ -422,19 +496,23 @@ sm0_advlock_unlock(struct shim_handle *hdl, struct flock *flock)
 
     RHO_TRACE_ENTER();
 
-    RHO_ASSERT(RHO_BITOPS_ISSET((uint8_t *)&mdata->fd_bitmap, fd));
+    mf = sm0_mdata_get_memfile(mdata, fd); 
+    if (mf == NULL) {
+        error = -EBADF;
+        goto done;
+    }
 
     /* 
      * FIXME: should we return an error if the client does not
      * possess the lock?
      */
 
-    mf = &(mdata->fd_tab[fd]);
     sm0_memfile_map_out(mf);
     sm0_lockad_unlock(mf->lockad);
 
+done:
     RHO_TRACE_EXIT();
-    return (0);
+    return (error);
 }
 
 static int
@@ -495,7 +573,6 @@ sm0_open(struct shim_handle *hdl, struct shim_dentry *dent, int flags)
 {
     int error = 0;
     struct sm0_mdata *mdata = dent->fs->data;
-    uint32_t fd = 0;
     char name[TCAD_MAX_NAME_SIZE] = { 0 };
     struct sm0_memfile *mf = NULL;
 
@@ -503,20 +580,26 @@ sm0_open(struct shim_handle *hdl, struct shim_dentry *dent, int flags)
 
     rho_shim_dentry_relpath(dent, name, sizeof(name));
 
-    /* TODO: we need this call to return an fd */
+    mf = sm0_mdata_find_memfile(mdata, name);
+    if (mf != NULL) {
+        mf->fd_refcnt++;
+        goto succeed;
+    }
+
     mf = sm0_mdata_new_memfile(mdata, name);
     if (mf == NULL) {
         error = -ENFILE;
-        goto done;
+        goto fail;
     }
 
+succeed:
     /* fill in handle */
     hdl->type = TYPE_SM0;
     hdl->flags = flags;
     hdl->acc_mode = ACC_MODE(flags & O_ACCMODE);
-    hdl->info.sm0.fd = fd;
+    hdl->info.sm0.fd = mf->fd;
 
-done:
+fail:
     RHO_TRACE_EXIT();
     return (error);
 }
@@ -524,7 +607,8 @@ done:
 static int
 sm0_lookup(struct shim_dentry *dent, bool force)
 {
-    debug("> sm0_lookup(dent=*, force=%d)\n", force);
+    RHO_TRACE_ENTER("force=%d)\n", force);
+
     (void)force;
 
     rho_shim_dentry_print(dent);
@@ -540,14 +624,15 @@ sm0_lookup(struct shim_dentry *dent, bool force)
     /* TODO: set ino? */
 
 done:
-    debug("< sm0_lookup\n");
+    RHO_TRACE_EXIT();
     return (0);
 }
 
 static int 
 sm0_mode(struct shim_dentry *dent, mode_t *mode, bool force)
 {
-    debug("> sm0_mode\n");
+    RHO_TRACE_ENTER();
+
     (void)mode;
 
     rho_shim_dentry_print(dent);
@@ -557,16 +642,18 @@ sm0_mode(struct shim_dentry *dent, mode_t *mode, bool force)
 
     *mode = 0777;
 
-    debug("< sm0_mode\n");
+    RHO_TRACE_EXIT();
     return (0);
 }
 
 static int
 sm0_unlink(struct shim_dentry *dir, struct shim_dentry *dent)
 {
-    debug("> sm0_unlink(dir=*, dent=*)\n");
+    RHO_TRACE_ENTER();
+
     (void)dir; (void)dent;
-    debug("< sm0_unlink\n");
+
+    RHO_TRACE_EXIT();
     return (-ENOSYS);
 }
 
