@@ -215,7 +215,14 @@ rho_sock_stream_recv(struct rho_sock *sock, void *buf, size_t len)
 {
     PAL_NUM n = 0;
 
+    
+again:
     n = DkStreamRead(sock->pal_hdl, 0, len, buf, NULL, 0);
+    if ((n == 0) && PAL_NATIVE_ERRNO  == PAL_ERROR_INTERRUPTED) {
+        debug("rho_sock: DkStreamRead interrupted; trying again\n");
+        goto again;
+    }
+
     /* 
      * DkStreamRead returns 0 on failure, and the number of bytes read
      * on success.  We intervene by returning -1 on failure; the caller
@@ -232,7 +239,12 @@ rho_sock_stream_send(struct rho_sock *sock, const void *buf, size_t len)
 {
     PAL_NUM n = 0;
 
+again:
     n = DkStreamWrite(sock->pal_hdl, 0, len, buf, NULL);
+    if ((n == 0) && PAL_NATIVE_ERRNO  == PAL_ERROR_INTERRUPTED) {
+        debug("rho_sock: DkStreamRead interrupted; trying again\n");
+        goto again;
+    }
     /* 
      * DkStreamWrite returns 0 on failure, and the number of bytes
      * written on succes.  We intervene by returning -1 on fialure;
