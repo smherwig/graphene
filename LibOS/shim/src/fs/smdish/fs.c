@@ -79,6 +79,8 @@ struct smdish_mdata {
     struct rpc_agent *agent;
 };
 
+struct smdish_mdata *g_smdish_mdata = NULL;
+
 /********************************* 
  * RPC
  *
@@ -281,6 +283,7 @@ done:
     return (-error);
 }
 
+/* Currently, Graphene does not have an fs_op for munmap */
 #if 0
 static int
 smdish_rpc_munmap(struct rpc_agent *agent, uint32_t fd)
@@ -464,6 +467,7 @@ smdish_mount(const char *uri, const char *root, void **mount_data)
     mdata = smdish_mdata_create(uri, ca_der, len / 2);
     mdata->agent = agent;
     *mount_data = mdata;
+    g_smdish_mdata = mdata;
 
     goto succeed;
 
@@ -494,7 +498,7 @@ static int
 smdish_close(struct shim_handle *hdl)
 {
     int error = 0;
-    struct smdish_mdata *mdata = hdl->fs->data;
+    struct smdish_mdata *mdata = g_smdish_mdata;
     uint32_t fd = hdl->info.smdish.fd;
 
     RHO_TRACE_ENTER();
@@ -510,7 +514,7 @@ smdish_mmap(struct shim_handle *hdl, void **addr, size_t size,
                         int prot, int flags, off_t offset)
 {
     int error = 0;
-    struct smdish_mdata *mdata = hdl->fs->data;
+    struct smdish_mdata *mdata = g_smdish_mdata;
     uint32_t fd = hdl->info.smdish.fd;
     struct smdish_memfile *mf = NULL;
     uint32_t mapfd = 0;
@@ -528,6 +532,11 @@ smdish_mmap(struct shim_handle *hdl, void **addr, size_t size,
         goto done;
     }
 
+    /* 
+     * TODO: what should we do with mapfd?  Since Graphene will
+     * never call munmap, there seems to be no use for it on
+     * the client.
+     */
     error = smdish_rpc_mmap(mdata->agent, fd, size, &mapfd);
     if (error != 0)
         goto done;
@@ -551,7 +560,7 @@ static int
 smdish_advlock_lock(struct shim_handle *hdl, struct flock *flock)
 {
     int error = 0;
-    struct smdish_mdata *mdata = hdl->fs->data;
+    struct smdish_mdata *mdata = g_smdish_mdata;
     uint32_t fd = hdl->info.smdish.fd;
     struct smdish_memfile *mf = NULL;
 
@@ -565,12 +574,13 @@ smdish_advlock_lock(struct shim_handle *hdl, struct flock *flock)
 
     error = smdish_rpc_lock(mdata->agent, fd, mf->addr, mf->size);
     while (error == (-EAGAIN)) {
+        debug("********** waiting on lock\n");
         thread_sleep(100000);
-        error = smdish_rpc_lock(mdata->agent , fd, mf->addr, mf->size);
+        error = smdish_rpc_lock(mdata->agent, fd, mf->addr, mf->size);
     }
 
 done:
-    RHO_TRACE_EXIT();
+    RHO_TRACE_EXIT("error=%d\n", error);
     return (error);
 }
 
@@ -578,7 +588,7 @@ static int
 smdish_advlock_unlock(struct shim_handle *hdl, struct flock *flock)
 {
     int error = 0;
-    struct smdish_mdata *mdata = hdl->fs->data;
+    struct smdish_mdata *mdata = g_smdish_mdata;
     uint32_t fd = hdl->info.smdish.fd;
     struct smdish_memfile *mf = NULL;
 
@@ -666,7 +676,7 @@ smdish_checkpoint(void **checkpoint, void *mount_data)
     *checkpoint = mdata;
 
 done:
-    RHO_TRACE_EXIT();
+    RHO_TRACE_EXIT("error=%d", error);
     return (sizeof(struct smdish_mdata));
 }
 
@@ -692,8 +702,9 @@ smdish_migrate(void *checkpoint, void **mount_data)
 
     error = smdish_rpc_child_attach(agent, mdata->ident);
     *mount_data = mdata;
+    g_smdish_mdata = mdata;
 
-    RHO_TRACE_EXIT();
+    RHO_TRACE_EXIT("error=%d", error);
     return (error); /* return 0 on success */
 }
 
@@ -704,7 +715,7 @@ static int
 smdish_open(struct shim_handle *hdl, struct shim_dentry *dent, int flags)
 {
     int error = 0;
-    struct smdish_mdata *mdata = dent->fs->data;
+    struct smdish_mdata *mdata = g_smdish_mdata;
     uint32_t fd = 0;
     char name[SMDISH_MAX_NAME_SIZE] = { 0 };
     struct smdish_memfile *mf = NULL;
