@@ -87,7 +87,13 @@ int init_enclave (void);
 int init_enclave_key (void);
 int init_child_process (PAL_HANDLE * parent_handle);
 
-static PAL_HANDLE setup_file_handle (const char * name, int fd)
+/*
+ * Creates a dummy file handle with the given name.
+ *
+ * The handle is not backed by any file. Reads will return EOF and writes will
+ * fail.
+ */
+static PAL_HANDLE setup_dummy_file_handle (const char * name)
 {
     if (!strpartcmp_static(name, "file:"))
         return NULL;
@@ -97,7 +103,7 @@ static PAL_HANDLE setup_file_handle (const char * name, int fd)
     PAL_HANDLE handle = malloc(HANDLE_SIZE(file) + len + 1);
     SET_HANDLE_TYPE(handle, file);
     HANDLE_HDR(handle)->flags |= RFD(0);
-    handle->file.fd = fd;
+    handle->file.fd = PAL_IDX_POISON;
     handle->file.append = 0;
     handle->file.pass = 0;
 
@@ -123,24 +129,174 @@ static int loader_filter (const char * key, int len)
     return 1;
 }
 
+/*
+ * Takes a pointer+size to an untrusted memory region containing a
+ * NUL-separated list of strings. It builds a argv-style list in trusted memory
+ * with those strings.
+ *
+ * It is responsible for handling the access to untrusted memory safely
+ * (returns NULL on error) and ensures that all strings are properly
+ * terminated. The content of the strings is NOT further sanitized.
+ *
+ * The argv-style list is allocated on the heap and the caller is responsible
+ * to free it (For argv and envp we rely on auto free on termination in
+ * practice).
+ */
+static const char** make_argv_list(void * uptr_src, uint64_t src_size) {
+    const char **argv;
+
+    if (src_size == 0) {
+        argv = malloc(sizeof(char *));
+        argv[0] = NULL;
+        return argv;
+    }
+
+    char * data = malloc(src_size);
+    if (!data) {
+        return NULL;
+    }
+
+    if (sgx_copy_to_enclave(data, uptr_src, src_size) != 0) {
+        goto free_and_err;
+    }
+    data[src_size - 1] = '\0';
+
+    uint64_t argc = 0;
+    for (uint64_t i = 0; i < src_size; i++) {
+        if (data[i] == '\0') {
+            argc++;
+        }
+    }
+
+    size_t argv_size;
+    if (__builtin_mul_overflow(argc + 1, sizeof(char *), &argv_size)) {
+        goto free_and_err;
+    }
+    argv = malloc(argv_size);
+    if (!argv) {
+        goto free_and_err;
+    }
+    argv[argc] = NULL;
+
+    uint64_t data_i = 0;
+    for (uint64_t arg_i = 0; arg_i < argc; arg_i++) {
+        argv[arg_i] = &data[data_i];
+        while (data[data_i] != '\0') {
+            data_i++;
+        }
+        data_i++;
+    }
+
+    return argv;
+
+free_and_err:
+    free(data);
+    return NULL;
+}
+
 extern void * enclave_base;
 
-void pal_linux_main(const char ** arguments, const char ** environments,
-                    struct pal_sec * sec_info)
+void pal_linux_main(char * uptr_args, uint64_t args_size,
+                    char * uptr_env, uint64_t env_size,
+                    struct pal_sec * uptr_sec_info)
 {
+    /*
+     * Our arguments are comming directly from the urts. We are responsible to
+     * check them.
+     */
+
     PAL_HANDLE parent = NULL;
     unsigned long start_time = _DkSystemTimeQuery();
     int rv;
 
+    struct pal_sec sec_info;
+    if (sgx_copy_to_enclave(&sec_info, uptr_sec_info, sizeof(sec_info)) != 0) {
+        return;
+    }
+
+    /* Zero the heap. We need to take care to not zero the exec area. */
+
+    void* zero1_start = sec_info.heap_min;
+    void* zero1_end = sec_info.heap_max;
+
+    void* zero2_start = sec_info.heap_max;
+    void* zero2_end = sec_info.heap_max;
+
+    if (sec_info.exec_addr != NULL) {
+        zero1_end = MIN(zero1_end, sec_info.exec_addr);
+        zero2_start = MIN(zero2_start, sec_info.exec_addr + sec_info.exec_size);
+    }
+
+    memset(zero1_start, 0, zero1_end - zero1_start);
+    memset(zero2_start, 0, zero2_end - zero2_start);
+
     /* relocate PAL itself */
-    pal_map.l_addr = (ElfW(Addr)) sec_info->enclave_addr;
-    pal_map.l_name = sec_info->enclave_image;
+    pal_map.l_addr = elf_machine_load_address();
+    pal_map.l_name = ENCLAVE_FILENAME;
     elf_get_dynamic_info((void *) pal_map.l_addr + elf_machine_dynamic(),
                          pal_map.l_info, pal_map.l_addr);
 
     ELF_DYNAMIC_RELOCATE(&pal_map);
 
-    memcpy(&pal_sec, sec_info, sizeof(struct pal_sec));
+    /*
+     * We can't verify the following arguments from the urts. So we copy
+     * them directly but need to be careful when we use them.
+     */
+
+    pal_sec.instance_id = sec_info.instance_id;
+
+    COPY_ARRAY(pal_sec.exec_name, sec_info.exec_name);
+    pal_sec.exec_name[sizeof(pal_sec.exec_name) - 1] = '\0';
+
+    COPY_ARRAY(pal_sec.manifest_name, sec_info.manifest_name);
+    pal_sec.manifest_name[sizeof(pal_sec.manifest_name) - 1] = '\0';
+
+    COPY_ARRAY(pal_sec.proc_fds, sec_info.proc_fds);
+    COPY_ARRAY(pal_sec.pipe_prefix, sec_info.pipe_prefix);
+    pal_sec.mcast_port = sec_info.mcast_port;
+    pal_sec.mcast_srv = sec_info.mcast_srv;
+    pal_sec.mcast_cli = sec_info.mcast_cli;
+#ifdef DEBUG
+    pal_sec.in_gdb = sec_info.in_gdb;
+#endif
+#if PRINT_ENCLAVE_STAT == 1
+    pal_sec.start_time = sec_info.start_time;
+#endif
+
+    /* For {p,u,g}ids we can at least do some minimal checking. */
+
+    /* ppid should be positive when interpreted as signed. It's 0 if we don't
+     * have a graphene parent process. */
+    if (sec_info.ppid > INT32_MAX) {
+        return;
+    }
+    pal_sec.ppid = sec_info.ppid;
+
+    /* As ppid but we always have a pid, so 0 is invalid. */
+    if (sec_info.pid > INT32_MAX || sec_info.pid == 0) {
+        return;
+    }
+    pal_sec.pid = sec_info.pid;
+
+    /* -1 is treated as special value for example by chown. */
+    if (sec_info.uid == (PAL_IDX)-1 || sec_info.gid == (PAL_IDX)-1) {
+        return;
+    }
+    pal_sec.uid = sec_info.uid;
+    pal_sec.gid = sec_info.gid;
+
+
+    /* TODO: remove with PR #589 */
+    pal_sec.heap_min = sec_info.heap_min;
+    pal_sec.heap_max = sec_info.heap_max;
+
+    /* TODO: remove with PR #588 */
+    pal_sec.exec_addr = sec_info.exec_addr;
+    pal_sec.exec_size = sec_info.exec_size;
+
+    /* TODO: remove with PR #580 */
+    pal_sec.manifest_addr = sec_info.manifest_addr;
+    pal_sec.manifest_size = sec_info.manifest_size;
 
     /* set up page allocator and slab manager */
     init_slab_mgr(pagesz);
@@ -156,6 +312,18 @@ void pal_linux_main(const char ** arguments, const char ** environments,
     if (rv) {
         SGX_DBG(DBG_E, "Failed to initalize enclave properties: %d\n", rv);
         ocall_exit(rv);
+    }
+
+    if (args_size > MAX_ARGS_SIZE || env_size > MAX_ENV_SIZE) {
+        return;
+    }
+    const char ** arguments = make_argv_list(uptr_args, args_size);
+    if (!arguments) {
+        return;
+    }
+    const char ** environments = make_argv_list(uptr_env, env_size);
+    if (!environments) {
+        return;
     }
 
     pal_state.start_time = start_time;
@@ -175,15 +343,20 @@ void pal_linux_main(const char ** arguments, const char ** environments,
     /* now let's mark our enclave as initialized */
     pal_enclave_state.enclave_flags |= PAL_ENCLAVE_INITIALIZED;
 
-    /* create executable handle */
+    SET_ENCLAVE_TLS(ready_for_exceptions, 1UL);
+
+    /*
+     * We create dummy handles for exec and manifest here to make the logic in
+     * pal_main happy and pass the path of them. The handles can't be used to
+     * read anything.
+     */
+
     PAL_HANDLE manifest, exec = NULL;
 
-    /* create manifest handle */
-    manifest =
-        setup_file_handle(pal_sec.manifest_name, pal_sec.manifest_fd);
+    manifest = setup_dummy_file_handle(pal_sec.manifest_name);
 
-    if (pal_sec.exec_fd != PAL_IDX_POISON) {
-        exec = setup_file_handle(pal_sec.exec_name, pal_sec.exec_fd);
+    if (pal_sec.exec_name[0] != '\0') {
+        exec = setup_dummy_file_handle(pal_sec.exec_name);
     } else {
         SGX_DBG(DBG_I, "Run without executable\n");
     }
@@ -213,7 +386,7 @@ void pal_linux_main(const char ** arguments, const char ** environments,
 #if PRINT_ENCLAVE_STAT == 1
     printf("                >>>>>>>> "
            "Enclave loading time =      %10ld milliseconds\n",
-           _DkSystemTimeQuery() - sec_info->start_time);
+           _DkSystemTimeQuery() - pal_sec.start_time);
 #endif
 
     /* set up thread handle */

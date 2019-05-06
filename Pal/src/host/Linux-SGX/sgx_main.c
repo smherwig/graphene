@@ -19,8 +19,6 @@
 #include <sysdep.h>
 #include <sysdeps/generic/ldsodefs.h>
 
-#define ENCLAVE_FILENAME RUNTIME_FILE("libpal-Linux-SGX.so")
-
 unsigned long pagesize  = PRESET_PAGESIZE;
 unsigned long pagemask  = ~(PRESET_PAGESIZE - 1);
 unsigned long pageshift = PRESET_PAGESIZE - 1;
@@ -220,7 +218,7 @@ int load_enclave_binary (sgx_arch_secs_t * secs, int fd,
         if (zeroend > zeropage) {
             ret = add_pages_to_enclave(secs, (void *) base + zeropage, NULL,
                                        zeroend - zeropage,
-                                       SGX_PAGE_REG, c->prot, 1, "bss");
+                                       SGX_PAGE_REG, c->prot, false, "bss");
             if (ret < 0)
                 return ret;
         }
@@ -344,22 +342,19 @@ int initialize_enclave (struct pal_enclave * enclave)
                  0, ALLOC_ALIGNUP(manifest_size),
                  PROT_READ, SGX_PAGE_REG);
     struct mem_area * ssa_area =
-        set_area("ssa", true, false, -1, 0,
+        set_area("ssa", false, false, -1, 0,
                  enclave->thread_num * enclave->ssaframesize * SSAFRAMENUM,
                  PROT_READ|PROT_WRITE, SGX_PAGE_REG);
-    /* XXX: TCS should be part of measurement */
     struct mem_area * tcs_area =
-        set_area("tcs", true, false, -1, 0, enclave->thread_num * pagesize,
+        set_area("tcs", false, false, -1, 0, enclave->thread_num * pagesize,
                  0, SGX_PAGE_TCS);
-    /* XXX: TLS should be part of measurement */
     struct mem_area * tls_area =
-        set_area("tls", true, false, -1, 0, enclave->thread_num * pagesize,
+        set_area("tls", false, false, -1, 0, enclave->thread_num * pagesize,
                  PROT_READ|PROT_WRITE, SGX_PAGE_REG);
 
-    /* XXX: the enclave stack should be part of measurement */
     struct mem_area * stack_areas = &areas[area_num];
     for (int t = 0 ; t < enclave->thread_num ; t++)
-        set_area("stack", true, false, -1, 0, ENCLAVE_STACK_SIZE,
+        set_area("stack", false, false, -1, 0, ENCLAVE_STACK_SIZE,
                  PROT_READ|PROT_WRITE, SGX_PAGE_REG);
 
     struct mem_area * pal_area =
@@ -476,8 +471,6 @@ int initialize_enclave (struct pal_enclave * enclave)
                       enclave->thread_num);
 
     struct pal_sec * pal_sec = &enclave->pal_sec;
-
-    pal_sec->enclave_addr = (PAL_PTR) (enclave_secs.baseaddr + pal_area->addr);
 
     pal_sec->heap_min = (void *) enclave_secs.baseaddr + heap_min;
     pal_sec->heap_max = (void *) enclave_secs.baseaddr + pal_area->addr - MEMORY_GAP;
@@ -664,7 +657,8 @@ finalize:
 static int load_enclave (struct pal_enclave * enclave,
                          const char * manifest_uri,
                          const char * exec_uri,
-                         const char ** arguments, const char ** environments,
+                         char * args, uint64_t args_size,
+                         char * env, uint64_t env_size,
                          bool exec_uri_inferred)
 {
     struct pal_sec * pal_sec = &enclave->pal_sec;
@@ -692,14 +686,21 @@ static int load_enclave (struct pal_enclave * enclave,
     pal_sec->gid = INLINE_SYSCALL(getgid, 0);
 
 #ifdef DEBUG
-    for (const char ** e = environments ; *e ; e++) {
-        if (strcmp_static(*e, "IN_GDB=1")) {
+    int env_i = 0;
+    while (env_i < env_size) {
+        if (strcmp_static(&env[env_i], "IN_GDB=1")) {
             SGX_DBG(DBG_I, "being GDB'ed!!!\n");
             pal_sec->in_gdb = true;
         }
 
-        if (strcmp_static(*e, "LD_PRELOAD="))
-            *e = "\0";
+        if (strcmp_static(&env[env_i], "LD_PRELOAD=")) {
+            uint64_t env_i_size = strnlen(&env[env_i], env_size - env_i) + 1;
+            memmove(&env[env_i], &env[env_i + env_i_size], env_size - env_i - env_i_size);
+            env_size -= env_i_size;
+            continue;
+        }
+
+        env_i += strnlen(&env[env_i], env_size - env_i) + 1;
     }
 #endif
 
@@ -784,26 +785,21 @@ static int load_enclave (struct pal_enclave * enclave,
                 uri);
         return -EINVAL;
     }
+    SGX_DBG(DBG_I, "token file: %s\n", uri);
 
     /* Initialize the enclave */
     ret = initialize_enclave(enclave);
     if (ret < 0)
         return ret;
 
-    snprintf(pal_sec->enclave_image,  sizeof(PAL_SEC_STR), "%s",
-             ENCLAVE_FILENAME);
-
     if (!pal_sec->instance_id)
         create_instance(&enclave->pal_sec);
 
-    pal_sec->manifest_fd = enclave->manifest;
     memcpy(pal_sec->manifest_name, manifest_uri, strlen(manifest_uri) + 1);
 
     if (enclave->exec == -1) {
-        pal_sec->exec_fd = PAL_IDX_POISON;
         memset(pal_sec->exec_name, 0, sizeof(PAL_SEC_STR));
     } else {
-        pal_sec->exec_fd = enclave->exec;
         memcpy(pal_sec->exec_name, exec_uri, strlen(exec_uri) + 1);
     }
 
@@ -832,7 +828,7 @@ static int load_enclave (struct pal_enclave * enclave,
     map_tcs(INLINE_SYSCALL(gettid, 0));
 
     /* start running trusted PAL */
-    ecall_enclave_start(arguments, environments);
+    ecall_enclave_start(args, args_size, env, env_size);
 
 #if PRINT_ENCLAVE_STAT == 1
     PAL_NUM exit_time = 0;
@@ -845,7 +841,7 @@ static int load_enclave (struct pal_enclave * enclave,
     return 0;
 }
 
-int main (int argc, const char ** argv, const char ** envp)
+int main (int argc, char ** argv, char ** envp)
 {
     const char * manifest_uri = NULL;
     char * exec_uri = NULL;
@@ -946,7 +942,25 @@ int main (int argc, const char ** argv, const char ** envp)
     else
         SGX_DBG(DBG_I, "executable file not found\n");
 
-    return load_enclave(enclave, manifest_uri, exec_uri, argv, envp, exec_uri_inferred);
+    /*
+     * While C does not guarantee that the argv[i] and envp[i] strings are
+     * continuous we know that we are running on Linux, which does this. This
+     * saves us creating a copy of all argv and envp strings.
+     */
+    char * args = argv[0];
+    uint64_t args_size = argc > 0 ? (argv[argc - 1] - argv[0]) + strlen(argv[argc - 1]) + 1: 0;
+
+    int envc = 0;
+    while (envp[envc] != NULL) {
+        envc++;
+    }
+    char * env = envp[0];
+    uint64_t env_size = envc > 0 ? (envp[envc - 1] - envp[0]) + strlen(envp[envc - 1]) + 1: 0;
+
+
+    return load_enclave(enclave, manifest_uri, exec_uri,
+                        args, args_size, env, env_size,
+                        exec_uri_inferred);
 
 usage:
     SGX_DBG(DBG_E, "USAGE: %s [executable|manifest] args ...\n", pal_loader);
@@ -958,21 +972,4 @@ finalize:
         free(enclave);
     }
     return retval;
-}
-
-int pal_init_enclave (const char * manifest_uri,
-                      const char * exec_uri,
-                      const char ** arguments, const char ** environments)
-{
-    if (!manifest_uri)
-        return -PAL_ERROR_INVAL;
-
-    struct pal_enclave * enclave = malloc(sizeof(struct pal_enclave));
-    if (!enclave)
-        return -PAL_ERROR_NOMEM;
-
-    memset(enclave, 0, sizeof(struct pal_enclave));
-
-    return load_enclave(enclave, manifest_uri, exec_uri,
-                        arguments, environments, 0);
 }

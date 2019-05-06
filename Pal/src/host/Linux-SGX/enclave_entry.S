@@ -1,8 +1,14 @@
 #include "sgx_arch.h"
-#include "sgx_tls.h"
+#include "asm-offsets.h"
 
-	.extern ecall_table
-	.extern enclave_ecall_pal_main
+# In some cases, like bogus parameters passed to enclave_entry, it's tricky to
+# return cleanly (passing the correct return address to EEXIT, OCALL_EXIT can
+# be interrupted, etc.). Since those cases should only ever happen with a
+# malicious urts, just go into an endless loop.
+.macro FAIL_LOOP
+.Lfail_loop\@:
+	jmp .Lfail_loop\@
+.endm
 
 	.global enclave_entry
 	.type enclave_entry, @function
@@ -35,13 +41,26 @@ enclave_entry:
 	# from a OCALL in the untrusted PAL. Attackers can manipulate RDI
 	# to deceive the trusted PAL.
 
-	# A safe design: check if %gs:SGX_EXIT_TARGET is ever assigned
-	movq %gs:SGX_EXIT_TARGET, %rcx
-	cmpq $0, %rcx
+	# This thread can be interrupted but then the above check branches to
+	# .Lhandle_resume. So the outside can't re-enter the checks below in
+	# the middle.
+
+	# Only jump to .Lreturn_from_ocall if we have prepared the stack for
+	# it.
+	cmpq $0, %gs:SGX_OCALL_PREPARED
 	jne .Lreturn_from_ocall
 
+	# Ecalls are only used to start a thread (either the main or an
+	# additional thread). So per thread we should only get exactly one
+	# ecall. Enforce this here.
+	cmpq $0, %gs:SGX_ECALL_CALLED
+	je 1f
+	FAIL_LOOP
+1:
+	movq $1, %gs:SGX_ECALL_CALLED
+
 	# PAL convention:
-	# RDI - index in ecall_table
+	# RDI - ECALL number
 	# RSI - prointer to ecall arguments
 	# RDX - exit target
 	# RCX (former RSP) - The unstrusted stack
@@ -51,7 +70,7 @@ enclave_entry:
 	subq %gs:SGX_TCS_OFFSET, %rbx
 	movq %rbx, %r8
 
-	# push untructed stack address to RCX
+	# push untrusted stack address to RCX
 	movq %rsp, %rcx
 
 	# switch to enclve stack: enclave base + %gs:SGX_INITIAL_STACK_OFFSET
@@ -73,10 +92,8 @@ enclave_entry:
 	# to handle_ecall() in enclave_ecalls.c
 	callq handle_ecall
 
-	# never return to this point (should die)
-	xorq %rdi, %rdi
-	xorq %rsi, %rsi
-	jmp .Leexit
+	# handle_ecall will only return when invalid parameters has been passed.
+	FAIL_LOOP
 
 .Lhandle_resume:
 	# PAL convention:
@@ -103,8 +120,16 @@ enclave_entry:
 
 	# exit address in RDX, mov it to RBX
 	movq %rdx, %rbx
-	movq $EEXIT, %rax
-	ENCLU
+
+	jmp .Lclear_and_eexit
+
+.Lhandle_exception:
+	# If this enclave thread has not been initialized yet, we should not
+	# try to call an event handler yet.
+	cmpq $0, %gs:SGX_READY_FOR_EXCEPTIONS
+	jne 1f
+	FAIL_LOOP
+1:
 
 	## There is a race between host signal delivery and restoring %rsp
 	## in this entry code. We must be careful to setup %rsp.
@@ -132,59 +157,64 @@ enclave_entry:
 	## so the CPU pushed some untrusted %rsp into SGX_GPR_RSP. Thus, we
 	## cannot trust value in SGX_GPR_RSP and should fall-back to using
 	## SGX_STACK (which was updated with the last known good in-enclave
-	## %rsp during Leexit).
-.Lhandle_exception:
+	## %rsp before EEXIT in sgx_ocall).
+
 	movq SGX_GPR_RSP(%rbx), %rsi
 	movq %gs:SGX_STACK, %rax
 	cmpq $0, %rax
 	je 1f
 	movq %rax, %rsi
 1:
-	subq $0x90, %rsi
+	subq $(SGX_CONTEXT_SIZE + RED_ZONE_SIZE), %rsi
 
 	# we have exitinfo in RDI, swap with the one on GPR
 	# and dump into the context
 	xchgq %rdi, SGX_GPR_RDI(%rbx)
-	movq %rdi, 0x38(%rsi)
+	movq %rdi, SGX_CONTEXT_RDI(%rsi)
 
 	# dump the rest of context
 	movq SGX_GPR_RAX(%rbx), %rdi
-	movq %rdi, 0x00(%rsi)
+	movq %rdi, SGX_CONTEXT_RAX(%rsi)
 	movq SGX_GPR_RCX(%rbx), %rdi
-	movq %rdi, 0x08(%rsi)
+	movq %rdi, SGX_CONTEXT_RCX(%rsi)
 	movq SGX_GPR_RDX(%rbx), %rdi
-	movq %rdi, 0x10(%rsi)
+	movq %rdi, SGX_CONTEXT_RDX(%rsi)
 	movq SGX_GPR_RBX(%rbx), %rdi
-	movq %rdi, 0x18(%rsi)
+	movq %rdi, SGX_CONTEXT_RBX(%rsi)
 	movq SGX_GPR_RSP(%rbx), %rdi
-	movq %rdi, 0x20(%rsi)
+	movq %rdi, SGX_CONTEXT_RSP(%rsi)
 	movq SGX_GPR_RBP(%rbx), %rdi
-	movq %rdi, 0x28(%rsi)
+	movq %rdi, SGX_CONTEXT_RBP(%rsi)
 	movq SGX_GPR_RSI(%rbx), %rdi
-	movq %rdi, 0x30(%rsi)
+	movq %rdi, SGX_CONTEXT_RSI(%rsi)
+	/* rdi is saved above */
 	movq SGX_GPR_R8(%rbx), %rdi
-	movq %rdi, 0x40(%rsi)
+	movq %rdi, SGX_CONTEXT_R8(%rsi)
 	movq SGX_GPR_R9(%rbx), %rdi
-	movq %rdi, 0x48(%rsi)
+	movq %rdi, SGX_CONTEXT_R9(%rsi)
 	movq SGX_GPR_R10(%rbx), %rdi
-	movq %rdi, 0x50(%rsi)
+	movq %rdi, SGX_CONTEXT_R10(%rsi)
 	movq SGX_GPR_R11(%rbx), %rdi
-	movq %rdi, 0x58(%rsi)
+	movq %rdi, SGX_CONTEXT_R11(%rsi)
 	movq SGX_GPR_R12(%rbx), %rdi
-	movq %rdi, 0x60(%rsi)
+	movq %rdi, SGX_CONTEXT_R12(%rsi)
 	movq SGX_GPR_R13(%rbx), %rdi
-	movq %rdi, 0x68(%rsi)
+	movq %rdi, SGX_CONTEXT_R13(%rsi)
 	movq SGX_GPR_R14(%rbx), %rdi
-	movq %rdi, 0x70(%rsi)
+	movq %rdi, SGX_CONTEXT_R14(%rsi)
 	movq SGX_GPR_R15(%rbx), %rdi
-	movq %rdi, 0x78(%rsi)
+	movq %rdi, SGX_CONTEXT_R15(%rsi)
 	movq SGX_GPR_RFLAGS(%rbx), %rdi
-	movq %rdi, 0x80(%rsi)
+	movq %rdi, SGX_CONTEXT_RFLAGS(%rsi)
 	movq SGX_GPR_RIP(%rbx), %rdi
-	movq %rdi, 0x88(%rsi)
+	movq %rdi, SGX_CONTEXT_RIP(%rsi)
 
-	movq %rsi, SGX_GPR_RSP(%rbx)
+	# Pass pointer to sgx_context_t to _DkExceptionHandler
 	movq %rsi, SGX_GPR_RSI(%rbx)
+
+	# Align the stack for _DkExceptionHandler
+	andq $STACK_ALIGN, %rsi
+	movq %rsi, SGX_GPR_RSP(%rbx)
 
 	# new RIP is the exception handler
 	leaq _DkExceptionHandler(%rip), %rdi
@@ -196,9 +226,79 @@ enclave_entry:
 
 	# exit address in RDX, mov it to RBX
 	movq %rdx, %rbx
+	# fallthrough
+
+	# Clear other registers and similar state and then call EEXIT
+	#
+	# Arguments for EEXIT/untrusted code (not cleared):
+	#
+	#     %rbx: exit target
+	#     %rsp: untrusted stack
+	#     %rdi, %rsi: (optional) arguments to untrusted code.
+.Lclear_and_eexit:
+
+	# Clear "extended" state (FPU aka x87, SSE, AVX, ...).
+
+	leaq .Lxrstor_init_arg(%rip), %rcx
+	# pal_sec.enclave_attributes.xfrm will always be zero before
+	# init_enclave has been called by pal_linux_main. So during early init
+	# nothing should use features not covered by fxrstor, like AVX.
+	movq (pal_sec + PAL_SEC_ENCLAVE_ATTRIBUTES + SGX_ARCH_ATTRIBUTES_XFRM)(%rip), %rax
+	testq $XSAVE_NON_FX_MASK, %rax
+	je 1f
+	mov $0xffffffff, %edx
+	mov $0xffffffff, %eax
+	xrstor (%rcx)
+	jmp 2f
+1:
+	fxrstor (%rcx)
+2:
+
+	# %rax is argument to EEXIT
+	# %rbx is argument to EEXIT
+	# %rcx is set to AEP by EEXIT
+	xorq %rdx, %rdx
+	# %rsi, %rdi are arguments to the untrusted code
+	xorq %rbp, %rbp
+	# %rsp points to untrusted stack
+	xorq %r8, %r8
+	xorq %r9, %r9
+	xorq %r10, %r10
+	xorq %r11, %r11
+	xorq %r12, %r12
+	xorq %r13, %r13
+	xorq %r14, %r14
+	subq %r15, %r15 # use sub to set flags to a fixed value
+
 	movq $EEXIT, %rax
 	ENCLU
 
+	ud2 # We should never get here.
+
+	# fxsave/xsave area to reset extended state.
+	#
+	# The first 512 B are used by fxrstor. We set FCW = 0x037f and MXCSR =
+	# 0x1f80 and the rest to 0 (same values as xrstor uses in
+	# initialization mode).
+	#
+	# The fxsave area is followed by the 64 B xsave header. We use the
+	# "compact" format (XCOMP_BV[63] = 1). Since the rest of XSTATE_BV and
+	# XCOMP_BV are 0s, xrstor initializes all components (assuming it's
+	# called with RFBM set to all 1s). The fxsave area is ignored (because
+	# we request initialization not restore). And thanks to the compact
+	# format we don't need to provide anything after the header.
+.section .rodata
+	.balign 64
+.Lxrstor_init_arg:
+	.byte 0x7f, 0x03 	# FCW
+	.skip 6, 0
+	.byte 0x80, 0x1f, 0, 0 	# MXCSR
+	.skip 500, 0	 	# rest of fxstore area
+
+	.skip 15, 0	 	# XSTATE_BV and XCOMP_BV[55:0]
+	.byte 0x80	 	# XCOMP_BV[63:56] i.e. "compact" format
+	.skip 48, 0	 	# rest of xsave header
+.previous
 
 	.global sgx_ocall
 	.type sgx_ocall, @function
@@ -236,33 +336,26 @@ sgx_ocall:
 
 	pushq %rbp
 
-	jmp .Leexit
-
-.Leexit:
-	xorq %rdx, %rdx
-	xorq %r8, %r8
-	xorq %r9, %r9
-	xorq %r10, %r10
-	xorq %r11, %r11
-	xorq %r12, %r12
-	xorq %r13, %r13
-	xorq %r14, %r14
-	xorq %r15, %r15
-	xorq %rbp, %rbp
+	movq $1, %gs:SGX_OCALL_PREPARED
 
 	movq %rsp, %gs:SGX_STACK
+
+	# It's ok to use the untrusted stack and exit target below without
+	# checks since the processor will ensure that after exiting enclave
+	# mode in-enclave memory can't be accessed.
+
 	movq %gs:SGX_USTACK, %rsp
 	andq $STACK_ALIGN, %rsp
 
 	movq %gs:SGX_EXIT_TARGET, %rbx
-	movq %gs:SGX_AEP, %rcx
-	movq $EEXIT, %rax
-	ENCLU
+	jmp .Lclear_and_eexit
 
 .Lreturn_from_ocall:
 	# PAL convention:
 	# RDI - return value
 	# RSI - external event (if there is any)
+
+	movq $0, %gs:SGX_OCALL_PREPARED
 
 	movq %rdi, %rax
 
@@ -403,3 +496,53 @@ wrfsbase:
 
 	.cfi_endproc
 	.size wrfsbase, .-wrfsbase
+
+/*
+ * Restore an sgx_context_t as generated by .Lhandle_exception. Execution will
+ * continue as specified by the rip in the context.
+ *
+ * It is required that:
+ *
+ *     %rdi == *(%rdi + SGX_CONTEXT_RSP) - (SGX_CONTEXT_SIZE + RED_ZONE_SIZE)
+ *
+ * This holds for the original sgx_context allocated by .Lhandle_exception.
+ * restore_sgx_context is a safe wrapper which checks this.
+ */
+	.global _restore_sgx_context
+	.type _restore_sgx_context, @function
+
+_restore_sgx_context:
+	movq SGX_CONTEXT_RAX(%rdi), %rax
+	movq SGX_CONTEXT_RCX(%rdi), %rcx
+	movq SGX_CONTEXT_RDX(%rdi), %rdx
+	movq SGX_CONTEXT_RBX(%rdi), %rbx
+	# For %rsp see below.
+	movq SGX_CONTEXT_RBP(%rdi), %rbp
+	movq SGX_CONTEXT_RSI(%rdi), %rsi
+	# For %rdi see below.
+	movq SGX_CONTEXT_R8(%rdi), %r8
+	movq SGX_CONTEXT_R9(%rdi), %r9
+	movq SGX_CONTEXT_R10(%rdi), %r10
+	movq SGX_CONTEXT_R11(%rdi), %r11
+	movq SGX_CONTEXT_R12(%rdi), %r12
+	movq SGX_CONTEXT_R13(%rdi), %r13
+	movq SGX_CONTEXT_R14(%rdi), %r14
+	movq SGX_CONTEXT_R15(%rdi), %r15
+
+	# We need to make sure that %rsp - RED_ZONE_SIZE never points above
+	# anything we still need. Otherwise .Lhandle_exception might mess with
+	# it. SGX_CONTEXT_RDI - SGX_CONTEXT_RFLAGS <= RED_ZONE_SIZE, see
+	# sgx_arch.h.
+	leaq SGX_CONTEXT_RFLAGS(%rdi), %rsp
+	popfq # remember to not touch any flags after here
+
+	movq SGX_CONTEXT_RDI(%rdi), %rdi
+	# Now %rdi is restored so we need to use the stack to access the
+	# context.
+
+	# Now pop %rip and fix stack pointer in one operation (to avoid
+	# problems with nesting, see comment above). SGX_CONTEXT_RIP is
+	# directly after SGX_CONTEXT_RFLAGS, see sgx_arch.h. Note that retq
+	# decreases %rsp by 8 for the poped %rip additionaly to the passed
+	# offset.
+	retq $(SGX_CONTEXT_SIZE + RED_ZONE_SIZE - SGX_CONTEXT_RIP - 8)

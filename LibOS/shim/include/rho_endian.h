@@ -12,7 +12,7 @@
  * conversion functions on different platforms.
  */
 
-#include "rho_decls.h"
+#include <rho_decls.h>
 
 RHO_DECLS_BEGIN
 

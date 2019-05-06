@@ -3,7 +3,7 @@ include Makefile.am
 CFLAGS	+= -I. -Iinclude -I../.. -I../../../include -I../../../lib -Isgx-driver
 ASFLAGS += -I. -I../.. -I../../../include
 
-host_files = libpal-Linux-SGX.a pal-sgx debugger/sgx_gdb.so
+host_files = libpal-Linux-SGX.a pal-sgx debugger/sgx_gdb.so generated_offsets.py
 
 defs	= -DIN_PAL -DPAL_DIR=$(PAL_DIR) -DRUNTIME_DIR=$(RUNTIME_DIR)
 enclave-objs = $(addprefix db_,files devices pipes sockets streams memory \
@@ -90,8 +90,12 @@ debugger/sgx_gdb.so: debugger/sgx_gdb.c debugger/sgx_gdb.h sgx_arch.h
 	$(CC) -Wall -fPIC -O2 -std=c11 -c debugger/sgx_gdb.c -o debugger/sgx_gdb.o
 	$(LD) -shared debugger/sgx_gdb.o -o debugger/sgx_gdb.so -lc
 
+enclave_entry.o sgx_entry.o: asm-offsets.h
+
 sgx-driver/isgx_version.h:
 	$(MAKE) -C sgx-driver $(notdir $<)
+
+include ../../../../Makefile.rules
 
 CLEAN_FILES += $(notdir $(pal_static) $(pal_lib) $(pal_sec) $(pal_loader))
 CLEAN_FILES += debugger/sgx_gdb.o

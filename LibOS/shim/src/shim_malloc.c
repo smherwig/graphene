@@ -89,7 +89,7 @@ void * __system_malloc (size_t size)
                 continue;
             }
 
-            debug("failed to allocate memory (%d)\n", -PAL_ERRNO);
+            debug("failed to allocate memory (%ld)\n", -PAL_ERRNO);
             bkeep_munmap(addr, alloc_size, flags);
             return NULL;
         }
@@ -222,7 +222,7 @@ extern_alias(calloc);
 void * realloc(void * ptr, size_t new_size)
 {
     /* TODO: We can't deal with this case right now */
-    assert(!MEMORY_MIGRATED(ptr));
+    assert(!memory_migrated(ptr));
 
     size_t old_size = slab_get_buf_size(slab_mgr, ptr);
 
@@ -285,7 +285,9 @@ void __free_debug (void * mem, const char * file, int line)
 void free (void * mem)
 #endif
 {
-    if (MEMORY_MIGRATED(mem)) {
+    if (!mem)
+        return;
+    if (memory_migrated(mem)) {
         INC_PROFILE_OCCURENCE(free_migrated);
         return;
     }

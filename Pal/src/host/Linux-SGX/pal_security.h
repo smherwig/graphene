@@ -30,10 +30,6 @@ struct pal_sec {
     PAL_NUM         instance_id;
     PAL_IDX         ppid, pid, uid, gid;
 
-    /* file name of enclave image */
-    PAL_PTR         enclave_addr;
-    PAL_SEC_STR     enclave_image;
-
     /* enclave information */
     sgx_arch_hash_t         mrenclave;
     sgx_arch_hash_t         mrsigner;
@@ -44,13 +40,11 @@ struct pal_sec {
 
     /* executable name, addr and size */
     PAL_SEC_STR     exec_name;
-    PAL_IDX         exec_fd;
     PAL_PTR         exec_addr;
     PAL_NUM         exec_size;
 
     /* manifest name, addr and size */
     PAL_SEC_STR     manifest_name;
-    PAL_IDX         manifest_fd;
     PAL_PTR         manifest_addr;
     PAL_NUM         manifest_size;
 

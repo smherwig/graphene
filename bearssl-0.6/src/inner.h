@@ -2496,6 +2496,9 @@ static inline int
 br_cpuid(uint32_t mask_eax, uint32_t mask_ebx,
 	uint32_t mask_ecx, uint32_t mask_edx)
 {
+#if BR_GRAPHENE
+    return 1;
+#endif
 #if BR_GCC || BR_CLANG
 	unsigned eax, ebx, ecx, edx;
 

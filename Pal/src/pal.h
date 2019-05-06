@@ -204,6 +204,7 @@ PAL_CONTROL * pal_control_addr (void);
 
 /* Memory Allocation Flags */
 #define PAL_ALLOC_RESERVE     0x0001   /* Only reserve the memory */
+#define PAL_ALLOC_UNTRUSTED   0x0002   /* SGX: allocated untrusted memory */
 
 #ifdef IN_PAL
 #define PAL_ALLOC_INTERNAL    0x8000
@@ -398,7 +399,7 @@ DkThreadDelayExecution (PAL_NUM duration);
 void
 DkThreadYieldExecution (void);
 
-void
+__attribute__((noreturn)) void
 DkThreadExit (void);
 
 PAL_BOL

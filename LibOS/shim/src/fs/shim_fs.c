@@ -41,14 +41,15 @@ struct shim_fs {
     struct shim_d_ops * d_ops;
 };
 
-#define NUM_MOUNTABLE_FS    5
+#define NUM_MOUNTABLE_FS    6
 
 struct shim_fs mountable_fs [NUM_MOUNTABLE_FS] = {
         { .name = "chroot", .fs_ops = &chroot_fs_ops, .d_ops = &chroot_d_ops, },
         { .name = "proc",   .fs_ops = &proc_fs_ops,   .d_ops = &proc_d_ops,   },
         { .name = "dev",    .fs_ops = &dev_fs_ops,    .d_ops = &dev_d_ops,    },
         { .name = "nextfs", .fs_ops = &nextfs_fs_ops, .d_ops = &nextfs_d_ops, },
-        { .name = "mdish",  .fs_ops = &mdish_fs_ops,  .d_ops = &mdish_d_ops,  },
+        { .name = "smdish", .fs_ops = &smdish_fs_ops, .d_ops = &smdish_d_ops, },
+        { .name = "smuf",   .fs_ops = &smuf_fs_ops,   .d_ops = &smuf_d_ops,   },
     };
 
 #define NUM_BUILTIN_FS      4
@@ -177,7 +178,7 @@ static int __mount_one_other (const char * key, int keylen)
     debug("mounting as %s filesystem: from %s to %s\n", t, uri, p);
 
     if ((ret = mount_fs(t, uri, p, NULL, NULL, 1)) < 0) {
-        debug("mounting %s on %s (type=%s) failed (%e)\n", uri, p, t,
+        debug("mounting %s on %s (type=%s) failed (%d)\n", uri, p, t,
               -ret);
         return ret;
     }
@@ -653,7 +654,7 @@ BEGIN_CP_FUNC(all_mounts)
     unlock(mount_list_lock);
 
     /* add an empty entry to mark as migrated */
-    ADD_CP_FUNC_ENTRY(0);
+    ADD_CP_FUNC_ENTRY(0UL);
 }
 END_CP_FUNC(all_mounts)
 

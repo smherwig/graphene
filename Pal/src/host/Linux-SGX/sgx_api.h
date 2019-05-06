@@ -29,7 +29,10 @@ void * sgx_ocalloc (uint64_t size);
 void sgx_ocfree_frame (void * frame);
 void sgx_ocfree (void);
 
-bool sgx_is_within_enclave (const void * addr, uint64_t size);
+bool sgx_is_completely_within_enclave (const void * addr, uint64_t size);
+bool sgx_is_completely_outside_enclave(const void * addr, uint64_t size);
+
+int sgx_copy_to_enclave(void * dst, void * uptr_src, uint64_t size);
 
 int sgx_report (sgx_arch_targetinfo_t * targetinfo,
                 void * reportdata, sgx_arch_report_t * report);
@@ -46,5 +49,8 @@ int sgx_verify_report (sgx_arch_report_t * report);
 uint32_t rdrand (void);
 uint64_t rdfsbase (void);
 void wrfsbase (uint64_t addr);
+
+void restore_sgx_context(sgx_context_t *ctx);
+void _restore_sgx_context(sgx_context_t *ctx);
 
 #endif /* SGX_API_H */

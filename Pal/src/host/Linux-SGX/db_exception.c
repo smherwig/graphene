@@ -157,42 +157,50 @@ void _DkExceptionRealHandler (int event, PAL_NUM arg, struct pal_frame * frame,
     _DkGenericSignalHandle(event, arg, frame, context);
 }
 
-void restore_sgx_context (sgx_context_t * uc)
+/*
+ * return value:
+ *  true:  #UD is handled.
+ *         the execution can be continued without propagating #UD.
+ *  false: #UD is not handled.
+ *         the exception needs to be raised up to LibOS or user application.
+ */
+static bool handle_ud(sgx_context_t * uc)
 {
-    /* prepare the return address */
-    uc->rsp -= 8;
-    *(uint64_t *) uc->rsp = uc->rip;
-
-    /* now pop the stack */
-    __asm__ volatile (
-                  "mov %0, %%rsp\n"
-                  "pop %%rax\n"
-                  "pop %%rcx\n"
-                  "pop %%rdx\n"
-                  "pop %%rbx\n"
-                  "add $8, %%rsp\n" /* don't pop RSP yet */
-                  "pop %%rbp\n"
-                  "pop %%rsi\n"
-                  "pop %%rdi\n"
-                  "pop %%r8\n"
-                  "pop %%r9\n"
-                  "pop %%r10\n"
-                  "pop %%r11\n"
-                  "pop %%r12\n"
-                  "pop %%r13\n"
-                  "pop %%r14\n"
-                  "pop %%r15\n"
-                  "popfq\n"
-                  "mov -104(%%rsp), %%rsp\n"
-                  "ret\n"
-                  :: "r"(uc) : "memory");
+    uint8_t * instr = (uint8_t *) uc->rip;
+    if (instr[0] == 0xcc) { /* skip int 3 */
+        uc->rip++;
+        return true;
+    } else if (instr[0] == 0x0f && instr[1] == 0xa2) {
+        /* cpuid */
+        unsigned int values[4];
+        if (!_DkCpuIdRetrieve(uc->rax & 0xffffffff,
+                              uc->rcx & 0xffffffff, values)) {
+            uc->rip += 2;
+            uc->rax = values[0];
+            uc->rbx = values[1];
+            uc->rcx = values[2];
+            uc->rdx = values[3];
+            return true;
+        }
+    } else if (instr[0] == 0x0f && instr[1] == 0x31) {
+        /* rdtsc */
+        uc->rip += 2;
+        uc->rdx = 0;
+        uc->rax = 0;
+        return true;
+    } else if (instr[0] == 0x0f && instr[1] == 0x05) {
+        /* syscall: LibOS may know how to handle this */
+        return false;
+    }
+    SGX_DBG(DBG_E, "Unknown or illegal instruction at RIP 0x%016lx\n", uc->rip);
+    return false;
 }
 
 void _DkExceptionHandler (unsigned int exit_info, sgx_context_t * uc)
 {
     union {
         sgx_arch_exitinfo_t info;
-        int intval;
+        unsigned int intval;
     } ei = { .intval = exit_info };
 
     int event_num;
@@ -200,53 +208,62 @@ void _DkExceptionHandler (unsigned int exit_info, sgx_context_t * uc)
 
     if (!ei.info.valid) {
         event_num = exit_info;
-        goto handle_event;
-    }
-
-    if (ei.info.vector == SGX_EXCEPTION_VECTOR_UD) {
-        unsigned char * instr = (unsigned char *) uc->rip;
-        if (instr[0] == 0xcc) { /* skip int 3 */
-            uc->rip++;
-            restore_sgx_context(uc);
-            return;
-        }
-        if (instr[0] == 0x0f && instr[1] == 0xa2) {
-            unsigned int values[4];
-            if (!_DkCpuIdRetrieve(uc->rax & 0xffffffff,
-                                  uc->rcx & 0xffffffff, values)) {
-                uc->rip += 2;
-                uc->rax = values[0];
-                uc->rbx = values[1];
-                uc->rcx = values[2];
-                uc->rdx = values[3];
+    } else {
+        switch (ei.info.vector) {
+        case SGX_EXCEPTION_VECTOR_BR:
+            event_num = PAL_EVENT_NUM_BOUND;
+            break;
+        case SGX_EXCEPTION_VECTOR_UD:
+            if (handle_ud(uc)) {
                 restore_sgx_context(uc);
                 return;
             }
-        }
-        if (instr[0] == 0x0f && instr[1] == 0x31) {
-            uc->rip += 2;
-            uc->rdx = 0;
-            uc->rax = 0;
-            restore_sgx_context(uc);
-            return;
-        }
-        SGX_DBG(DBG_E, "Illegal instruction executed in enclave\n");    
-        ocall_exit(1);
-    }
-
-    switch (ei.info.vector) {
+            event_num = PAL_EVENT_ILLEGAL;
+            break;
         case SGX_EXCEPTION_VECTOR_DE:
+        case SGX_EXCEPTION_VECTOR_MF:
+        case SGX_EXCEPTION_VECTOR_XM:
             event_num = PAL_EVENT_ARITHMETIC_ERROR;
             break;
         case SGX_EXCEPTION_VECTOR_AC:
             event_num = PAL_EVENT_MEMFAULT;
             break;
+        case SGX_EXCEPTION_VECTOR_DB:
+        case SGX_EXCEPTION_VECTOR_BP:
         default:
             restore_sgx_context(uc);
             return;
+        }
     }
 
-handle_event:
+    if (ADDR_IN_PAL(uc->rip) &&
+        /* event isn't asynchronous */
+        (event_num != PAL_EVENT_QUIT &&
+         event_num != PAL_EVENT_SUSPEND &&
+         event_num != PAL_EVENT_RESUME)) {
+        printf("*** An unexpected AEX vector occurred inside PAL. "
+               "Exiting the thread. *** \n"
+               "(vector = 0x%x, type = 0x%x valid = %d, RIP = +0x%08lx)\n"
+               "rax: 0x%08lx rcx: 0x%08lx rdx: 0x%08lx rbx: 0x%08lx\n"
+               "rsp: 0x%08lx rbp: 0x%08lx rsi: 0x%08lx rdi: 0x%08lx\n"
+               "r8 : 0x%08lx r9 : 0x%08lx r10: 0x%08lx r11: 0x%08lx\n"
+               "r12: 0x%08lx r13: 0x%08lx r14: 0x%08lx r15: 0x%08lx\n"
+               "rflags: 0x%08lx rip: 0x%08lx\n",
+               ei.info.vector, ei.info.type, ei.info.valid,
+               uc->rip - (uintptr_t) TEXT_START,
+               uc->rax, uc->rcx, uc->rdx, uc->rbx,
+               uc->rsp, uc->rbp, uc->rsi, uc->rdi,
+               uc->r8, uc->r9, uc->r10, uc->r11,
+               uc->r12, uc->r13, uc->r14, uc->r15,
+               uc->rflags, uc->rip);
+#ifdef DEBUG
+        printf("pausing for debug\n");
+        while (true)
+            __asm__ volatile("pause");
+#endif
+        _DkThreadExit();
+    }
+
     ctx = __alloca(sizeof(PAL_CONTEXT));
     memset(ctx, 0, sizeof(PAL_CONTEXT));
     ctx->rax = uc->rax;
@@ -271,6 +288,20 @@ handle_event:
     struct pal_frame * frame = get_frame(uc);
 
     PAL_NUM arg = 0;
+    switch (event_num) {
+    case PAL_EVENT_ILLEGAL:
+        arg = uc->rip;
+        break;
+    case PAL_EVENT_MEMFAULT:
+        /* TODO
+         * SGX1 doesn't provide fault address.
+         * SGX2 gives providing page. (lower address bits are masked)
+         */
+        break;
+    default:
+        /* nothing */
+        break;
+    }
     _DkExceptionRealHandler(event_num, arg, frame, ctx);
     restore_sgx_context(uc);
 }
@@ -293,7 +324,6 @@ void _DkRaiseFailure (int error)
 void _DkExceptionReturn (void * event)
 {
     PAL_EVENT * e = event;
-    sgx_context_t uc;
     PAL_CONTEXT * ctx = e->context;
 
     if (!ctx) {
@@ -310,26 +340,30 @@ void _DkExceptionReturn (void * event)
                       "retq\r\n" ::: "memory");
     }
 
-    uc.rax = ctx->rax;
-    uc.rbx = ctx->rbx;
-    uc.rcx = ctx->rcx;
-    uc.rdx = ctx->rdx;
-    uc.rsp = ctx->rsp;
-    uc.rbp = ctx->rbp;
-    uc.rsi = ctx->rsi;
-    uc.rdi = ctx->rdi;
-    uc.r8  = ctx->r8;
-    uc.r9  = ctx->r9;
-    uc.r10 = ctx->r10;
-    uc.r11 = ctx->r11;
-    uc.r12 = ctx->r12;
-    uc.r13 = ctx->r13;
-    uc.r14 = ctx->r14;
-    uc.r15 = ctx->r15;
-    uc.rflags = ctx->efl;
-    uc.rip = ctx->rip;
+    // Allocate sgx_context_t just below the "normal" stack (honoring the red
+    // zone) and then copy the content of ctx there. This is needed by
+    // restore_sgx_context.
+    sgx_context_t * uc = (void *)ctx->rsp - sizeof(sgx_context_t) - RED_ZONE_SIZE;
+    uc->rax = ctx->rax;
+    uc->rbx = ctx->rbx;
+    uc->rcx = ctx->rcx;
+    uc->rdx = ctx->rdx;
+    uc->rsp = ctx->rsp;
+    uc->rbp = ctx->rbp;
+    uc->rsi = ctx->rsi;
+    uc->rdi = ctx->rdi;
+    uc->r8  = ctx->r8;
+    uc->r9  = ctx->r9;
+    uc->r10 = ctx->r10;
+    uc->r11 = ctx->r11;
+    uc->r12 = ctx->r12;
+    uc->r13 = ctx->r13;
+    uc->r14 = ctx->r14;
+    uc->r15 = ctx->r15;
+    uc->rflags = ctx->efl;
+    uc->rip = ctx->rip;
 
-    restore_sgx_context(&uc);
+    restore_sgx_context(uc);
 }
 
 void _DkHandleExternalEvent (PAL_NUM event, sgx_context_t * uc)
@@ -347,6 +381,11 @@ void _DkHandleExternalEvent (PAL_NUM event, sgx_context_t * uc)
         frame->funcname = "_DkHandleExternalEvent";
         arch_store_frame(&frame->arch);
     }
+
+    /* We only end up in _DkHandleExternalEvent() if interrupted during
+     * host syscall; Dk* function will be unwound, so we must inform LibOS
+     * layer that PAL was interrupted (by setting PAL_ERRNO). */
+    _DkRaiseFailure(PAL_ERROR_INTERRUPTED);
 
     if (!_DkGenericSignalHandle(event, 0, frame, NULL)
         && event != PAL_EVENT_RESUME)
