@@ -1,69 +1,60 @@
 #ifndef _RHO_ENDIAN_H_
 #define _RHO_ENDIAN_H_
 
-/* based on https://gist.github.com/panzi/6856583: 
- *
- * "License": Public Domain
- * I, Mathias Panzenböck, place this file hereby into the public domain. Use it
- * at your own risk for whatever you like.  In case there are jurisdictions that
- * don't support putting things in the public domain you can also consider it to
- * be "dual licensed" under the BSD, MIT and Apache licenses, if you want to. This
- * code is trivial anyway. Consider it an example on how to get the endian
- * conversion functions on different platforms.
- */
+#include <stdint.h>
 
 #include <rho_decls.h>
 
 RHO_DECLS_BEGIN
 
-/* XXX: for now, hardcode to linux */
-#ifndef RHO_OS_LINUX
-#   define RHO_OS_LINUX
-#endif
+static inline uint16_t
+rho_swap_u16(uint16_t x)
+{
+    return ( (x >> 8) | (x << 8) );
+}
 
-#if defined(RHO_OS_LINUX)
-#	include <endian.h>
-#elif defined(RHO_OS_MACOS)
-#	include <libkern/OSByteOrder.h>
+static inline uint32_t
+rho_swap_u32(uint32_t x)
+{
+    return (
+        ((x >> 24) & 0x000000ff) | 
+        ((x >>  8) & 0x0000ff00) | 
+        ((x <<  8) & 0x00ff0000) | 
+        ((x << 24) & 0xff000000)
+    );
+}
 
-#	define htobe16(x) OSSwapHostToBigInt16(x)
-#	define htole16(x) OSSwapHostToLittleInt16(x)
-#	define be16toh(x) OSSwapBigToHostInt16(x)
-#	define le16toh(x) OSSwapLittleToHostInt16(x)
- 
-#	define htobe32(x) OSSwapHostToBigInt32(x)
-#	define htole32(x) OSSwapHostToLittleInt32(x)
-#	define be32toh(x) OSSwapBigToHostInt32(x)
-#	define le32toh(x) OSSwapLittleToHostInt32(x)
- 
-#	define htobe64(x) OSSwapHostToBigInt64(x)
-#	define htole64(x) OSSwapHostToLittleInt64(x)
-#	define be64toh(x) OSSwapBigToHostInt64(x)
-#	define le64toh(x) OSSwapLittleToHostInt64(x)
+static inline uint64_t
+rho_swap_u64(uint64_t x)
+{
+    return (
+        ((x >> 56) & 0x00000000000000ff) |
+        ((x >> 40) & 0x000000000000ff00) |
+        ((x >> 24) & 0x0000000000ff0000) |
+        ((x >>  8) & 0x00000000ff000000) |
+        ((x <<  8) & 0x000000ff00000000) |
+        ((x << 24) & 0x0000ff0000000000) |
+        ((x << 40) & 0x00ff000000000000) |
+        ((x << 56) & 0xff00000000000000)
+    );
+}
 
-#	define __BYTE_ORDER    BYTE_ORDER
-#	define __BIG_ENDIAN    BIG_ENDIAN
-#	define __LITTLE_ENDIAN LITTLE_ENDIAN
-#	define __PDP_ENDIAN    PDP_ENDIAN
+/* XXX: for now, assume host is little-endian */
+#define rho_htobe16(x)  rho_swap_u16(x)
+#define rho_be16toh(x)  rho_swap_u16(x)
+#define rho_htole16(x)  ((uint16_t)(x))
+#define rho_le16toh(x)  ((uint16_t)(x))
 
-#elif defined(RHO_OS_OPENBSD)
-#	include <sys/endian.h>
+#define rho_htobe32(x)  rho_swap_u32(x)
+#define rho_be32toh(x)  rho_swap_u32(x)
+#define rho_htole32(x)  ((uint32_t)(x))
+#define rho_le32toh(x)  ((uint32_t)(x))
 
-#elif defined(RHO_OS_NETBSD) || defined(RHO_OS_FREEBSD)
+#define rho_htobe64(x)  rho_swap_u64(x)
+#define rho_be64toh(x)  rho_swap_u64(x)
+#define rho_htole64(x)  ((uint64_t)(x))
+#define rho_le64toh(x)  ((uint64_t)(x))
 
-#	include <sys/endian.h>
-
-#	define be16toh(x) betoh16(x)
-#	define le16toh(x) letoh16(x)
-
-#	define be32toh(x) betoh32(x)
-#	define le32toh(x) letoh32(x)
-
-#	define be64toh(x) betoh64(x)
-#	define le64toh(x) letoh64(x)
-#else
-#	error Must define one of: RHO_OS_{LINUX, MACOS, OPENBSD, NETBSD, FREEBSD}
-#endif
 
 RHO_DECLS_END
 

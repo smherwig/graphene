@@ -63,7 +63,7 @@ static int sgx_ocall_exit(void* prv)
     int64_t rv = (int64_t) prv;
     ODEBUG(OCALL_EXIT, NULL);
     if (rv != (int64_t) ((uint8_t) rv)) {
-        SGX_DBG(DBG_E, "Saturation error in exit code %d, getting rounded down to %u\n", rv, (uint8_t) rv);
+        SGX_DBG(DBG_E, "Saturation error in exit code %ld, getting rounded down to %u\n", rv, (uint8_t) rv);
         rv = 255;
     }
 
@@ -418,7 +418,7 @@ static int sgx_ocall_sock_connect(void * pms)
         goto err;
 
     fd = ret;
-    if (ms->ms_addr->sa_family == AF_INET6) {
+    if (ms->ms_addr && ms->ms_addr->sa_family == AF_INET6) {
         int ipv6only = 1;
         INLINE_SYSCALL(setsockopt, 5, fd, SOL_IPV6, IPV6_V6ONLY, &ipv6only,
                        sizeof(int));
@@ -431,18 +431,20 @@ static int sgx_ocall_sock_connect(void * pms)
             goto err_fd;
     }
 
-    ret = INLINE_SYSCALL(connect, 3, fd, ms->ms_addr, ms->ms_addrlen);
+    if (ms->ms_addr) {
+        ret = INLINE_SYSCALL(connect, 3, fd, ms->ms_addr, ms->ms_addrlen);
 
-    if (IS_ERR(ret) && ERRNO(ret) == EINPROGRESS) {
-        do {
-            struct pollfd pfd = { .fd = fd, .events = POLLOUT, .revents = 0, };
-            ret = INLINE_SYSCALL(ppoll, 4, &pfd, 1, NULL, NULL);
-        } while (IS_ERR(ret) &&
-                 ERRNO(ret) == -EWOULDBLOCK);
+        if (IS_ERR(ret) && ERRNO(ret) == EINPROGRESS) {
+            do {
+                struct pollfd pfd = { .fd = fd, .events = POLLOUT, .revents = 0, };
+                ret = INLINE_SYSCALL(ppoll, 4, &pfd, 1, NULL, NULL);
+            } while (IS_ERR(ret) &&
+                    ERRNO(ret) == -EWOULDBLOCK);
+        }
+
+        if (IS_ERR(ret))
+            goto err_fd;
     }
-
-    if (IS_ERR(ret))
-        goto err_fd;
 
     if (ms->ms_bind_addr && !ms->ms_bind_addr->sa_family) {
         socklen_t addrlen;
@@ -493,13 +495,13 @@ static int sgx_ocall_sock_send(void * pms)
     ODEBUG(OCALL_SOCK_SEND, ms);
     const struct sockaddr * addr = ms->ms_addr;
     socklen_t addrlen = ms->ms_addr ? ms->ms_addrlen : 0;
+    struct sockaddr_in mcast_addr;
 
     if (ms->ms_sockfd == PAL_SEC()->mcast_srv) {
-        struct sockaddr_in * mcast_addr = __alloca(sizeof(struct sockaddr_in));
-        mcast_addr->sin_family = AF_INET;
-        inet_pton4(MCAST_GROUP, sizeof(MCAST_GROUP),  &mcast_addr->sin_addr.s_addr);
-        mcast_addr->sin_port = htons(PAL_SEC()->mcast_port);
-        addr = (struct sockaddr *) mcast_addr;
+        mcast_addr.sin_family = AF_INET;
+        inet_pton4(MCAST_GROUP, sizeof(MCAST_GROUP),  &mcast_addr.sin_addr.s_addr);
+        mcast_addr.sin_port = htons(PAL_SEC()->mcast_port);
+        addr = (struct sockaddr *) &mcast_addr;
         addrlen = sizeof(struct sockaddr_in);
     }
 
@@ -646,11 +648,20 @@ static int sgx_ocall_sleep(void * pms)
         return 0;
     }
     struct timespec req, rem;
-    req.tv_sec  = ms->ms_microsec / 1000000;
-    req.tv_nsec = (ms->ms_microsec - req.tv_sec * 1000000) * 1000;
+    unsigned long microsec = ms->ms_microsec;
+#define VERY_LONG_TIME_IN_US    (1000000L * 60 * 60 * 24 * 365 * 128)
+    if (ms->ms_microsec > VERY_LONG_TIME_IN_US) {
+        /* avoid overflow with time_t */
+        req.tv_sec  = VERY_LONG_TIME_IN_US / 1000000;
+        req.tv_nsec = 0;
+    } else {
+        req.tv_sec = ms->ms_microsec / 1000000;
+        req.tv_nsec = (microsec - req.tv_sec * 1000000) * 1000;
+    }
+
     ret = INLINE_SYSCALL(nanosleep, 2, &req, &rem);
     if (IS_ERR(ret) && ERRNO(ret) == EINTR)
-        ms->ms_microsec = rem.tv_sec * 1000000 + rem.tv_nsec / 1000;
+        ms->ms_microsec = rem.tv_sec * 1000000UL + rem.tv_nsec / 1000UL;
     return ret;
 }
 

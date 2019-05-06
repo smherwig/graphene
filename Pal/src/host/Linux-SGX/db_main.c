@@ -156,7 +156,7 @@ static const char** make_argv_list(void * uptr_src, uint64_t src_size) {
         return NULL;
     }
 
-    if (sgx_copy_to_enclave(data, uptr_src, src_size) != 0) {
+    if (!sgx_copy_to_enclave(data, src_size, uptr_src, src_size)) {
         goto free_and_err;
     }
     data[src_size - 1] = '\0';
@@ -195,6 +195,7 @@ free_and_err:
 }
 
 extern void * enclave_base;
+extern void * enclave_top;
 
 void pal_linux_main(char * uptr_args, uint64_t args_size,
                     char * uptr_env, uint64_t env_size,
@@ -210,21 +211,26 @@ void pal_linux_main(char * uptr_args, uint64_t args_size,
     int rv;
 
     struct pal_sec sec_info;
-    if (sgx_copy_to_enclave(&sec_info, uptr_sec_info, sizeof(sec_info)) != 0) {
+    if (!sgx_copy_to_enclave(&sec_info, sizeof(sec_info), uptr_sec_info, sizeof(sec_info))) {
         return;
     }
 
+    pal_sec.heap_min = GET_ENCLAVE_TLS(heap_min);
+    pal_sec.heap_max = GET_ENCLAVE_TLS(heap_max);
+    pal_sec.exec_addr = GET_ENCLAVE_TLS(exec_addr);
+    pal_sec.exec_size = GET_ENCLAVE_TLS(exec_size);
+
     /* Zero the heap. We need to take care to not zero the exec area. */
 
-    void* zero1_start = sec_info.heap_min;
-    void* zero1_end = sec_info.heap_max;
+    void* zero1_start = pal_sec.heap_min;
+    void* zero1_end = pal_sec.heap_max;
 
-    void* zero2_start = sec_info.heap_max;
-    void* zero2_end = sec_info.heap_max;
+    void* zero2_start = pal_sec.heap_max;
+    void* zero2_end = pal_sec.heap_max;
 
-    if (sec_info.exec_addr != NULL) {
-        zero1_end = MIN(zero1_end, sec_info.exec_addr);
-        zero2_start = MIN(zero2_start, sec_info.exec_addr + sec_info.exec_size);
+    if (pal_sec.exec_addr != NULL) {
+        zero1_end = MIN(zero1_end, pal_sec.exec_addr);
+        zero2_start = MIN(zero2_start, pal_sec.exec_addr + pal_sec.exec_size);
     }
 
     memset(zero1_start, 0, zero1_end - zero1_start);
@@ -285,18 +291,6 @@ void pal_linux_main(char * uptr_args, uint64_t args_size,
     pal_sec.uid = sec_info.uid;
     pal_sec.gid = sec_info.gid;
 
-
-    /* TODO: remove with PR #589 */
-    pal_sec.heap_min = sec_info.heap_min;
-    pal_sec.heap_max = sec_info.heap_max;
-
-    /* TODO: remove with PR #588 */
-    pal_sec.exec_addr = sec_info.exec_addr;
-    pal_sec.exec_size = sec_info.exec_size;
-
-    /* TODO: remove with PR #580 */
-    pal_sec.manifest_addr = sec_info.manifest_addr;
-    pal_sec.manifest_size = sec_info.manifest_size;
 
     /* set up page allocator and slab manager */
     init_slab_mgr(pagesz);
@@ -361,11 +355,14 @@ void pal_linux_main(char * uptr_args, uint64_t args_size,
         SGX_DBG(DBG_I, "Run without executable\n");
     }
 
+    uint64_t manifest_size = GET_ENCLAVE_TLS(manifest_size);
+    void* manifest_addr = enclave_top - ALIGN_UP_PTR(manifest_size, pagesz);
+
     /* parse manifest data into config storage */
     struct config_store * root_config =
             malloc(sizeof(struct config_store));
-    root_config->raw_data = pal_sec.manifest_addr;
-    root_config->raw_size = pal_sec.manifest_size;
+    root_config->raw_data = manifest_addr;
+    root_config->raw_size = manifest_size;
     root_config->malloc = malloc;
     root_config->free = free;
 
@@ -376,9 +373,8 @@ void pal_linux_main(char * uptr_args, uint64_t args_size,
     }
 
     pal_state.root_config = root_config;
-    __pal_control.manifest_preload.start = (PAL_PTR) pal_sec.manifest_addr;
-    __pal_control.manifest_preload.end = (PAL_PTR) pal_sec.manifest_addr +
-                                         pal_sec.manifest_size;
+    __pal_control.manifest_preload.start = (PAL_PTR) manifest_addr;
+    __pal_control.manifest_preload.end = (PAL_PTR) manifest_addr + manifest_size;
 
     init_trusted_files();
     init_trusted_children();

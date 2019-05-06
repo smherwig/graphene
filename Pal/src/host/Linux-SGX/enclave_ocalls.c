@@ -13,36 +13,11 @@
 #include "ocall_types.h"
 #include "ecall_types.h"
 #include <api.h>
-
 #include <asm/errno.h>
 #include <linux/futex.h>
 #include "rpcqueue.h"
 
 rpc_queue_t* g_rpc_queue;  /* pointer to untrusted queue */
-
-static void* alloc_in_user(void* ptr, uint64_t size) {
-    if (!sgx_is_completely_within_enclave(ptr, size))
-        return ptr;
-
-    return sgx_ocalloc(size);
-}
-
-static void* copy_to_user(const void* ptr, uint64_t size) {
-    if (!sgx_is_completely_within_enclave(ptr, size))
-        return (void*)ptr;
-
-    void* tmp = sgx_ocalloc(size);
-    memcpy(tmp, ptr, size);
-    return tmp;
-}
-
-static void copy_from_user(void* ptr, const void* user_ptr, uint64_t size) {
-    if (sgx_is_completely_within_enclave(user_ptr, size) ||
-            !sgx_is_completely_within_enclave(ptr, size))
-        return;
-
-    memcpy(ptr, user_ptr, size);
-}
 
 static int sgx_exitless_ocall(int code, void* ms) {
     /* perform OCALL with enclave exit if no RPC queue */
@@ -54,10 +29,10 @@ static int sgx_exitless_ocall(int code, void* ms) {
      * so we pad OCALL stack to 4B alignment with dummy chars */
     char* dummy;
     do {
-        dummy = sgx_ocalloc(sizeof(*dummy));
+        dummy = sgx_alloc_on_ustack(sizeof(*dummy));
     } while ((uint64_t)dummy % 4 != 0);
 
-    rpc_request_t* req = sgx_ocalloc(sizeof(*req));
+    rpc_request_t* req = sgx_alloc_on_ustack(sizeof(*req));
     req->ocall_index = code;
     req->buffer      = ms;
     atomic_set(&req->lock, REQ_LOCKED_NO_WAITERS);
@@ -82,7 +57,7 @@ static int sgx_exitless_ocall(int code, void* ms) {
                     atomic_cmpxchg(&req->lock, REQ_LOCKED_NO_WAITERS, REQ_LOCKED_WITH_WAITERS)) {
 
                     /* allocate futex args on OCALL stack; automatically freed on OCALL end */
-                    ms_ocall_futex_t * ms = sgx_ocalloc(sizeof(*ms));
+                    ms_ocall_futex_t * ms = sgx_alloc_on_ustack(sizeof(*ms));
                     ms->ms_futex = (int*)&req->lock.counter;
                     ms->ms_op = FUTEX_WAIT_PRIVATE;
                     ms->ms_val = REQ_LOCKED_WITH_WAITERS;
@@ -117,7 +92,7 @@ static int sgx_exitless_ocall(int code, void* ms) {
  *    void* frame = sgx_ocget_frame();
  *
  *    // push struct with all OCALL args on current OCALL stack frame
- *    ms_ocall_new_syscall_t * ms = sgx_ocalloc(sizeof(*ms));
+ *    ms_ocall_new_syscall_t * ms = sgx_alloc_on_ustack(sizeof(*ms));
  *    ms->ms_arg1 = arg1;
  *    ms->ms_arg2 = arg2;
  *
@@ -152,41 +127,54 @@ int ocall_exit(int exitcode)
 int ocall_print_string (const char * str, unsigned int length)
 {
     int retval = 0;
-    void* frame = sgx_ocget_frame();
+    ms_ocall_print_string_t * ms;
 
-    if (!str || length <= 0) {
-        sgx_ocfree_frame(frame);
+    ms = sgx_alloc_on_ustack(sizeof(*ms));
+    if (!ms) {
+        sgx_reset_ustack();
         return -EPERM;
     }
 
-    ms_ocall_print_string_t * ms = sgx_ocalloc(sizeof(*ms));
-    ms->ms_str = copy_to_user(str, length);
+    if (!str || length <= 0) {
+        sgx_reset_ustack();
+        return -EPERM;
+    }
+
     ms->ms_length = length;
+    ms->ms_str = sgx_copy_to_ustack(str, length);
+
+    if (!ms->ms_str) {
+        sgx_reset_ustack();
+        return -EPERM;
+    }
 
     retval = sgx_exitless_ocall(OCALL_PRINT_STRING, ms);
 
-    sgx_ocfree_frame(frame);
+    sgx_reset_ustack();
     return retval;
 }
 
 int ocall_alloc_untrusted (uint64_t size, void ** mem)
 {
     int retval = 0;
-    void* frame = sgx_ocget_frame();
+    ms_ocall_alloc_untrusted_t * ms;
 
-    ms_ocall_alloc_untrusted_t * ms = sgx_ocalloc(sizeof(*ms));
+    ms = sgx_alloc_on_ustack(sizeof(*ms));
+    if (!ms) {
+        sgx_reset_ustack();
+        return -EPERM;
+    }
     ms->ms_size = size;
 
     retval = sgx_exitless_ocall(OCALL_ALLOC_UNTRUSTED, ms);
     if (!retval) {
-        if (!sgx_is_completely_outside_enclave(ms->ms_mem, size)) {
-            sgx_ocfree_frame(frame);
+        if (!sgx_copy_ptr_to_enclave(mem, ms->ms_mem, size)) {
+            sgx_reset_ustack();
             return -EPERM;
         }
-        *mem = ms->ms_mem;
     }
 
-    sgx_ocfree_frame(frame);
+    sgx_reset_ustack();
     return retval;
 }
 
@@ -195,44 +183,55 @@ int ocall_map_untrusted (int fd, uint64_t offset,
                          void ** mem)
 {
     int retval = 0;
-    void* frame = sgx_ocget_frame();
+    ms_ocall_map_untrusted_t * ms;
 
-    ms_ocall_map_untrusted_t * ms = sgx_ocalloc(sizeof(*ms));
+    ms = sgx_alloc_on_ustack(sizeof(*ms));
+    if (!ms) {
+        sgx_reset_ustack();
+        return -EPERM;
+    }
+
     ms->ms_fd = fd;
     ms->ms_offset = offset;
     ms->ms_size = size;
     ms->ms_prot = prot;
 
     retval = sgx_exitless_ocall(OCALL_MAP_UNTRUSTED, ms);
+
     if (!retval) {
-        if (!sgx_is_completely_outside_enclave(ms->ms_mem, size)) {
-            sgx_ocfree_frame(frame);
+        if (!sgx_copy_ptr_to_enclave(mem, ms->ms_mem, size)) {
+            sgx_reset_ustack();
             return -EPERM;
         }
-        *mem = ms->ms_mem;
     }
 
-    sgx_ocfree_frame(frame);
+    sgx_reset_ustack();
+
     return retval;
 }
 
 int ocall_unmap_untrusted (const void * mem, uint64_t size)
 {
     int retval = 0;
-    void* frame = sgx_ocget_frame();
+    ms_ocall_unmap_untrusted_t * ms;
 
     if (!sgx_is_completely_outside_enclave(mem, size)) {
-        sgx_ocfree_frame(frame);
+        sgx_reset_ustack();
         return -EINVAL;
     }
 
-    ms_ocall_unmap_untrusted_t * ms = sgx_ocalloc(sizeof(*ms));
+    ms = sgx_alloc_on_ustack(sizeof(*ms));
+    if (!ms) {
+        sgx_reset_ustack();
+        return -EPERM;
+    }
+
     ms->ms_mem  = mem;
     ms->ms_size = size;
 
     retval = sgx_exitless_ocall(OCALL_UNMAP_UNTRUSTED, ms);
 
-    sgx_ocfree_frame(frame);
+    sgx_reset_ustack();
     return retval;
 }
 
@@ -240,13 +239,19 @@ int ocall_cpuid (unsigned int leaf, unsigned int subleaf,
                  unsigned int values[4])
 {
     int retval = 0;
-    void* frame = sgx_ocget_frame();
+    ms_ocall_cpuid_t * ms;
 
-    ms_ocall_cpuid_t * ms = sgx_ocalloc(sizeof(*ms));
+    ms = sgx_alloc_on_ustack(sizeof(*ms));
+    if (!ms) {
+        sgx_reset_ustack();
+        return -EPERM;
+    }
+
     ms->ms_leaf = leaf;
     ms->ms_subleaf = subleaf;
 
     retval = sgx_exitless_ocall(OCALL_CPUID, ms);
+
     if (!retval) {
         values[0] = ms->ms_values[0];
         values[1] = ms->ms_values[1];
@@ -254,48 +259,61 @@ int ocall_cpuid (unsigned int leaf, unsigned int subleaf,
         values[3] = ms->ms_values[3];
     }
 
-    sgx_ocfree_frame(frame);
+    sgx_reset_ustack();
     return retval;
 }
 
 int ocall_open (const char * pathname, int flags, unsigned short mode)
 {
     int retval = 0;
-    void* frame = sgx_ocget_frame();
-
     int len = pathname ? strlen(pathname) + 1 : 0;
+    ms_ocall_open_t * ms;
 
-    ms_ocall_open_t * ms = sgx_ocalloc(sizeof(*ms));
-    ms->ms_pathname = copy_to_user(pathname, len);
+    ms = sgx_alloc_on_ustack(sizeof(*ms));
+    if (!ms) {
+        sgx_reset_ustack();
+        return -EPERM;
+    }
+
     ms->ms_flags = flags;
     ms->ms_mode = mode;
+    ms->ms_pathname = sgx_copy_to_ustack(pathname, len);
+
+    if (!ms->ms_pathname) {
+        sgx_reset_ustack();
+        return -EPERM;
+    }
 
     retval = sgx_exitless_ocall(OCALL_OPEN, ms);
 
-    sgx_ocfree_frame(frame);
+    sgx_reset_ustack();
     return retval;
 }
 
 int ocall_close (int fd)
 {
     int retval = 0;
-    void* frame = sgx_ocget_frame();
+    ms_ocall_close_t *ms;
 
-    ms_ocall_close_t *ms = sgx_ocalloc(sizeof(*ms));
+    ms = sgx_alloc_on_ustack(sizeof(*ms));
+    if (!ms) {
+        sgx_reset_ustack();
+        return -EPERM;
+    }
+
     ms->ms_fd = fd;
 
     retval = sgx_exitless_ocall(OCALL_CLOSE, ms);
 
-    sgx_ocfree_frame(frame);
+    sgx_reset_ustack();
     return retval;
 }
 
 int ocall_read (int fd, void * buf, unsigned int count)
 {
     int retval = 0;
-    void* frame = sgx_ocget_frame();
-
     void * obuf = NULL;
+    ms_ocall_read_t * ms;
 
     if (count > PRESET_PAGESIZE) {
         retval = ocall_alloc_untrusted(ALLOC_ALIGNUP(count), &obuf);
@@ -303,181 +321,256 @@ int ocall_read (int fd, void * buf, unsigned int count)
             return retval;
     }
 
-    ms_ocall_read_t * ms = sgx_ocalloc(sizeof(*ms));
+    ms = sgx_alloc_on_ustack(sizeof(*ms));
+    if (!ms) {
+        retval = -EPERM;
+        goto out;
+    }
+
     ms->ms_fd = fd;
+    ms->ms_count = count;
     if (obuf)
         ms->ms_buf = obuf;
     else
-        ms->ms_buf = sgx_ocalloc(count);
-    ms->ms_count = count;
+        ms->ms_buf = sgx_alloc_on_ustack(count);
+
+    if (!ms->ms_buf) {
+        retval = -EPERM;
+        goto out;
+    }
 
     retval = sgx_exitless_ocall(OCALL_READ, ms);
 
-    if (retval > 0)
-        memcpy(buf, ms->ms_buf, retval);
+    if (retval > 0) {
+        if (!sgx_copy_to_enclave(buf, count, ms->ms_buf, retval)) {
+            retval = -EPERM;
+            goto out;
+        }
+    }
 
-    sgx_ocfree_frame(frame);
-
+out:
+    sgx_reset_ustack();
     if (obuf)
         ocall_unmap_untrusted(obuf, ALLOC_ALIGNUP(count));
-
     return retval;
 }
 
 int ocall_write (int fd, const void * buf, unsigned int count)
 {
     int retval = 0;
-    void* frame = sgx_ocget_frame();
-
     void * obuf = NULL;
+    ms_ocall_write_t * ms;
 
     if (count > PRESET_PAGESIZE) {
         retval = ocall_alloc_untrusted(ALLOC_ALIGNUP(count), &obuf);
-        if (retval < 0)
+        if (IS_ERR(retval))
             return retval;
     }
 
-    ms_ocall_write_t * ms = sgx_ocalloc(sizeof(*ms));
+    ms = sgx_alloc_on_ustack(sizeof(*ms));
+    if (!ms) {
+        retval = -EPERM;
+        goto out;
+    }
+
     ms->ms_fd = fd;
+    ms->ms_count = count;
     if (obuf) {
         ms->ms_buf = obuf;
         memcpy(obuf, buf, count);
     } else {
-        ms->ms_buf = copy_to_user(buf, count);
+        ms->ms_buf = sgx_copy_to_ustack(buf, count);
     }
-    ms->ms_count = count;
+
+    if (!ms->ms_buf) {
+        retval = -EPERM;
+        goto out;
+    }
 
     retval = sgx_exitless_ocall(OCALL_WRITE, ms);
 
-    sgx_ocfree_frame(frame);
-
+out:
+    sgx_reset_ustack();
     if (obuf)
         ocall_unmap_untrusted(obuf, ALLOC_ALIGNUP(count));
-
     return retval;
 }
 
 int ocall_fstat (int fd, struct stat * buf)
 {
     int retval = 0;
-    void* frame = sgx_ocget_frame();
+    ms_ocall_fstat_t * ms;
 
-    ms_ocall_fstat_t * ms = sgx_ocalloc(sizeof(*ms));
+    ms = sgx_alloc_on_ustack(sizeof(*ms));
+    if (!ms) {
+        sgx_reset_ustack();
+        return -EPERM;
+    }
+
     ms->ms_fd = fd;
 
     retval = sgx_exitless_ocall(OCALL_FSTAT, ms);
+
     if (!retval)
         memcpy(buf, &ms->ms_stat, sizeof(struct stat));
 
-    sgx_ocfree_frame(frame);
+    sgx_reset_ustack();
     return retval;
 }
 
 int ocall_fionread (int fd)
 {
     int retval = 0;
-    void* frame = sgx_ocget_frame();
+    ms_ocall_fionread_t * ms;
 
-    ms_ocall_fionread_t * ms = sgx_ocalloc(sizeof(*ms));
+    ms = sgx_alloc_on_ustack(sizeof(*ms));
+    if (!ms) {
+        sgx_reset_ustack();
+        return -EPERM;
+    }
+
     ms->ms_fd = fd;
 
     retval = sgx_exitless_ocall(OCALL_FIONREAD, ms);
 
-    sgx_ocfree_frame(frame);
+    sgx_reset_ustack();
     return retval;
 }
 
 int ocall_fsetnonblock (int fd, int nonblocking)
 {
     int retval = 0;
-    void* frame = sgx_ocget_frame();
+    ms_ocall_fsetnonblock_t * ms;
 
-    ms_ocall_fsetnonblock_t * ms = sgx_ocalloc(sizeof(*ms));
+    ms = sgx_alloc_on_ustack(sizeof(*ms));
+    if (!ms) {
+        sgx_reset_ustack();
+        return -EPERM;
+    }
+
     ms->ms_fd = fd;
     ms->ms_nonblocking = nonblocking;
 
     retval = sgx_exitless_ocall(OCALL_FSETNONBLOCK, ms);
 
-    sgx_ocfree_frame(frame);
+    sgx_reset_ustack();
     return retval;
 }
 
 int ocall_fchmod (int fd, unsigned short mode)
 {
     int retval = 0;
-    void* frame = sgx_ocget_frame();
+    ms_ocall_fchmod_t * ms;
 
-    ms_ocall_fchmod_t * ms = sgx_ocalloc(sizeof(*ms));
+    ms = sgx_alloc_on_ustack(sizeof(*ms));
+    if (!ms) {
+        sgx_reset_ustack();
+        return -EPERM;
+    }
+
     ms->ms_fd = fd;
     ms->ms_mode = mode;
 
     retval = sgx_exitless_ocall(OCALL_FCHMOD, ms);
 
-    sgx_ocfree_frame(frame);
+    sgx_reset_ustack();
     return retval;
 }
 
 int ocall_fsync (int fd)
 {
     int retval = 0;
-    void* frame = sgx_ocget_frame();
+    ms_ocall_fsync_t * ms;
 
-    ms_ocall_fsync_t * ms = sgx_ocalloc(sizeof(*ms));
+    ms = sgx_alloc_on_ustack(sizeof(*ms));
+    if (!ms) {
+        sgx_reset_ustack();
+        return -EPERM;
+    }
+
     ms->ms_fd = fd;
 
     retval = sgx_exitless_ocall(OCALL_FSYNC, ms);
 
-    sgx_ocfree_frame(frame);
+    sgx_reset_ustack();
     return retval;
 }
 
 int ocall_ftruncate (int fd, uint64_t length)
 {
     int retval = 0;
-    void* frame = sgx_ocget_frame();
+    ms_ocall_ftruncate_t * ms;
 
-    ms_ocall_ftruncate_t * ms = sgx_ocalloc(sizeof(*ms));
+    ms = sgx_alloc_on_ustack(sizeof(*ms));
+    if (!ms) {
+        sgx_reset_ustack();
+        return -EPERM;
+    }
+
     ms->ms_fd = fd;
     ms->ms_length = length;
 
     retval = sgx_exitless_ocall(OCALL_FTRUNCATE, ms);
 
-    sgx_ocfree_frame(frame);
+    sgx_reset_ustack();
     return retval;
 }
 
 int ocall_mkdir (const char * pathname, unsigned short mode)
 {
     int retval = 0;
-    void* frame = sgx_ocget_frame();
-
     int len = pathname ? strlen(pathname) + 1 : 0;
+    ms_ocall_mkdir_t * ms;
 
-    ms_ocall_mkdir_t * ms = sgx_ocalloc(sizeof(*ms));
-    ms->ms_pathname = copy_to_user(pathname, len);
+    ms = sgx_alloc_on_ustack(sizeof(*ms));
+    if (!ms) {
+        sgx_reset_ustack();
+        return -EPERM;
+    }
+
     ms->ms_mode = mode;
+    ms->ms_pathname = sgx_copy_to_ustack(pathname, len);
+
+    if (!ms->ms_pathname) {
+        sgx_reset_ustack();
+        return -EPERM;
+    }
 
     retval = sgx_exitless_ocall(OCALL_MKDIR, ms);
 
-    sgx_ocfree_frame(frame);
+    sgx_reset_ustack();
     return retval;
 }
 
 int ocall_getdents (int fd, struct linux_dirent64 * dirp, unsigned int size)
 {
     int retval = 0;
-    void* frame = sgx_ocget_frame();
+    ms_ocall_getdents_t * ms;
 
-    ms_ocall_getdents_t * ms = sgx_ocalloc(sizeof(*ms));
+    ms = sgx_alloc_on_ustack(sizeof(*ms));
+    if (!ms) {
+        sgx_reset_ustack();
+        return -EPERM;
+    }
     ms->ms_fd = fd;
-    ms->ms_dirp = alloc_in_user(dirp, size);
     ms->ms_size = size;
+    ms->ms_dirp = sgx_alloc_on_ustack(size);
+
+    if (!ms->ms_dirp) {
+        sgx_reset_ustack();
+        return -EPERM;
+    }
 
     retval = sgx_exitless_ocall(OCALL_GETDENTS, ms);
-    if (retval > 0)
-        copy_from_user(dirp, ms->ms_dirp, retval);
 
-    sgx_ocfree_frame(frame);
+    if (retval > 0) {
+        if (!sgx_copy_to_enclave(dirp, size, ms->ms_dirp, retval)) {
+            sgx_reset_ustack();
+            return -EPERM;
+        }
+    }
+
+    sgx_reset_ustack();
     return retval;
 }
 
@@ -494,19 +587,34 @@ int ocall_create_process (const char * uri,
                           unsigned int * pid)
 {
     int retval = 0;
-    void* frame = sgx_ocget_frame();
-
     int ulen = uri ? strlen(uri) + 1 : 0;
+    ms_ocall_create_process_t * ms;
 
-    ms_ocall_create_process_t * ms = sgx_ocalloc(sizeof(*ms) + sizeof(char *) * nargs);
-    ms->ms_uri = uri ? copy_to_user(uri, ulen) : NULL;
+    ms = sgx_alloc_on_ustack(sizeof(*ms) + nargs * sizeof(char *));
+    if (!ms) {
+        sgx_reset_ustack();
+        return -EPERM;
+    }
+
+    ms->ms_uri = uri ? sgx_copy_to_ustack(uri, ulen) : NULL;
+    if (uri && !ms->ms_uri) {
+        sgx_reset_ustack();
+        return -EPERM;
+    }
+
     ms->ms_nargs = nargs;
     for (int i = 0 ; i < nargs ; i++) {
         int len = args[i] ? strlen(args[i]) + 1 : 0;
-        ms->ms_args[i] = args[i] ? copy_to_user(args[i], len) : NULL;
+        ms->ms_args[i] = args[i] ? sgx_copy_to_ustack(args[i], len) : NULL;
+
+        if (args[i] && !ms->ms_args[i]) {
+            sgx_reset_ustack();
+            return -EPERM;
+        }
     }
 
     retval = sgx_exitless_ocall(OCALL_CREATE_PROCESS, ms);
+
     if (!retval) {
         if (pid)
             *pid = ms->ms_pid;
@@ -515,7 +623,7 @@ int ocall_create_process (const char * uri,
         procfds[2] = ms->ms_proc_fds[2];
     }
 
-    sgx_ocfree_frame(frame);
+    sgx_reset_ustack();
     return retval;
 }
 
@@ -523,14 +631,20 @@ int ocall_futex (int * futex, int op, int val,
                  const uint64_t * timeout)
 {
     int retval = 0;
-    void* frame = sgx_ocget_frame();
+    ms_ocall_futex_t * ms;
+
 
     if (!sgx_is_completely_outside_enclave(futex, sizeof(int))) {
-        sgx_ocfree_frame(frame);
+        sgx_reset_ustack();
         return -EINVAL;
     }
 
-    ms_ocall_futex_t * ms = sgx_ocalloc(sizeof(*ms));
+    ms = sgx_alloc_on_ustack(sizeof(*ms));
+    if (!ms) {
+        sgx_reset_ustack();
+        return -EPERM;
+    }
+
     ms->ms_futex = futex;
     ms->ms_op = op;
     ms->ms_val = val;
@@ -538,7 +652,7 @@ int ocall_futex (int * futex, int op, int val,
 
     retval = sgx_exitless_ocall(OCALL_FUTEX, ms);
 
-    sgx_ocfree_frame(frame);
+    sgx_reset_ustack();
     return retval;
 }
 
@@ -546,20 +660,26 @@ int ocall_socketpair (int domain, int type, int protocol,
                       int sockfds[2])
 {
     int retval = 0;
-    void* frame = sgx_ocget_frame();
+    ms_ocall_socketpair_t * ms;
 
-    ms_ocall_socketpair_t * ms = sgx_ocalloc(sizeof(*ms));
+    ms = sgx_alloc_on_ustack(sizeof(*ms));
+    if (!ms) {
+        sgx_reset_ustack();
+        return -EPERM;
+    }
+
     ms->ms_domain = domain;
     ms->ms_type = type;
     ms->ms_protocol = protocol;
 
     retval = sgx_exitless_ocall(OCALL_SOCKETPAIR, ms);
+
     if (!retval) {
         sockfds[0] = ms->ms_sockfds[0];
         sockfds[1] = ms->ms_sockfds[1];
     }
 
-    sgx_ocfree_frame(frame);
+    sgx_reset_ustack();
     return retval;
 }
 
@@ -568,35 +688,46 @@ int ocall_sock_listen (int domain, int type, int protocol,
                        struct sockopt * sockopt)
 {
     int retval = 0;
-    void* frame = sgx_ocget_frame();
+    unsigned int copied;
+    unsigned int len = addrlen ? *addrlen : 0;
+    ms_ocall_sock_listen_t * ms;
 
-    unsigned int bind_len = *addrlen;
+    ms = sgx_alloc_on_ustack(sizeof(*ms));
+    if (!ms) {
+        sgx_reset_ustack();
+        return -EPERM;
+    }
 
-    ms_ocall_sock_listen_t * ms = sgx_ocalloc(sizeof(*ms));
     ms->ms_domain = domain;
     ms->ms_type = type;
     ms->ms_protocol = protocol;
-    ms->ms_addr = copy_to_user(addr, bind_len);
-    ms->ms_addrlen = bind_len;
 
-    retval = sgx_exitless_ocall(OCALL_SOCK_LISTEN, ms);
-    if (retval >= 0) {
-        if (addrlen && (
-            !sgx_is_completely_outside_enclave(ms->ms_addr, bind_len) ||
-            ms->ms_addrlen > bind_len)) {
-            sgx_ocfree_frame(frame);
-            return -EPERM;
-        }
+    ms->ms_addrlen = len;
+    ms->ms_addr = (addr && len) ? sgx_copy_to_ustack(addr, len) : NULL;
 
-        if (addr) {
-            copy_from_user(addr, ms->ms_addr, ms->ms_addrlen);
-            *addrlen = ms->ms_addrlen;
-        }
-        if (sockopt)
-            *sockopt = ms->ms_sockopt;
+    if (addr && len && !ms->ms_addr) {
+        sgx_reset_ustack();
+        return -EPERM;
     }
 
-    sgx_ocfree_frame(frame);
+    retval = sgx_exitless_ocall(OCALL_SOCK_LISTEN, ms);
+
+    if (retval >= 0) {
+        if (addr && len) {
+            copied = sgx_copy_to_enclave(addr, len, ms->ms_addr, ms->ms_addrlen);
+            if (!copied) {
+                sgx_reset_ustack();
+                return -EPERM;
+            }
+            *addrlen = copied;
+        }
+
+        if (sockopt) {
+            *sockopt = ms->ms_sockopt;
+        }
+    }
+
+    sgx_reset_ustack();
     return retval;
 }
 
@@ -604,32 +735,43 @@ int ocall_sock_accept (int sockfd, struct sockaddr * addr,
                        unsigned int * addrlen, struct sockopt * sockopt)
 {
     int retval = 0;
-    void* frame = sgx_ocget_frame();
-
+    unsigned int copied;
     unsigned int len = addrlen ? *addrlen : 0;
+    ms_ocall_sock_accept_t * ms;
 
-    ms_ocall_sock_accept_t * ms = sgx_ocalloc(sizeof(*ms));
-    ms->ms_sockfd = sockfd;
-    ms->ms_addr = copy_to_user(addr, len);
-    ms->ms_addrlen = len;
-
-    retval = sgx_exitless_ocall(OCALL_SOCK_ACCEPT, ms);
-    if (retval >= 0) {
-        if (len && (!sgx_is_completely_outside_enclave(ms->ms_addr, len) ||
-                    ms->ms_addrlen > len)) {
-            sgx_ocfree_frame(frame);
-            return -EPERM;
-        }
-
-        if (addr) {
-            copy_from_user(addr, ms->ms_addr, ms->ms_addrlen);
-            *addrlen = ms->ms_addrlen;
-        }
-        if (sockopt)
-            *sockopt = ms->ms_sockopt;
+    ms = sgx_alloc_on_ustack(sizeof(*ms));
+    if (!ms) {
+        sgx_reset_ustack();
+        return -EPERM;
     }
 
-    sgx_ocfree_frame(frame);
+    ms->ms_sockfd = sockfd;
+    ms->ms_addrlen = len;
+    ms->ms_addr = (addr && len) ? sgx_copy_to_ustack(addr, len) : NULL;
+
+    if (addr && len && !ms->ms_addr) {
+        sgx_reset_ustack();
+        return -EPERM;
+    }
+
+    retval = sgx_exitless_ocall(OCALL_SOCK_ACCEPT, ms);
+
+    if (retval >= 0) {
+        if (addr && len) {
+            copied = sgx_copy_to_enclave(addr, len, ms->ms_addr, ms->ms_addrlen);
+            if (!copied) {
+                sgx_reset_ustack();
+                return -EPERM;
+            }
+            *addrlen = copied;
+        }
+
+        if (sockopt) {
+            *sockopt = ms->ms_sockopt;
+        }
+    }
+
+    sgx_reset_ustack();
     return retval;
 }
 
@@ -640,38 +782,47 @@ int ocall_sock_connect (int domain, int type, int protocol,
                         unsigned int * bind_addrlen, struct sockopt * sockopt)
 {
     int retval = 0;
-    void* frame = sgx_ocget_frame();
-
+    unsigned int copied;
     unsigned int bind_len = bind_addrlen ? *bind_addrlen : 0;
+    ms_ocall_sock_connect_t * ms;
 
-    ms_ocall_sock_connect_t * ms = sgx_ocalloc(sizeof(*ms));
+    ms = sgx_alloc_on_ustack(sizeof(*ms));
+    if (!ms) {
+        sgx_reset_ustack();
+        return -EPERM;
+    }
+
     ms->ms_domain = domain;
     ms->ms_type = type;
     ms->ms_protocol = protocol;
-    ms->ms_addr = copy_to_user(addr, addrlen);
     ms->ms_addrlen = addrlen;
-    ms->ms_bind_addr = bind_addr ? copy_to_user(bind_addr, bind_len) : NULL;
     ms->ms_bind_addrlen = bind_len;
+    ms->ms_addr = addr ? sgx_copy_to_ustack(addr, addrlen) : NULL;
+    ms->ms_bind_addr = bind_addr ? sgx_copy_to_ustack(bind_addr, bind_len) : NULL;
 
-    retval = sgx_exitless_ocall(OCALL_SOCK_CONNECT, ms);
-    if (retval >= 0) {
-        if (bind_len && (
-            !sgx_is_completely_outside_enclave(ms->ms_bind_addr, bind_len) ||
-            ms->ms_bind_addrlen > bind_len)) {
-            sgx_ocfree_frame(frame);
-            return -EPERM;
-        }
-
-        if (bind_addr) {
-            copy_from_user(bind_addr, ms->ms_bind_addr,
-                           ms->ms_bind_addrlen);
-            *bind_addrlen = ms->ms_bind_addrlen;
-        }
-        if (sockopt)
-            *sockopt = ms->ms_sockopt;
+    if ((addr && !ms->ms_addr) || (bind_addr && !ms->ms_bind_addr)) {
+        sgx_reset_ustack();
+        return -EPERM;
     }
 
-    sgx_ocfree_frame(frame);
+    retval = sgx_exitless_ocall(OCALL_SOCK_CONNECT, ms);
+
+    if (retval >= 0) {
+        if (bind_addr && bind_len) {
+            copied = sgx_copy_to_enclave(bind_addr, bind_len, ms->ms_bind_addr, ms->ms_bind_addrlen);
+            if (!copied) {
+                sgx_reset_ustack();
+                return -EPERM;
+            }
+            *bind_addrlen = copied;
+        }
+
+        if (sockopt) {
+            *sockopt = ms->ms_sockopt;
+        }
+    }
+
+    sgx_reset_ustack();
     return retval;
 }
 
@@ -680,80 +831,103 @@ int ocall_sock_recv (int sockfd, void * buf, unsigned int count,
 {
     int retval = 0;
     void * obuf = NULL;
-    void* frame = sgx_ocget_frame();
+    unsigned int copied;
     unsigned int len = addrlen ? *addrlen : 0;
+    ms_ocall_sock_recv_t * ms;
 
     if ((count + len) > PRESET_PAGESIZE) {
         retval = ocall_alloc_untrusted(ALLOC_ALIGNUP(count), &obuf);
-        if (retval < 0)
+        if (IS_ERR(retval))
             return retval;
     }
 
-    ms_ocall_sock_recv_t * ms = sgx_ocalloc(sizeof(*ms));
+    ms = sgx_alloc_on_ustack(sizeof(*ms));
+    if (!ms) {
+        retval = -EPERM;
+        goto out;
+    }
+
     ms->ms_sockfd = sockfd;
+    ms->ms_count = count;
+    ms->ms_addrlen = len;
+    ms->ms_addr = addr ? sgx_alloc_on_ustack(len) : NULL;
     if (obuf)
         ms->ms_buf = obuf;
     else
-        ms->ms_buf = sgx_ocalloc(count);
-    ms->ms_count = count;
-    ms->ms_addr = addr ? alloc_in_user(addr, len) : NULL;
-    ms->ms_addrlen = len;
+        ms->ms_buf = sgx_alloc_on_ustack(count);
 
-    retval = sgx_exitless_ocall(OCALL_SOCK_RECV, ms);
-    if (retval >= 0) {
-        if (len && (!sgx_is_completely_outside_enclave(ms->ms_addr, len) ||
-                    ms->ms_addrlen > len)) {
-            sgx_ocfree_frame(frame);
-            return -EPERM;
-        }
-
-        copy_from_user(addr, ms->ms_addr, ms->ms_addrlen);
-        if (addrlen)
-            *addrlen = ms->ms_addrlen;
-
-        memcpy(buf, ms->ms_buf, retval);
+    if (!ms->ms_buf || (addr && !ms->ms_addr)) {
+        retval = -EPERM;
+        goto out;
     }
 
-    sgx_ocfree_frame(frame);
+    retval = sgx_exitless_ocall(OCALL_SOCK_RECV, ms);
 
+    if (retval >= 0) {
+        if (addr && len) {
+            copied = sgx_copy_to_enclave(addr, len, ms->ms_addr, ms->ms_addrlen);
+            if (!copied) {
+                retval = -EPERM;
+                goto out;
+            }
+            *addrlen = copied;
+        }
+
+        if (!sgx_copy_to_enclave(buf, count, ms->ms_buf, retval)) {
+            retval = -EPERM;
+            goto out;
+        }
+    }
+
+out:
+    sgx_reset_ustack();
     if (obuf)
         ocall_unmap_untrusted(obuf, ALLOC_ALIGNUP(count));
-
     return retval;
+
 }
 
 int ocall_sock_send (int sockfd, const void * buf, unsigned int count,
                      const struct sockaddr * addr, unsigned int addrlen)
 {
     int retval = 0;
-    void* frame = sgx_ocget_frame();
     void * obuf = NULL;
+    ms_ocall_sock_send_t * ms;
 
     if ((count + addrlen) > PRESET_PAGESIZE) {
         retval = ocall_alloc_untrusted(ALLOC_ALIGNUP(count), &obuf);
-        if (retval < 0)
+        if (IS_ERR(retval))
             return retval;
     }
 
-    ms_ocall_sock_send_t * ms = sgx_ocalloc(sizeof(*ms));
+    ms = sgx_alloc_on_ustack(sizeof(*ms));
+    if (!ms) {
+        retval = -EPERM;
+        goto out;
+    }
+
     ms->ms_sockfd = sockfd;
+    ms->ms_count = count;
+    ms->ms_addrlen = addrlen;
+    ms->ms_addr = addr ? sgx_copy_to_ustack(addr, addrlen) : NULL;
     if (obuf) {
         ms->ms_buf = obuf;
         memcpy(obuf, buf, count);
     } else {
-        ms->ms_buf = copy_to_user(buf, count);
+        ms->ms_buf = sgx_copy_to_ustack(buf, count);
     }
-    ms->ms_count = count;
-    ms->ms_addr = addr ? copy_to_user(addr, addrlen) : NULL;
-    ms->ms_addrlen = addrlen;
+
+    if (!ms->ms_buf || (addr && !ms->ms_addr)) {
+        retval = -EPERM;
+        goto out;
+    }
 
     retval = sgx_exitless_ocall(OCALL_SOCK_SEND, ms);
 
+out:
+    sgx_reset_ustack();
     if (obuf)
         ocall_unmap_untrusted(obuf, ALLOC_ALIGNUP(count));
-
-    sgx_ocfree_frame(frame);
-
     return retval;
 }
 
@@ -761,29 +935,44 @@ int ocall_sock_recv_fd (int sockfd, void * buf, unsigned int count,
                         unsigned int * fds, unsigned int * nfds)
 {
     int retval = 0;
-    void* frame = sgx_ocget_frame();
+    unsigned int copied;
+    unsigned int max_nfds_bytes = (*nfds) * sizeof(int);
+    ms_ocall_sock_recv_fd_t * ms;
 
-    ms_ocall_sock_recv_fd_t * ms = sgx_ocalloc(sizeof(*ms));
+    ms = sgx_alloc_on_ustack(sizeof(*ms));
+    if (!ms) {
+        sgx_reset_ustack();
+        return -EPERM;
+    }
+
     ms->ms_sockfd = sockfd;
-    ms->ms_buf = alloc_in_user(buf, count);
     ms->ms_count = count;
-    ms->ms_fds = fds ? alloc_in_user(fds, sizeof(int) * (*nfds)) : NULL;
     ms->ms_nfds = *nfds;
+    ms->ms_buf = sgx_alloc_on_ustack(count);
+    ms->ms_fds = sgx_alloc_on_ustack(max_nfds_bytes);
+
+    if (!ms->ms_buf || !ms->ms_fds) {
+        sgx_reset_ustack();
+        return -EPERM;
+    }
 
     retval = sgx_exitless_ocall(OCALL_SOCK_RECV_FD, ms);
+
     if (retval >= 0) {
-        if (!sgx_is_completely_outside_enclave(ms->ms_fds, sizeof(int) * (*nfds)) ||
-            ms->ms_nfds > (*nfds)) {
-            sgx_ocfree_frame(frame);
+        if (!sgx_copy_to_enclave(buf, count, ms->ms_buf, retval)) {
+            sgx_reset_ustack();
             return -EPERM;
         }
 
-        copy_from_user(buf, ms->ms_buf, retval);
-        copy_from_user(fds, ms->ms_fds, sizeof(int) * ms->ms_nfds);
-        *nfds = ms->ms_nfds;
+        copied = sgx_copy_to_enclave(fds, max_nfds_bytes, ms->ms_fds, ms->ms_nfds * sizeof(int));
+        if (!copied) {
+            sgx_reset_ustack();
+            return -EPERM;
+        }
+        *nfds = copied / sizeof(int);
     }
 
-    sgx_ocfree_frame(frame);
+    sgx_reset_ustack();
     return retval;
 }
 
@@ -791,18 +980,28 @@ int ocall_sock_send_fd (int sockfd, const void * buf, unsigned int count,
                         const unsigned int * fds, unsigned int nfds)
 {
     int retval = 0;
-    void* frame = sgx_ocget_frame();
+    ms_ocall_sock_send_fd_t * ms;
 
-    ms_ocall_sock_send_fd_t * ms = sgx_ocalloc(sizeof(*ms));
+    ms = sgx_alloc_on_ustack(sizeof(*ms));
+    if (!ms) {
+        sgx_reset_ustack();
+        return -EPERM;
+    }
+
     ms->ms_sockfd = sockfd;
-    ms->ms_buf = copy_to_user(buf, count);
     ms->ms_count = count;
-    ms->ms_fds = fds ? copy_to_user(fds, sizeof(int) * nfds) : NULL;
     ms->ms_nfds = nfds;
+    ms->ms_buf = sgx_copy_to_ustack(buf, count);
+    ms->ms_fds = sgx_copy_to_ustack(fds, nfds * sizeof(int));
+
+    if (!ms->ms_buf || !ms->ms_fds) {
+        sgx_reset_ustack();
+        return -EPERM;
+    }
 
     retval = sgx_exitless_ocall(OCALL_SOCK_SEND_FD, ms);
 
-    sgx_ocfree_frame(frame);
+    sgx_reset_ustack();
     return retval;
 }
 
@@ -810,57 +1009,86 @@ int ocall_sock_setopt (int sockfd, int level, int optname,
                        const void * optval, unsigned int optlen)
 {
     int retval = 0;
-    void* frame = sgx_ocget_frame();
+    ms_ocall_sock_setopt_t * ms;
 
-    ms_ocall_sock_setopt_t * ms = sgx_ocalloc(sizeof(*ms));
+    ms = sgx_alloc_on_ustack(sizeof(*ms));
+    if (!ms) {
+        sgx_reset_ustack();
+        return -EPERM;
+    }
+
     ms->ms_sockfd = sockfd;
     ms->ms_level = level;
     ms->ms_optname = optname;
-    ms->ms_optval = copy_to_user(optval, optlen);
-    ms->ms_optlen = optlen;
+    ms->ms_optlen = 0;
+    ms->ms_optval = NULL;
+
+    if (optval && optlen > 0) {
+        ms->ms_optlen = optlen;
+        ms->ms_optval = sgx_copy_to_ustack(optval, optlen);
+
+        if (!ms->ms_optval) {
+            sgx_reset_ustack();
+            return -EPERM;
+        }
+    }
 
     retval = sgx_exitless_ocall(OCALL_SOCK_SETOPT, ms);
 
-    sgx_ocfree_frame(frame);
+    sgx_reset_ustack();
     return retval;
 }
 
 int ocall_sock_shutdown (int sockfd, int how)
 {
     int retval = 0;
-    void* frame = sgx_ocget_frame();
+    ms_ocall_sock_shutdown_t * ms;
 
-    ms_ocall_sock_shutdown_t * ms = sgx_ocalloc(sizeof(*ms));
+    ms = sgx_alloc_on_ustack(sizeof(*ms));
+    if (!ms) {
+        sgx_reset_ustack();
+        return -EPERM;
+    }
+
     ms->ms_sockfd = sockfd;
     ms->ms_how = how;
 
     retval = sgx_exitless_ocall(OCALL_SOCK_SHUTDOWN, ms);
 
-    sgx_ocfree_frame(frame);
+    sgx_reset_ustack();
     return retval;
 }
 
 int ocall_gettime (unsigned long * microsec)
 {
     int retval = 0;
-    void* frame = sgx_ocget_frame();
+    ms_ocall_gettime_t * ms;
 
-    ms_ocall_gettime_t * ms = sgx_ocalloc(sizeof(*ms));
+    ms = sgx_alloc_on_ustack(sizeof(*ms));
+    if (!ms) {
+        sgx_reset_ustack();
+        return -EPERM;
+    }
 
     retval = sgx_exitless_ocall(OCALL_GETTIME, ms);
     if (!retval)
         *microsec = ms->ms_microsec;
 
-    sgx_ocfree_frame(frame);
+    sgx_reset_ustack();
     return retval;
 }
 
 int ocall_sleep (unsigned long * microsec)
 {
     int retval = 0;
-    void* frame = sgx_ocget_frame();
+    ms_ocall_sleep_t * ms;
 
-    ms_ocall_sleep_t * ms = sgx_ocalloc(sizeof(*ms));
+    ms = sgx_alloc_on_ustack(sizeof(*ms));
+    if (!ms) {
+        sgx_reset_ustack();
+        return -EPERM;
+    }
+
     ms->ms_microsec = microsec ? *microsec : 0;
 
     retval = sgx_ocall(OCALL_SLEEP, ms);
@@ -871,73 +1099,111 @@ int ocall_sleep (unsigned long * microsec)
             *microsec = ms->ms_microsec;
     }
 
-    sgx_ocfree_frame(frame);
+    sgx_reset_ustack();
     return retval;
 }
 
 int ocall_poll (struct pollfd * fds, int nfds, uint64_t * timeout)
 {
     int retval = 0;
-    void* frame = sgx_ocget_frame();
+    unsigned int nfds_bytes = nfds * sizeof(struct pollfd);
+    ms_ocall_poll_t * ms;
 
-    ms_ocall_poll_t * ms = sgx_ocalloc(sizeof(*ms));
-    ms->ms_fds = copy_to_user(fds, sizeof(struct pollfd) * nfds);
+    ms = sgx_alloc_on_ustack(sizeof(*ms));
+    if (!ms) {
+        sgx_reset_ustack();
+        return -EPERM;
+    }
+
     ms->ms_nfds = nfds;
     ms->ms_timeout = timeout ? *timeout : OCALL_NO_TIMEOUT;
+    ms->ms_fds = sgx_copy_to_ustack(fds, nfds_bytes);
+
+    if (!ms->ms_fds) {
+        sgx_reset_ustack();
+        return -EPERM;
+    }
 
     retval = sgx_exitless_ocall(OCALL_POLL, ms);
+
     if (retval == -EINTR && timeout)
         *timeout = ms->ms_timeout;
-    if (retval >= 0)
-        copy_from_user(fds, ms->ms_fds, sizeof(struct pollfd) * nfds);
 
-    sgx_ocfree_frame(frame);
+    if (retval >= 0) {
+        if (!sgx_copy_to_enclave(fds, nfds_bytes, ms->ms_fds, nfds_bytes)) {
+            sgx_reset_ustack();
+            return -EPERM;
+        }
+    }
+
+    sgx_reset_ustack();
     return retval;
 }
 
 int ocall_rename (const char * oldpath, const char * newpath)
 {
     int retval = 0;
-    void* frame = sgx_ocget_frame();
-
     int oldlen = oldpath ? strlen(oldpath) + 1 : 0;
     int newlen = newpath ? strlen(newpath) + 1 : 0;
+    ms_ocall_rename_t * ms;
 
-    ms_ocall_rename_t * ms = sgx_ocalloc(sizeof(*ms));
-    ms->ms_oldpath = copy_to_user(oldpath, oldlen);
-    ms->ms_newpath = copy_to_user(newpath, newlen);
+    ms = sgx_alloc_on_ustack(sizeof(*ms));
+    if (!ms) {
+        sgx_reset_ustack();
+        return -EPERM;
+    }
+
+    ms->ms_oldpath = sgx_copy_to_ustack(oldpath, oldlen);
+    ms->ms_newpath = sgx_copy_to_ustack(newpath, newlen);
+
+    if (!ms->ms_oldpath || !ms->ms_newpath) {
+        sgx_reset_ustack();
+        return -EPERM;
+    }
 
     retval = sgx_exitless_ocall(OCALL_RENAME, ms);
 
-    sgx_ocfree_frame(frame);
+    sgx_reset_ustack();
     return retval;
 }
 
 int ocall_delete (const char * pathname)
 {
     int retval = 0;
-    void* frame = sgx_ocget_frame();
-
     int len = pathname ? strlen(pathname) + 1 : 0;
+    ms_ocall_delete_t * ms;
 
-    ms_ocall_delete_t * ms = sgx_ocalloc(sizeof(*ms));
-    ms->ms_pathname = copy_to_user(pathname, len);
+    ms = sgx_alloc_on_ustack(sizeof(*ms));
+    if (!ms) {
+        sgx_reset_ustack();
+        return -EPERM;
+    }
+
+    ms->ms_pathname = sgx_copy_to_ustack(pathname, len);
+    if (!ms->ms_pathname) {
+        sgx_reset_ustack();
+        return -EPERM;
+    }
 
     retval = sgx_exitless_ocall(OCALL_DELETE, ms);
 
-    sgx_ocfree_frame(frame);
+    sgx_reset_ustack();
     return retval;
 }
 
 int ocall_load_debug(const char * command)
 {
     int retval = 0;
-    void* frame = sgx_ocget_frame();
+    int len = strlen(command) + 1;
 
-    int len = strlen(command);
-    const char * ms = copy_to_user(command, len + 1);
+    const char * ms = sgx_copy_to_ustack(command, len);
+    if (!ms) {
+        sgx_reset_ustack();
+        return -EPERM;
+    }
+
     retval = sgx_exitless_ocall(OCALL_LOAD_DEBUG, (void *) ms);
 
-    sgx_ocfree_frame(frame);
+    sgx_reset_ustack();
     return retval;
 }

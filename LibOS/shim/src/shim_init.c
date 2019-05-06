@@ -638,7 +638,6 @@ DEFINE_PROFILE_INTERVAL(pal_tail_startup_time,          pal);
 DEFINE_PROFILE_INTERVAL(pal_child_creation_time,        pal);
 
 DEFINE_PROFILE_CATAGORY(init, );
-DEFINE_PROFILE_INTERVAL(init_randgen,               init);
 DEFINE_PROFILE_INTERVAL(init_vma,                   init);
 DEFINE_PROFILE_INTERVAL(init_slab,                  init);
 DEFINE_PROFILE_INTERVAL(init_str_mgr,               init);
@@ -725,7 +724,6 @@ __attribute__((noreturn)) void* shim_init (int argc, void * args)
 #endif
 
     BEGIN_PROFILE_INTERVAL();
-    RUN_INIT(init_randgen);
     RUN_INIT(init_vma);
     RUN_INIT(init_slab);
     RUN_INIT(read_environs, envp);
@@ -860,7 +858,9 @@ static int name_pipe (char * uri, size_t size, void * id)
 {
     IDTYPE pipeid;
     int len;
-    getrand(&pipeid, sizeof(pipeid));
+    int ret = DkRandomBitsRead(&pipeid, sizeof(pipeid));
+    if (ret < 0)
+        return -convert_pal_errno(-ret);
     debug("creating pipe: pipe.srv:%u\n", pipeid);
     if ((len = snprintf(uri, size, "pipe.srv:%u", pipeid)) == size)
         return -ERANGE;
@@ -909,7 +909,9 @@ static int name_path (char * path, size_t size, void * id)
     unsigned int suffix;
     int prefix_len = strlen(path);
     int len;
-    getrand(&suffix, sizeof(suffix));
+    int ret = DkRandomBitsRead(&suffix, sizeof(suffix));
+    if (ret < 0)
+        return -convert_pal_errno(-ret);
     len = snprintf(path + prefix_len, size - prefix_len, "%08x", suffix);
     if (len == size)
         return -ERANGE;
@@ -1051,7 +1053,7 @@ void check_stack_hook (void)
     struct shim_thread * cur_thread = get_cur_thread();
 
     void * rsp;
-    asm volatile ("movq %%rsp, %0" : "=r"(rsp) :: "memory");
+    __asm__ volatile ("movq %%rsp, %0" : "=r"(rsp) :: "memory");
 
     if (rsp <= cur_thread->stack_top && rsp > cur_thread->stack) {
         if (rsp - cur_thread->stack < PAL_CB(pagesize))

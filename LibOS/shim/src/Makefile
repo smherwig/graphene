@@ -9,7 +9,7 @@ LD	= ld
 
 OMIT_FRAME_POINTER = no
 
-CFLAGS	= -Wall -fPIC -std=gnu99 -fgnu89-inline -Winline -Wwrite-strings \
+CFLAGS	= -Wall -fPIC -std=c11 -Winline -Wwrite-strings \
 	  -fmerge-all-constants -Wstrict-prototypes \
 	  -Werror=implicit-function-declaration \
 	  -fno-stack-protector -fno-builtin -Wno-inline \
@@ -51,7 +51,7 @@ objs	= $(addprefix bookkeep/shim_,handle vma thread signal) \
 	  $(addprefix ipc/shim_,ipc ipc_helper ipc_child) \
 	  $(addprefix ipc/shim_ipc_,$(ipcns)) \
 	  elf/shim_rtld \
-	  $(addprefix shim_,init table syscalls checkpoint random malloc \
+	  $(addprefix shim_,init table syscalls checkpoint malloc \
 	  async parser debug) syscallas start \
 	  $(patsubst %.c,%,$(wildcard sys/*.c))
 bearssl_lib = ../../../bearssl-0.6/build/libbearssl.a

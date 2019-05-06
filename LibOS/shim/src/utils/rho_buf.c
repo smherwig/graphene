@@ -406,7 +406,7 @@ rho_buf_preadu16be_at(struct rho_buf *buf, uint16_t *v, off_t offset)
     }
 
     x = *((uint16_t *)(buf->data + offset));
-    x = be16toh(x);
+    x = rho_be16toh(x);
     *v = x;
 
 out:
@@ -447,7 +447,7 @@ rho_buf_pwriteu16be_at(struct rho_buf *buf, uint16_t v, off_t offset)
         }
     }
 
-    v = htobe16(v);
+    v = rho_htobe16(v);
     memcpy(buf->data + offset, &v, sizeof(v));
 
     if (((size_t)newpos) > buf->len)
@@ -489,7 +489,7 @@ rho_buf_preadu16le_at(struct rho_buf *buf, uint16_t *v, off_t offset)
     }
 
     x = *((uint16_t *)(buf->data + offset));
-    x = le16toh(x);
+    x = rho_le16toh(x);
     *v = x;
 
 out:
@@ -530,7 +530,7 @@ rho_buf_pwriteu16le_at(struct rho_buf *buf, uint16_t v, off_t offset)
         }
     }
 
-    v = htole16(v);
+    v = rho_htole16(v);
     memcpy(buf->data + offset, &v, sizeof(v));
     buf->pos = newpos;
 
@@ -575,7 +575,7 @@ rho_buf_preadu32be_at(struct rho_buf *buf, uint32_t *v, off_t offset)
     }
 
     x = *((uint32_t *)(buf->data + offset));
-    x = be32toh(x);
+    x = rho_be32toh(x);
     *v = x;
 
 out:
@@ -616,7 +616,7 @@ rho_buf_pwriteu32be_at(struct rho_buf *buf, uint32_t v, off_t offset)
         }
     }
 
-    v = htobe32(v);
+    v = rho_htobe32(v);
     memcpy(buf->data + offset, &v, sizeof(v));
 
     if (((size_t)newpos) > buf->len)
@@ -658,7 +658,7 @@ rho_buf_preadu32le_at(struct rho_buf *buf, uint32_t *v, off_t offset)
     }
 
     x = *((uint32_t *)(buf->data + offset));
-    x = le32toh(x);
+    x = rho_le32toh(x);
     *v = x;
 
 out:
@@ -699,7 +699,7 @@ rho_buf_pwriteu32le_at(struct rho_buf *buf, uint32_t v, off_t offset)
         }
     }
 
-    v = htole32(v);
+    v = rho_htole32(v);
     memcpy(buf->data + offset, &v, sizeof(v));
 
     if (((size_t)newpos) > buf->len)
@@ -741,7 +741,7 @@ rho_buf_preadu64be_at(struct rho_buf *buf, uint64_t *v, off_t offset)
     }
 
     x = *((uint64_t *)(buf->data + offset));
-    x = be64toh(x);
+    x = rho_be64toh(x);
     *v = x;
 
 out:
@@ -782,7 +782,7 @@ rho_buf_pwriteu64be_at(struct rho_buf *buf, uint64_t v, off_t offset)
         }
     }
 
-    v = htobe64(v);
+    v = rho_htobe64(v);
     memcpy(buf->data + offset, &v, sizeof(v));
 
     if (((size_t)newpos) > buf->len)
@@ -825,7 +825,7 @@ rho_buf_preadu64le_at(struct rho_buf *buf, uint64_t *v, off_t offset)
     }
 
     x = *((uint64_t *)(buf->data + offset));
-    x = le64toh(x);
+    x = rho_le64toh(x);
     *v = x;
 
 out:
@@ -866,7 +866,7 @@ rho_buf_pwriteu64le_at(struct rho_buf *buf, uint64_t v, off_t offset)
         }
     }
 
-    v = htole64(v);
+    v = rho_htole64(v);
     memcpy(buf->data + offset, &v, sizeof(v));
 
     if (((size_t)newpos) > buf->len)

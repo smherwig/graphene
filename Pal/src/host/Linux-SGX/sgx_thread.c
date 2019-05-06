@@ -55,7 +55,7 @@ int unmap_tcs (void)
     struct thread_map * map = &enclave_thread_map[index];
     if (index >= enclave_thread_num)
         return 0;
-    SGX_DBG(DBG_I, "unmap TCS at 0x%08lx\n", map->tcs);
+    SGX_DBG(DBG_I, "unmap TCS at %p\n", map->tcs);
     current_tcs = NULL;
     ((struct enclave_dbginfo *) DBGINFO_ADDR)->thread_tids[index] = 0;
     map->tid = 0;

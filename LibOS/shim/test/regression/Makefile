@@ -49,7 +49,7 @@ endif
 PYTHONENV="PYTHONPATH=../../../../Scripts"
 
 ifeq ($(SGX_RUN),1)
-	PYTHONENV += "TIMEOUT=5000"
+	PYTHONENV += "TIMEOUT=20000"
 endif
 
 .PHONY: regression
@@ -58,6 +58,8 @@ regression: $(target)
 	@for f in $(wildcard 00_*.py); do env $(PYTHONENV) python3 $$f $(RUNTIME)/pal-$(PAL_HOST) || exit $$?; done
 	@echo "\n\nSyscall Support:"
 	@for f in $(wildcard 30_*.py); do env $(PYTHONENV) python3 $$f $(RUNTIME)/pal-$(PAL_HOST) || exit $$?; done
+	@echo "\n\nFile System Support:"
+	@for f in $(wildcard 40_*.py); do env $(PYTHONENV) python3 $$f $(RUNTIME)/pal-$(PAL_HOST) || exit $$?; done
 	@echo "\n\nSocket Support:"
 	@for f in $(wildcard 80_*.py); do env $(PYTHONENV) python3 $$f $(RUNTIME)/pal-$(PAL_HOST) || exit $$?; done
 	@echo "\n\nLarge File Support:"

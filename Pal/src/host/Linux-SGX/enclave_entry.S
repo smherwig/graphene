@@ -17,6 +17,9 @@ enclave_entry:
 	# On EENTER/ERESUME, RAX is the current SSA, RBX is the address of TCS,
 	# RCX is the address of AEP. Other registers are not trusted.
 
+	# x86-64 sysv abi requires %rFLAGS.DF = 0 on entry to function call.
+	cld
+
 	# current SSA is in RAX (Trusted)
 	cmpq $0, %rax
 	jne .Lhandle_resume
@@ -98,6 +101,20 @@ enclave_entry:
 .Lhandle_resume:
 	# PAL convention:
 	# RDI - external event
+
+	# Nested exceptions at the host-OS level are disallowed:
+	# - Synchronous exceptions are assumed to never happen during
+	#   handle_resume;
+	# - Asynchronous signals are not nested by benign host OS because
+	#   we mask asynchronous signals on signal handler.
+	# If malicious host OS injects a nested signal, CSSA != 1 and we
+	# fail execution.
+	# This FAIL_LOOP is assertion only because
+	# currently this is also enforced by EENTER because NSSA == 2
+	cmpq $1, %rax
+	je 1f
+	FAIL_LOOP
+1:
 
 	# get some information from GPR
 	movq %gs:SGX_GPR, %rbx

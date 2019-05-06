@@ -208,8 +208,12 @@ static int socket_parse_uri (char * uri,
     if (!uri || !(*uri)) {
         if (bind_addr)
             *bind_addr = NULL;
+        if (bind_addrlen)
+            *bind_addrlen = 0;
         if (dest_addr)
             *dest_addr = NULL;
+        if (dest_addrlen)
+            *dest_addrlen = 0;
         return 0;
     }
 
@@ -743,7 +747,7 @@ static int udp_connect (PAL_HANDLE * handle, char * uri, int options)
     if (IS_ERR(fd))
         return -PAL_ERROR_DENIED;
 
-    if (dest_addr->sa_family == AF_INET6) {
+    if (dest_addr && dest_addr->sa_family == AF_INET6) {
         int ipv6only = 1;
         INLINE_SYSCALL(setsockopt, 5, fd, SOL_IPV6, IPV6_V6ONLY, &ipv6only,
                        sizeof(int));
