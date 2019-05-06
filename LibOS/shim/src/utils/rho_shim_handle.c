@@ -2,6 +2,8 @@
 #include <shim_handle.h>
 #include <shim_fs.h>
 
+#include <atomic.h>
+
 #include <rho_log.h>
 
 struct shim_handle *
@@ -44,4 +46,33 @@ size_t
 rho_shim_handle_getfilesize(struct shim_handle *hdl)
 {
     return (get_file_size(hdl));
+}
+
+void
+rho_shim_handle_print(const struct shim_handle *hdl)
+{
+    debug("handle (addr=0x%p) = {\n", hdl);
+    debug("  ref_count: %ld\n", atomic_read(&hdl->ref_count));
+    debug("  type: %d\n", hdl->type);
+    debug("  fs_type: %s\n", hdl->fs_type);
+    debug("  path: %s\n", qstrgetstr(&hdl->path));
+    debug("  flags: %08x\n", hdl->flags);
+    debug("  acc_mode: %08x\n", hdl->acc_mode);
+
+    switch (hdl->type) {
+    case TYPE_SMDISH:
+        debug("  info (smdish) {\n");
+        debug("    mf_idx: %d\n", hdl->info.smdish.mf_idx);
+        debug("  }\n");
+        break;
+    case TYPE_SMUF:
+        debug("  info (smuf) {\n");
+        debug("    mf_idx: %d\n", hdl->info.smuf.mf_idx);
+        debug("  }\n");
+        break;
+    default:
+        break;
+    } 
+
+    debug("}\n");
 }

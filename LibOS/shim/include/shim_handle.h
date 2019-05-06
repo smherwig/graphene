@@ -55,8 +55,7 @@ enum shim_handle_type {
     TYPE_EPOLL,
     TYPE_NEXTFS,
     TYPE_SMDISH,
-    TYPE_SMTCAD,
-    TYPE_SM0,
+    TYPE_SMUF,
 };
 
 struct shim_handle;
@@ -331,18 +330,11 @@ struct shim_nextfs_handle {
 };
 
 struct shim_smdish_handle {
-    /* remote fd */
-    uint32_t    fd;
+    int mf_idx;
 };
 
-struct shim_smtcad_handle {
-    /* remote fd */
-    uint32_t    fd;
-};
-
-struct shim_sm0_handle {
-    /* remote fd */
-    uint32_t    fd;
+struct shim_smuf_handle {
+    int mf_idx;
 };
 
 struct shim_mount;
@@ -384,8 +376,7 @@ struct shim_handle {
         struct shim_epoll_handle  epoll;
         struct shim_nextfs_handle nextfs;
         struct shim_smdish_handle smdish;
-        struct shim_smtcad_handle smtcad;
-        struct shim_sm0_handle    sm0;
+        struct shim_smuf_handle   smuf;
     } info;
 
     int                 flags;

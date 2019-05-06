@@ -24,8 +24,6 @@
 
 #include "inner.h"
 
-//void debug_printf(const char *fmt, ...);
-
 /*
  * GCM initialisation. This does everything except setting the vtable,
  * which depends on whether this is a context for encrypting or for
@@ -40,21 +38,13 @@ gen_gcm_init(br_sslrec_gcm_context *cc,
 {
 	unsigned char tmp[12];
 
-    //debug_printf("gen_gcm_init -->\n");
-
 	cc->seq = 0;
-    //debug_printf("gen_gcm_init::bc_impl->init -->\n");
 	bc_impl->init(&cc->bc.vtable, key, key_len);
-    //debug_printf("gen_gcm_init::bc_impl->init <--\n");
 	cc->gh = gh_impl;
 	memcpy(cc->iv, iv, sizeof cc->iv);
 	memset(cc->h, 0, sizeof cc->h);
 	memset(tmp, 0, sizeof tmp);
-    //debug_printf("gen_gcm_init::bc_impl->run -->\n");
 	bc_impl->run(&cc->bc.vtable, tmp, 0, cc->h, sizeof cc->h);
-    //debug_printf("gen_gcm_init::bc_impl->run <--\n");
-
-    //debug_printf("gen_gcm_init <--\n");
 }
 
 static void

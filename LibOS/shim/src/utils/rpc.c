@@ -40,8 +40,8 @@ rpc_agent_unpack_hdr(struct rpc_agent *agent)
     RHO_TRACE_ENTER();
 
     if (rho_buf_length(buf) != RPC_HDR_LENGTH) {
-        rho_warn("rho_buf_length(buf)=%zu != RPC_HDR_LENGTH",
-                rho_buf_length(buf));
+        rho_warn("rho_buf_length(buf)=%lu != RPC_HDR_LENGTH",
+                (unsigned long)rho_buf_length(buf));
         error = EPROTO;
         goto out;
     }
@@ -207,6 +207,7 @@ rpc_agent_recv_hdr(struct rpc_agent *agent)
     } else if (got == 0) {
         agent->ra_state = RPC_STATE_CLOSED;
     } else if ((size_t)got == need) {
+        /* FIXME: inspect return value */
         (void)rpc_agent_unpack_hdr(agent);
         debug("bodylen: %lu\n", (unsigned long)rpc_agent_get_bodylen(agent));
         if (rpc_agent_get_bodylen(agent) > 0)
@@ -215,8 +216,9 @@ rpc_agent_recv_hdr(struct rpc_agent *agent)
             rpc_agent_set_dispatchable(agent);
     }
 
-    RHO_TRACE_EXIT("need=%zu, got=%zd, state=%s",
-            need, got, rpc_state_to_str(agent->ra_state));
+    RHO_TRACE_EXIT("need=%lu, got=%ld, state=%s",
+            (unsigned long)need, (long)got,
+            rpc_state_to_str(agent->ra_state));
 }
 
 void
@@ -246,7 +248,8 @@ rpc_agent_recv_body(struct rpc_agent *agent)
         rpc_agent_set_dispatchable(agent);
     }
 
-    RHO_TRACE_EXIT("need=%zu, got=%zd, state=%s", need, got, 
+    RHO_TRACE_EXIT("need=%lu, got=%ld, state=%s",
+            (unsigned long)need, (long)got, 
             rpc_state_to_str(agent->ra_state));
 }
 
@@ -343,6 +346,7 @@ rpc_agent_transport(struct rpc_agent *agent)
     debug("rpc: send header\n");
     n = rho_sock_sendn_buf(sock, hdrbuf, rho_buf_length(hdrbuf));
     if (n == -1) {
+        rho_warn("rpc_agent_transport: send header failed");
         error = -1;
         goto fail;
     }
@@ -350,6 +354,7 @@ rpc_agent_transport(struct rpc_agent *agent)
     debug("rpc: send body\n");
     n = rho_sock_sendn_buf(sock, bodybuf, rho_buf_length(bodybuf));
     if (n == -1) {
+        rho_warn("rpc_agent_transport: send body failed");
         error = -1;
         goto fail;
     }
@@ -360,15 +365,18 @@ rpc_agent_transport(struct rpc_agent *agent)
     debug("rpc: recv hdr\n");
     n = rho_sock_precvn_buf(sock, hdrbuf, RPC_HDR_LENGTH);
     if (n == -1) {
+        rho_warn("rpc_agent_transport: recv hdr failed: %ld", PAL_ERRNO);
         error = -1;
         goto fail;
     }
 
+    /* FIXME: inspect return value */
     (void)rpc_agent_unpack_hdr(agent);
     if (hdr->rh_bodylen > 0) {
         debug("rpc: recv body\n");
         n = rho_sock_precvn_buf(sock, bodybuf, hdr->rh_bodylen);
         if (n == -1) {
+            rho_warn("rpc_agent_transport: recv body failed");
             error = -1;
             goto fail;
         }
@@ -403,7 +411,7 @@ rpc_agent_request(struct rpc_agent *agent)
     } else {
         error = (int)hdr->rh_code;
         if (error != 0)
-            rho_errno_warn(error, "rpc returned an error");
+            rho_errno_warn(error, "rpc returned an error: %d", error);
     }
 
     return (error);

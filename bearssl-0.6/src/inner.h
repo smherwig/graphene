@@ -2492,17 +2492,10 @@ BR_TARGETS_X86_DOWN
 #define br_bswap32   _byteswap_ulong
 #endif
 
-//void debug_printf(const char *fmt, ...);
-
 static inline int
 br_cpuid(uint32_t mask_eax, uint32_t mask_ebx,
 	uint32_t mask_ecx, uint32_t mask_edx)
 {
-#if 0
-    debug_printf("br_cpuid(%lu, %lu, %lu, %lu\n",
-            (unsigned long)mask_eax, (unsigned long)mask_ebx,
-            (unsigned long)mask_ecx, (unsigned long)mask_edx);
-#endif
 #if BR_GRAPHENE
     return 1;
 #endif
