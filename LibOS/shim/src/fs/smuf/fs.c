@@ -995,6 +995,8 @@ smuf_advlock_unlock(struct shim_handle *hdl, struct flock *flock)
     struct smuf_memfile *mf = NULL;
     struct rho_ticketlock *tl = NULL;
 
+    (void)flock;
+
     RHO_TRACE_EXIT();
     rho_shim_handle_print(hdl);
 

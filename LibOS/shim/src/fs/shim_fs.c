@@ -41,7 +41,7 @@ struct shim_fs {
     struct shim_d_ops * d_ops;
 };
 
-#define NUM_MOUNTABLE_FS    6
+#define NUM_MOUNTABLE_FS    7
 
 struct shim_fs mountable_fs [NUM_MOUNTABLE_FS] = {
         { .name = "chroot", .fs_ops = &chroot_fs_ops, .d_ops = &chroot_d_ops, },
@@ -50,6 +50,7 @@ struct shim_fs mountable_fs [NUM_MOUNTABLE_FS] = {
         { .name = "nextfs", .fs_ops = &nextfs_fs_ops, .d_ops = &nextfs_d_ops, },
         { .name = "smdish", .fs_ops = &smdish_fs_ops, .d_ops = &smdish_d_ops, },
         { .name = "smuf",   .fs_ops = &smuf_fs_ops,   .d_ops = &smuf_d_ops,   },
+        { .name = "smc",    .fs_ops = &smc_fs_ops,    .d_ops = &smc_d_ops,    },
     };
 
 #define NUM_BUILTIN_FS      4
