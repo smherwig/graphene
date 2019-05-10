@@ -199,15 +199,11 @@ tnt_client_verify_signature(struct tnt_client *client, uint8_t *body,
     struct rho_md *md = NULL;
     uint8_t bodyhash[32] = { 0 };
 
-    sys_printf("> tnt_client_verify_signature\n");
-
     RHO_TRACE_ENTER("bodylen=%lu, siglen=%lu", 
             (unsigned long)bodylen, (unsigned long)siglen);
 
     /* returns 1 if verification is good; 0 if bad */
-    sys_printf("before br_rsa_pkcs1_vrfy_get_default\n");
     vrfy = br_rsa_pkcs1_vrfy_get_default();
-    sys_printf("before vrfy\n");
     vrfy_ret = vrfy(
             sig,
             siglen,
@@ -216,22 +212,15 @@ tnt_client_verify_signature(struct tnt_client *client, uint8_t *body,
             &client->rsa_pk,
             hashval);
 
-    sys_printf("after vrfy\n");
-
     if (vrfy_ret == 0) {
         rho_warn("tnt rsa verification failed!\n");
         goto done;
     }
 
-    sys_printf("before rho_md_create\n");
     md = rho_md_create(RHO_MD_SHA256, NULL, 0);
-    sys_printf("before rho_md_update\n");
     rho_md_update(md, body, bodylen);
-    sys_printf("before rho_md_finish\n");
     rho_md_finish(md, bodyhash);
-    sys_printf("before rho_md_destroy\n");
     rho_md_destroy(md);
-    sys_printf("before rho_mem_equal\n");
     if (!rho_mem_equal(hashval, bodyhash, 32)) {
         rho_warn("tnt signature does not match hash value!\n");
         goto done;
@@ -240,7 +229,6 @@ tnt_client_verify_signature(struct tnt_client *client, uint8_t *body,
     ret = true;
 
 done:
-    sys_printf("< tnt_client_verify_signature\n");
     RHO_TRACE_EXIT("ret=%d\n", ret);
     return (ret);
 }
@@ -268,18 +256,14 @@ tnt_client_request(struct tnt_client *client)
     rho_buf_clear(buf);
     rho_buf_writeu64be(buf, nonce);
     rho_buf_rewind(buf);
-    sys_printf("before rho_sock_send_buf\n");
     n = rho_sock_send_buf(sock, buf, rho_buf_length(buf));
     if (n != rho_buf_length(buf)) {
         rho_warn("error: only sent %ld", n);
         goto done;
     }
 
-    sys_printf("sent %ld bytes to timeserver\n", n);
-
     rho_buf_clear(buf);
     /* TODO: how big is the expected response? */
-    sys_printf("before rho_sock_recv_buf\n");
     n = rho_sock_recv_buf(sock, buf, 1024);
     if (n <= 0) {
         rho_warn("error: received %ld", n);
@@ -287,7 +271,6 @@ tnt_client_request(struct tnt_client *client)
     }
 
 
-    sys_printf("before rho_buf_rewind\n");
     rho_buf_rewind(buf);
 
     /* header */
@@ -299,7 +282,6 @@ tnt_client_request(struct tnt_client *client)
     rho_buf_readu64be(buf, &sec);
     rho_buf_readu32be(buf, &usec);
 
-    sys_printf("before rho_buf_seek\n");
     rho_buf_seek(buf, TNT_HEADER_LEN, SEEK_SET);
     rho_buf_read(buf, body, TNT_BODY_LEN);
 
