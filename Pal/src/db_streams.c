@@ -419,9 +419,9 @@ DkStreamAttributesQuery (PAL_STR uri, PAL_STREAM_ATTR * attr)
     LEAVE_PAL_CALL_RETURN(PAL_TRUE);
 }
 
-/* _DkStreamAttributesQuerybyHandle for internal use. Query attribute
+/* _DkStreamAttributesQueryByHandle for internal use. Query attribute
    of streams by their handle */
-int _DkStreamAttributesQuerybyHandle (PAL_HANDLE hdl, PAL_STREAM_ATTR * attr)
+int _DkStreamAttributesQueryByHandle (PAL_HANDLE hdl, PAL_STREAM_ATTR * attr)
 {
     if (UNKNOWN_HANDLE(hdl))
         return -PAL_ERROR_BADHANDLE;
@@ -437,20 +437,20 @@ int _DkStreamAttributesQuerybyHandle (PAL_HANDLE hdl, PAL_STREAM_ATTR * attr)
     return ops->attrquerybyhdl(hdl, attr);
 }
 
-/* PAL call DkStreamAttributesQuerybyHandle: Query attribute of a stream by
+/* PAL call DkStreamAttributesQueryByHandle: Query attribute of a stream by
    its handle, attr is memory given by user space. Return the pointer of attr
    if succeeded, or NULL if failed. Error code is notified */
 PAL_BOL
-DkStreamAttributesQuerybyHandle (PAL_HANDLE handle, PAL_STREAM_ATTR * attr)
+DkStreamAttributesQueryByHandle (PAL_HANDLE handle, PAL_STREAM_ATTR * attr)
 {
-    ENTER_PAL_CALL(DkStreamAttributesQuerybyHandle);
+    ENTER_PAL_CALL(DkStreamAttributesQueryByHandle);
 
     if (!handle || !attr) {
         _DkRaiseFailure(PAL_ERROR_INVAL);
         LEAVE_PAL_CALL_RETURN(PAL_FALSE);
     }
 
-    int ret = _DkStreamAttributesQuerybyHandle(handle, attr);
+    int ret = _DkStreamAttributesQueryByHandle(handle, attr);
 
     if (ret < 0) {
         _DkRaiseFailure(-ret);
@@ -460,13 +460,13 @@ DkStreamAttributesQuerybyHandle (PAL_HANDLE handle, PAL_STREAM_ATTR * attr)
     LEAVE_PAL_CALL_RETURN(PAL_TRUE);
 }
 
-/* PAL call DkStreamAttributesSetbyHandle: Set attribute of a stream by
+/* PAL call DkStreamAttributesSetByHandle: Set attribute of a stream by
    its handle, attr is memory given by user space. Return the pointer of attr
    if succeeded, or NULL if failed. Error code is notified */
 PAL_BOL
-DkStreamAttributesSetbyHandle (PAL_HANDLE handle, PAL_STREAM_ATTR * attr)
+DkStreamAttributesSetByHandle (PAL_HANDLE handle, PAL_STREAM_ATTR * attr)
 {
-    ENTER_PAL_CALL(DkStreamAttributesSetbyHandle);
+    ENTER_PAL_CALL(DkStreamAttributesSetByHandle);
 
     if (!handle || !attr) {
         _DkRaiseFailure(PAL_ERROR_INVAL);
@@ -515,7 +515,7 @@ int _DkStreamGetName (PAL_HANDLE handle, char * buffer, int size)
     return ret;
 }
 
-/* PAL call DkStreamAttributesSetbyHandle: Set attribute of a stream by
+/* PAL call DkStreamAttributesSetByHandle: Set attribute of a stream by
    its handle, attr is memory given by user space. Return the pointer of attr
    if succeeded, or NULL if failed. Error code is notified */
 PAL_NUM DkStreamGetName (PAL_HANDLE handle, PAL_PTR buffer, PAL_NUM size)
@@ -729,13 +729,13 @@ PAL_BOL DkSendHandle(PAL_HANDLE handle, PAL_HANDLE cargo)
 }
 
 /* PAL call DkRecvHandle: Read a handle to a pipe/process handle.
-   Return the received PAL_HANDLE by reference and 0 on success and 
+   Return the received PAL_HANDLE by reference and 0 on success and
    negative number on failure */
-/* 1. Should i take the received PAL_HANDLE as an input argument and 
-      pass by reference or return it rather? 
+/* 1. Should i take the received PAL_HANDLE as an input argument and
+      pass by reference or return it rather?
     Ans - We are not aware of the size of the variable members to return
    2. Would the recieved PAL_HANDLE start functioning automatically in
-      the new process environment? Should we initialize/modify some 
+      the new process environment? Should we initialize/modify some
       attibutes of the handle?
     Ans - Yes, Initialize and make it compatibile in the target process
    3. Should malloc_copy be done or the process shares the same references?

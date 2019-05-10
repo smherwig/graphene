@@ -257,8 +257,8 @@ smc_map_fileuri(const char *uri, size_t size, void **addr)
         goto done;
     }
 
-    if (DkStreamAttributesQuerybyHandle(pal_hdl, &pal_attr) == PAL_FALSE) {
-        rho_warn("DkStreamAttributesQuerybyHandle(\"%s\") failed", uri);
+    if (DkStreamAttributesQueryByHandle(pal_hdl, &pal_attr) == PAL_FALSE) {
+        rho_warn("DkStreamAttributesQueryByHandle(\"%s\") failed", uri);
         error = -PAL_ERRNO;
         goto done;
     }

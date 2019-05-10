@@ -40,13 +40,16 @@ rho_sock_open_url(const char *url)
     debug("> rho_sock_open_url(url=%s)\n", url);
 
     pal_hdl = DkStreamOpen(url, 0, 0, 0, 0);
-    if (pal_hdl == NULL)
+    if (pal_hdl == NULL) {
         debug("DkStreamOpen returned NULL\n");
+        goto done;
+    }
 
     sock = rhoL_zalloc(sizeof(*sock));
     sock->pal_hdl = pal_hdl;
     sock->ops = &rho_sock_stream_ops;
 
+done:
     debug("< rho_sock_open_url\n");
     return (sock);
 }
@@ -247,7 +250,7 @@ again:
     }
     /* 
      * DkStreamWrite returns 0 on failure, and the number of bytes
-     * written on succes.  We intervene by returning -1 on fialure;
+     * written on succes.  We intervene by returning -1 on failure;
      * the caller can check PAL_ERRNO forthe resultant UNIX errno value.
      */
     if (n == 0)

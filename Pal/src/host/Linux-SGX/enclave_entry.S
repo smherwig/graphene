@@ -14,19 +14,16 @@
 	.type enclave_entry, @function
 
 enclave_entry:
-	# On EENTER/ERESUME, RAX is the current SSA, RBX is the address of TCS,
-	# RCX is the address of AEP. Other registers are not trusted.
+	# On EENTER, RAX is the current SSA index (aka CSSA),
+	# RBX is the address of TCS, RCX is the address of AEP.
+	# Other registers are not trusted.
 
 	# x86-64 sysv abi requires %rFLAGS.DF = 0 on entry to function call.
 	cld
 
-	# current SSA is in RAX (Trusted)
 	cmpq $0, %rax
-	jne .Lhandle_resume
+	jne .Lprepare_resume
 
-	# TCS is in RBX (Trusted)
-
-	# AEP address in RCX (Trusted)
 	movq %rcx, %gs:SGX_AEP
 
 	# The following code is hardened to defend attacks from untrusted host.
@@ -45,7 +42,7 @@ enclave_entry:
 	# to deceive the trusted PAL.
 
 	# This thread can be interrupted but then the above check branches to
-	# .Lhandle_resume. So the outside can't re-enter the checks below in
+	# .Lprepare_resume. So the outside can't re-enter the checks below in
 	# the middle.
 
 	# Only jump to .Lreturn_from_ocall if we have prepared the stack for
@@ -98,13 +95,13 @@ enclave_entry:
 	# handle_ecall will only return when invalid parameters has been passed.
 	FAIL_LOOP
 
-.Lhandle_resume:
+.Lprepare_resume:
 	# PAL convention:
 	# RDI - external event
 
 	# Nested exceptions at the host-OS level are disallowed:
 	# - Synchronous exceptions are assumed to never happen during
-	#   handle_resume;
+	#   prepare_resume;
 	# - Asynchronous signals are not nested by benign host OS because
 	#   we mask asynchronous signals on signal handler.
 	# If malicious host OS injects a nested signal, CSSA != 1 and we
@@ -232,6 +229,9 @@ enclave_entry:
 	# Align the stack for _DkExceptionHandler
 	andq $STACK_ALIGN, %rsi
 	movq %rsi, SGX_GPR_RSP(%rbx)
+
+	# clear rflags to conform the ABI which requires RFLAGS.DF = 0
+	movq $0, SGX_GPR_RFLAGS(%rbx)
 
 	# new RIP is the exception handler
 	leaq _DkExceptionHandler(%rip), %rdi

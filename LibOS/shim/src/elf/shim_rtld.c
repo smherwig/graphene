@@ -366,21 +366,20 @@ __map_elf_object (struct shim_handle * file,
     if (file && (!read || !mmap || !seek))
         return NULL;
 
-    struct link_map * l = remap ? :
+    struct link_map * l = remap ? remap :
                           new_elf_object(file ? (!qstrempty(&file->path) ?
                                          qstrgetstr(&file->path) :
                                          qstrgetstr(&file->uri)) : "", type);
 
+    if (!l)
+        return NULL;
+
     const char * errstring __attribute__((unused)) = NULL;
-    int errval = 0;
     int ret;
 
     if (type != OBJECT_INTERNAL && !file) {
         errstring = "shared object has to be backed by file";
-        errval = -EINVAL;
-call_lose:
-        debug("loading %s: %s\n", l->l_name, errstring);
-        return NULL;
+        goto call_lose;
     }
 
     /* Scan the program header table, collecting its load commands.  */
@@ -411,7 +410,6 @@ call_lose:
         if ((ret = (*seek) (file, header->e_phoff, SEEK_SET)) < 0 ||
             (ret = (*read) (file, new_phdr, maplength)) < 0) {
             errstring = "cannot read file data";
-            errval = ret;
             free(new_phdr);
             goto call_lose;
         }
@@ -445,7 +443,6 @@ call_lose:
                    We record the load commands and process them all later.  */
                 if (__builtin_expect (!ALIGNED(ph->p_align), 0)) {
                     errstring = "ELF load command alignment not page-aligned";
-                    errval = ENOMEM;
                     goto call_lose;
                 }
 
@@ -453,13 +450,11 @@ call_lose:
                                        & (ph->p_align - 1)) != 0, 0)) {
                     errstring = "\
                         ELF load command address/offset not properly aligned";
-                    errval = ENOMEM;
                     goto call_lose;
                 }
 
                 if (l->nloadcmds >= MAX_LOADCMDS) {
                     errstring = "too many load commamds";
-                    errval = -EINVAL;
                     goto call_lose;
                 }
 
@@ -534,10 +529,10 @@ call_lose:
                                         file, c->mapoff, NULL);
 
             /* Remember which part of the address space this object uses.  */
-            errval = (*mmap) (file, (void **) &mappref, ALIGN_UP(maplength),
+            ret = (*mmap) (file, (void **) &mappref, ALIGN_UP(maplength),
                               c->prot, c->flags|MAP_PRIVATE, c->mapoff);
 
-            if (__builtin_expect (errval < 0, 0)) {
+            if (__builtin_expect (ret < 0, 0)) {
 map_error:
                 errstring = "failed to map segment from shared object";
                 goto call_lose;
@@ -728,6 +723,14 @@ postmap:
     setup_elf_hash(l);
 
     return l;
+
+call_lose:
+    debug("loading %s: %s\n", l->l_name, errstring);
+    if (l != remap) {
+        /* l was allocated via new_elf_object() */
+        free(l);
+    }
+    return NULL;
 }
 
 static inline

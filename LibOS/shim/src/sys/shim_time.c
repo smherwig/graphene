@@ -97,9 +97,15 @@ tnt_client_create(const char *url, unsigned char *rsa_n, size_t rsa_n_len,
 {
     struct tnt_client *client = NULL;
 
+    RHO_TRACE_ENTER("url=\"%s\" rate=%lu", url, (unsigned long)rate);
+
     client = rhoL_zalloc(sizeof(*client));
     client->buf = rho_buf_create();
     client->sock = rho_sock_open_url(url);
+    if (client->sock == NULL) {
+        rho_warn("rho_sock_open_url(\"%s\") returned NULL", url);
+        goto done;
+    }
 
     client->rsa_pk.n = rhoL_malloc(rsa_n_len);
     memcpy(client->rsa_pk.n, rsa_n, rsa_n_len);
@@ -111,6 +117,8 @@ tnt_client_create(const char *url, unsigned char *rsa_n, size_t rsa_n_len,
 
     client->rate= rate;
 
+done:
+    RHO_TRACE_EXIT();
     return (client);
 }
 
@@ -127,42 +135,56 @@ tnt_client_from_config(void)
     uint32_t rate = 0;
     char *url = NULL;
 
+    RHO_TRACE_ENTER();
+
     len = get_config(root_config, "timeserver.rsa_n", cfgval, sizeof(cfgval));
-    if (len <= 0)
+    if (len <= 0) {
+        rho_warn("timeserver.rsa_n not in config");
         goto done;
+    }
     rsa_n_len = rho_binascii_hex2bin(rsa_n, cfgval);
 
     rho_memzero(cfgval, sizeof(cfgval));
     len = get_config(root_config, "timeserver.rsa_e", cfgval, sizeof(cfgval));
-    if (len <= 0)
+    if (len <= 0) {
+        rho_warn("timeserver.rsa_e not in config");
         goto done;
+    }
     rsa_e_len = rho_binascii_hex2bin(rsa_e, cfgval);
 
     rho_memzero(cfgval, sizeof(cfgval));
     len = get_config(root_config, "timeserver.rate", cfgval, sizeof(cfgval));
-    if (len <= 0)
+    if (len <= 0) {
+        rho_warn("timeserver.rate not in config");
         goto done;
+    }
     rate = rho_str_touint32(cfgval, 10);
 
     rho_memzero(cfgval, sizeof(cfgval));
     len = get_config(root_config, "timeserver.url", cfgval, sizeof(cfgval));
-    if (len <= 0)
+    if (len <= 0) {
+        rho_warn("timeserver.url not in config");
         goto done;
+    }
     url = rhoL_strdup(cfgval);
     client = tnt_client_create(url, rsa_n, rsa_n_len, rsa_e, rsa_e_len, rate);
 
 done:
+    RHO_TRACE_EXIT("client=%p", client);
     return (client);
 }
 
 static struct tnt_client *
 tnt_client_singleton(void)
 {
+    RHO_TRACE_ENTER();
+
     if (!did_read_config) {
         g_tnt_client = tnt_client_from_config();
         did_read_config = true;
     }
 
+    RHO_TRACE_EXIT("g_tnt_client=%p", g_tnt_client);
     return (g_tnt_client);
 }
 
@@ -177,8 +199,15 @@ tnt_client_verify_signature(struct tnt_client *client, uint8_t *body,
     struct rho_md *md = NULL;
     uint8_t bodyhash[32] = { 0 };
 
+    sys_printf("> tnt_client_verify_signature\n");
+
+    RHO_TRACE_ENTER("bodylen=%lu, siglen=%lu", 
+            (unsigned long)bodylen, (unsigned long)siglen);
+
     /* returns 1 if verification is good; 0 if bad */
+    sys_printf("before br_rsa_pkcs1_vrfy_get_default\n");
     vrfy = br_rsa_pkcs1_vrfy_get_default();
+    sys_printf("before vrfy\n");
     vrfy_ret = vrfy(
             sig,
             siglen,
@@ -187,15 +216,22 @@ tnt_client_verify_signature(struct tnt_client *client, uint8_t *body,
             &client->rsa_pk,
             hashval);
 
+    sys_printf("after vrfy\n");
+
     if (vrfy_ret == 0) {
         rho_warn("tnt rsa verification failed!\n");
         goto done;
     }
 
+    sys_printf("before rho_md_create\n");
     md = rho_md_create(RHO_MD_SHA256, NULL, 0);
+    sys_printf("before rho_md_update\n");
     rho_md_update(md, body, bodylen);
+    sys_printf("before rho_md_finish\n");
     rho_md_finish(md, bodyhash);
+    sys_printf("before rho_md_destroy\n");
     rho_md_destroy(md);
+    sys_printf("before rho_mem_equal\n");
     if (!rho_mem_equal(hashval, bodyhash, 32)) {
         rho_warn("tnt signature does not match hash value!\n");
         goto done;
@@ -204,6 +240,8 @@ tnt_client_verify_signature(struct tnt_client *client, uint8_t *body,
     ret = true;
 
 done:
+    sys_printf("< tnt_client_verify_signature\n");
+    RHO_TRACE_EXIT("ret=%d\n", ret);
     return (ret);
 }
 
@@ -223,23 +261,33 @@ tnt_client_request(struct tnt_client *client)
     uint8_t body[TNT_BODY_LEN] = { 0 };
     uint8_t sig[TNT_SIG_LEN] = { 0 };
 
+    RHO_TRACE_ENTER();
+
     nonce = rho_rand_u64();
 
-    debug("requesting time server\n");
-    
     rho_buf_clear(buf);
     rho_buf_writeu64be(buf, nonce);
     rho_buf_rewind(buf);
+    sys_printf("before rho_sock_send_buf\n");
     n = rho_sock_send_buf(sock, buf, rho_buf_length(buf));
-    if (n != rho_buf_length(buf))
+    if (n != rho_buf_length(buf)) {
+        rho_warn("error: only sent %ld", n);
         goto done;
+    }
+
+    sys_printf("sent %ld bytes to timeserver\n", n);
 
     rho_buf_clear(buf);
     /* TODO: how big is the expected response? */
+    sys_printf("before rho_sock_recv_buf\n");
     n = rho_sock_recv_buf(sock, buf, 1024);
-    if (n <= 0)
+    if (n <= 0) {
+        rho_warn("error: received %ld", n);
         goto done;
+    }
 
+
+    sys_printf("before rho_buf_rewind\n");
     rho_buf_rewind(buf);
 
     /* header */
@@ -251,6 +299,7 @@ tnt_client_request(struct tnt_client *client)
     rho_buf_readu64be(buf, &sec);
     rho_buf_readu32be(buf, &usec);
 
+    sys_printf("before rho_buf_seek\n");
     rho_buf_seek(buf, TNT_HEADER_LEN, SEEK_SET);
     rho_buf_read(buf, body, TNT_BODY_LEN);
 
@@ -279,6 +328,8 @@ tnt_client_get_trusted_time_usec(struct tnt_client *client)
     long host_time = 0;
     long diff = 0;
 
+    RHO_TRACE_ENTER();
+
     host_time = DkSystemTimeQuery();
     client->last_host_time = host_time;
 
@@ -292,6 +343,7 @@ tnt_client_get_trusted_time_usec(struct tnt_client *client)
         rho_warn("trusted time %ld and host time %ld differ significanly!\n",
                 trusted_time, host_time);
 
+    RHO_TRACE_EXIT();
     return (trusted_time);
 }
 
@@ -300,6 +352,8 @@ tnt_client_get_host_time_usec(struct tnt_client *client)
 {
     long time = 0;
 
+    RHO_TRACE_ENTER();
+
     time = DkSystemTimeQuery();
     if (time < client->last_host_time)
         rho_warn("current host time %ld is behind preivous host time %ld!\n",
@@ -307,29 +361,31 @@ tnt_client_get_host_time_usec(struct tnt_client *client)
 
     client->last_host_time = time;
 
+    RHO_TRACE_EXIT();
     return (time);
 }
 
+/*
+ * TODO: allow different strategies for when to call to the
+ * timerserver.  Currently, we only support configuration of
+ * a percent value (that is, of all time-related syscalls, what
+ * percentage should go to the timeserver).  We then uniformly,
+ * at random draw, when each such timeserver request occurs.
+ *
+ *
+ *  If you want 10% of the time, then 0.1
+ *      0.1 * 10000 = 1000
+ *  If you want 1% of the time, then 0.01
+ *  If you want 0.1% of the time, then 0.001
+ *  If you want 0.01% of the time, then 0.0001
+ */
 static long
 tnt_client_get_time_usec(struct tnt_client *client)
 {
     long time = 0;
     uint32_t r = 0;
 
-    /*
-     * TODO: allow different strategies for when to call to the
-     * timerserver.  Currently, we only support configuration of
-     * a percent value (that is, of all time-related syscalls, what
-     * percentage should go to the timeserver).  We then uniformly,
-     * at random draw, when each such timeserver request occurs.
-     *
-     *
-     *  If you want 10% of the time, then 0.1
-     *      0.1 * 10000 = 1000
-     *  If you want 1% of the time, then 0.01
-     *  If you want 0.1% of the time, then 0.001
-     *  If you want 0.01% of the time, then 0.0001
-     */
+    RHO_TRACE_ENTER();
 
     r = rho_rand_uniform_u32(0, 10000);
     if (r < client->rate)
@@ -337,6 +393,7 @@ tnt_client_get_time_usec(struct tnt_client *client)
     else
         time = tnt_client_get_host_time_usec(client);
 
+    RHO_TRACE_EXIT();
     return (time);
 }
 

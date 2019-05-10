@@ -208,8 +208,8 @@ smuf_map_fileuri(const char *fileuri, size_t size, void **addr)
         goto done;
     }
 
-    if (DkStreamAttributesQuerybyHandle(file, &pal_attr) == PAL_FALSE) {
-        rho_warn("DkStreamAttributesQuerybyHandle(\"%s\") failed", fileuri);
+    if (DkStreamAttributesQueryByHandle(file, &pal_attr) == PAL_FALSE) {
+        rho_warn("DkStreamAttributesQueryByHandle(\"%s\") failed", fileuri);
         error = -PAL_ERRNO;
         goto done;
     }

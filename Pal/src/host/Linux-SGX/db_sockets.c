@@ -150,7 +150,7 @@ static int inet_create_uri (char * uri, int count, struct sockaddr * addr,
 
     if (addr->sa_family == AF_INET) {
         if (addrlen != sizeof(struct sockaddr_in))
-            return PAL_ERROR_INVAL;
+            return -PAL_ERROR_INVAL;
 
         struct sockaddr_in * addr_in = (struct sockaddr_in *) addr;
         char * addr = (char *) &addr_in->sin_addr.s_addr;
@@ -164,7 +164,7 @@ static int inet_create_uri (char * uri, int count, struct sockaddr * addr,
                        __ntohs(addr_in->sin_port));
     } else if (addr->sa_family == AF_INET6) {
         if (addrlen != sizeof(struct sockaddr_in6))
-            return PAL_ERROR_INVAL;
+            return -PAL_ERROR_INVAL;
 
         struct sockaddr_in6 * addr_in6 = (struct sockaddr_in6 *) addr;
         unsigned short * addr = (unsigned short *) &addr_in6->sin6_addr.s6_addr;
@@ -355,6 +355,7 @@ static int tcp_listen (PAL_HANDLE * handle, char * uri, int options)
 #endif
 
     struct sockopt sock_options;
+    memset(&sock_options, 0x00, sizeof(struct sockopt));
     ret = ocall_sock_listen(bind_addr->sa_family,
                             sock_type(SOCK_STREAM, options), 0,
                             bind_addr, &bind_addrlen,
@@ -390,6 +391,7 @@ static int tcp_accept (PAL_HANDLE handle, PAL_HANDLE * client)
     int ret = 0;
 
     struct sockopt sock_options;
+    memset(&sock_options, 0x00, sizeof(struct sockopt));
     ret = ocall_sock_accept(handle->sock.fd, &dest_addr, &dest_addrlen,
                             &sock_options);
     if (IS_ERR(ret))
@@ -437,6 +439,7 @@ static int tcp_connect (PAL_HANDLE * handle, char * uri, int options)
 
 
     struct sockopt sock_options;
+    memset(&sock_options, 0x00, sizeof(struct sockopt));
     ret = ocall_sock_connect(dest_addr->sa_family,
                              sock_type(SOCK_STREAM, options), 0,
                              dest_addr, dest_addrlen,
@@ -566,6 +569,7 @@ static int udp_bind (PAL_HANDLE * handle, char * uri, int options)
 #endif
 
     struct sockopt sock_options;
+    memset(&sock_options, 0x00, sizeof(struct sockopt));
     ret = ocall_sock_listen(bind_addr->sa_family,
                             sock_type(SOCK_DGRAM, options), 0,
                             bind_addr, &bind_addrlen, &sock_options);
@@ -592,6 +596,8 @@ static int udp_connect (PAL_HANDLE * handle, char * uri, int options)
     unsigned int bind_addrlen, dest_addrlen;
     int ret;
 
+    //printf("pal:udp_connect(uri=\"%s\")\n", uri);
+
     if ((ret = socket_parse_uri(uri, &bind_addr, &bind_addrlen,
                                 &dest_addr, &dest_addrlen)) < 0)
         return ret;
@@ -604,6 +610,7 @@ static int udp_connect (PAL_HANDLE * handle, char * uri, int options)
 #endif
 
     struct sockopt sock_options;
+    memset(&sock_options, 0x00, sizeof(struct sockopt));
     ret = ocall_sock_connect(dest_addr ? dest_addr->sa_family : AF_INET,
                              sock_type(SOCK_DGRAM, options), 0,
                              dest_addr, dest_addrlen,
@@ -622,6 +629,14 @@ static int udp_connect (PAL_HANDLE * handle, char * uri, int options)
         ocall_close(ret);
         return -PAL_ERROR_NOMEM;
     }
+
+#if 0
+    printf("pal:udp_connect(uri=\"%s\") family=%u, success port=%u, addr=%u\n", 
+            uri,
+            dest_addr->sa_family,
+            ((struct sockaddr_in *)dest_addr)->sin_port,
+            ((struct sockaddr_in *)dest_addr)->sin_addr.s_addr);
+#endif
 
     return 0;
 }

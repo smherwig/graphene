@@ -61,7 +61,7 @@
 
 struct shim_mount epoll_builtin_fs;
 
-/* shim_epoll_fds are linked as a list (by the list field), 
+/* shim_epoll_fds are linked as a list (by the list field),
  * hanging off of a shim_epoll_handle (by the fds field) */
 struct shim_epoll_fd {
     FDTYPE                      fd;
@@ -418,7 +418,7 @@ retry:
     }
 
     PAL_STREAM_ATTR attr;
-    if (!DkStreamAttributesQuerybyHandle(polled, &attr))
+    if (!DkStreamAttributesQueryByHandle(polled, &attr))
         goto reply;
 
     listp_for_each_entry(epoll_fd, &epoll->fds, list)
