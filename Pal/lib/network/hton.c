@@ -19,23 +19,6 @@
 #include "api.h"
 #include <host_endian.h>
 
-// SMHERWIG
-static inline uint16_t
-rho_swap_u16(uint16_t x)
-{
-    return ( (x >> 8) | (x << 8) );
-}
-
-static inline uint32_t
-rho_swap_u32(uint32_t x)
-{
-    return (
-        ((x >> 24) & 0x000000ff) | 
-        ((x >>  8) & 0x0000ff00) | 
-        ((x <<  8) & 0x00ff0000) | 
-        ((x << 24) & 0xff000000)
-    );
-}
 
 uint32_t __htonl (uint32_t x)
 {
@@ -49,7 +32,12 @@ uint32_t __htonl (uint32_t x)
 # error "What kind of system is this?"
 #endif
 #endif
-    return rho_swap_u32(x);
+    return (
+        ((x >> 24) & 0x000000ff) | 
+        ((x >>  8) & 0x0000ff00) | 
+        ((x <<  8) & 0x00ff0000) | 
+        ((x << 24) & 0xff000000)
+    );
 }
 
 uint32_t __ntohl (uint32_t x)
@@ -70,7 +58,7 @@ uint16_t __htons (uint16_t x)
 # error "What kind of system is this?"
 #endif
 #endif
-    return rho_swap_u16(x);
+    return ( (x >> 8) | (x << 8) );
 }
 
 uint16_t __ntohs (uint16_t x)
