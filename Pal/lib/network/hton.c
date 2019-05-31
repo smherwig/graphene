@@ -19,25 +19,19 @@
 #include "api.h"
 #include <host_endian.h>
 
+#define __bswap_16(x) ((unsigned short)(__builtin_bswap32(x) >> 16))
+#define __bswap_32(x) ((unsigned int)__builtin_bswap32(x))
 
 uint32_t __htonl (uint32_t x)
 {
-// SMHERWIG
-#if 0
-#if BYTE_ORDER == BIG_ENDIAN
+#if __BYTE_ORDER == __BIG_ENDIAN
+#error "Graphene thinks byte order is BIG_ENDIAN!"
     return x;
-#elif BYTE_ORDER == LITTLE_ENDIAN
+#elif __BYTE_ORDER == __LITTLE_ENDIAN
     return __bswap_32 (x);
 #else
 # error "What kind of system is this?"
 #endif
-#endif
-    return (
-        ((x >> 24) & 0x000000ff) | 
-        ((x >>  8) & 0x0000ff00) | 
-        ((x <<  8) & 0x00ff0000) | 
-        ((x << 24) & 0xff000000)
-    );
 }
 
 uint32_t __ntohl (uint32_t x)
@@ -47,18 +41,14 @@ uint32_t __ntohl (uint32_t x)
 
 uint16_t __htons (uint16_t x)
 {
-// SMHERWIG
-#if 0
-#if BYTE_ORDER == BIG_ENDIAN
+#if __BYTE_ORDER == __BIG_ENDIAN
 #error "Graphene thinks byte order is BIG_ENDIAN!"
     return x;
-#elif BYTE_ORDER == LITTLE_ENDIAN
+#elif __BYTE_ORDER == __LITTLE_ENDIAN
     return __bswap_16 (x);
 #else
 # error "What kind of system is this?"
 #endif
-#endif
-    return ( (x >> 8) | (x << 8) );
 }
 
 uint16_t __ntohs (uint16_t x)
