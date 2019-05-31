@@ -356,7 +356,7 @@ nextfs_client_request(struct nextfs_client *client,
     struct rho_sock *sock = client->sock;
     struct rho_buf *buf = client->buf;
 
-    debug("> nextfs_client_request\n");
+    //debug("> nextfs_client_request\n");
 
     n = rho_sock_sendn_buf(sock, buf, rho_buf_length(buf));
     if (n == -1) {
@@ -364,7 +364,7 @@ nextfs_client_request(struct nextfs_client *client,
         goto done;
     }
 
-    debug("receiving nextfs header\n");
+    //debug("receiving nextfs header\n");
 
     rho_buf_clear(buf);
     n = rho_sock_precvn_buf(sock, buf, 8);
@@ -373,13 +373,13 @@ nextfs_client_request(struct nextfs_client *client,
         goto done;
     }
 
-    debug("demarshaling nextfs header (n=%ld)\n", n);
+    //debug("demarshaling nextfs header (n=%ld)\n", n);
 
     nextfs_demarshal_hdr(buf, status, bodylen);
     if (*bodylen > 0) {
         rho_buf_clear(buf);
-        debug("response status=%u, len=%u\n", *status, *bodylen);
-        debug("receiving nextfs body\n");
+        //debug("response status=%u, len=%u\n", *status, *bodylen);
+        //debug("receiving nextfs body\n");
         n = rho_sock_precvn_buf(sock, buf, *bodylen);
         if (n == -1) {
             error = -1;
@@ -388,7 +388,7 @@ nextfs_client_request(struct nextfs_client *client,
     }
 
 done:
-    debug("< nextfs_client_request\n");
+    //debug("< nextfs_client_request\n");
     return (error);
 }
 
