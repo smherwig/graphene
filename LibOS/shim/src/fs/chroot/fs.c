@@ -470,7 +470,8 @@ static int chroot_open (struct shim_handle * hdl, struct shim_dentry * dent,
     hdl->type       = TYPE_FILE;
     file->marker    = (flags & O_APPEND) ? size : 0;
     file->size      = size;
-    file->buf_type  = (data->type == FILE_REGULAR) ? FILEBUF_MAP : FILEBUF_NONE;
+    // SMHERWIG file->buf_type  = (data->type == FILE_REGULAR) ? FILEBUF_MAP : FILEBUF_NONE;
+    file->buf_type  = FILEBUF_NONE;
     hdl->flags      = flags;
     hdl->acc_mode   = ACC_MODE(flags & O_ACCMODE);
     qstrcopy(&hdl->uri, &data->host_uri);
@@ -500,7 +501,8 @@ static int chroot_creat (struct shim_handle * hdl, struct shim_dentry * dir,
     hdl->type       = TYPE_FILE;
     file->marker    = (flags & O_APPEND) ? size : 0;
     file->size      = size;
-    file->buf_type  = (data->type == FILE_REGULAR) ? FILEBUF_MAP : FILEBUF_NONE;
+    // SMHERWIG file->buf_type  = (data->type == FILE_REGULAR) ? FILEBUF_MAP : FILEBUF_NONE;
+    file->buf_type = FILEBUF_NONE;
     hdl->flags      = flags;
     hdl->acc_mode   = ACC_MODE(flags & O_ACCMODE);
     qstrcopy(&hdl->uri, &data->host_uri);
@@ -601,7 +603,8 @@ static int chroot_hstat (struct shim_handle * hdl, struct stat * stat)
             stat->st_dev  = mdata ? (dev_t) mdata->ino_base : 0;
             stat->st_ino  = dent ? (ino_t) dent->ino : 0;
             stat->st_size = file->size;
-            stat->st_mode |= (file->buf_type == FILEBUF_MAP) ? S_IFREG : S_IFCHR;
+            // SMHERWIG stat->st_mode |= (file->buf_type == FILEBUF_MAP) ? S_IFREG : S_IFCHR;
+            stat->st_mode |= S_IFREG;
         }
 
         return 0;
