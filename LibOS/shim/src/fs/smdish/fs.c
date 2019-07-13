@@ -637,24 +637,9 @@ smdish_mmap(struct shim_handle *hdl, void **addr, size_t size,
     }
     smdish_memfile_print(mf);
 
-    if (mf->f_type == SMDISH_TYPE_LOCK_WITH_SEGMENT) {
-        /* 
-         * On migrate, mmap recalls mmap on any handle that was mmap'd.
-         * In our case, this is superflous.  With NGINX, it actually
-         * causes issues, since the lock file information is stored in the
-         * shared memory segment, and re-mmaping would zero out the client's
-         * segment and thereofre prevent it from knowing the name of the lock.
-         */
-        debug("smdish_mmap: mfile already has a segment (%p, %p); skipping RPC call\n",
-                mf->f_addr, *((void **)mf->f_addr));
-        *addr = mf->f_addr;
-        goto done;
-    }
-
     error = smdish_rpc_mmap(mdata->agent, mf->f_remote_fd, size);
     if (error != 0)
         goto done;
-
 
     mf->f_addr = DkVirtualMemoryAlloc(*addr, size, 0,
             PAL_PROT((PROT_READ|PROT_WRITE), 0));
@@ -804,7 +789,7 @@ smdish_checkin(struct shim_handle *hdl)
     rho_shim_handle_print(hdl);
 
     RHO_TRACE_EXIT();
-    return (-ENOSYS);
+    return (0);
 }
 
 static int
