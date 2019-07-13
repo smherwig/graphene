@@ -61,15 +61,23 @@
 #define SMC_MAX_NAME_SIZE          128
 #define SMC_MAX_PATH_SIZE          256
 
+/*
+ *  bytes
+ *   [ 0 -  3]:  ticket_number
+ *   [ 4 -  7]:  turn
+ *   [ 8 - 11]:  refcnt
+ *   [12     ]:  type
+ *   [13 - 24]:  iv
+ */
 #define SMC_LOCKFILE_SIZE          4096
-#define SMC_LOCKFILE_REFCNT_OFFSET      0
-#define SMC_LOCKFILE_TYPE_OFFSET        0
-#define SMC_LOCKFILE_IV_OFFSET          0
+#define SMC_LOCKFILE_REFCNT_OFFSET      8
+#define SMC_LOCKFILE_TYPE_OFFSET        12
+#define SMC_LOCKFILE_IV_OFFSET          13
 
+#define SMC_REFCNT_SIZE 4
+#define SMC_TYPE_SIZE 1
 #define SMC_IV_SIZE 12
 #define SMC_KEY_SIZE 32
-#define SMC_REFCNT_SIZE 4
-#define SMC_TYPE_SIZE 4
 
 #define SMC_TYPE_PURE_LOCK                 0
 #define SMC_TYPE_LOCK_WITH_SEGMENT         1
@@ -82,7 +90,7 @@
  *
  * TODO: add a Graphene config entry to specify this directory
  */
-#define SMC_ROOT_URI   "file:/home/smherwig/phoenix/memfiles"
+#define SMC_ROOT_URI   "file:/home/smherwig/phoenix/memfiles/0"
 
 struct smc_memfile {
     char        f_name[SMC_MAX_NAME_SIZE];
@@ -298,11 +306,15 @@ done:
 static void
 smc_memfile_init(struct smc_memfile *mf, const char *name)
 {
+    size_t n = 0;
+
     RHO_TRACE_ENTER("name=\"%s\"", name);
 
     rho_memzero(mf, sizeof(*mf));
-    /* TODO: use strlcpy */
-    memcpy(mf->f_name, name, strlen(name));
+
+    n = rho_strlcpy(mf->f_name, name, SMC_MAX_NAME_SIZE);
+    RHO_ASSERT(n < SMC_MAX_NAME_SIZE);
+
     mf->f_fd_refcnt = 1;
     mf->f_type = SMC_TYPE_PURE_LOCK;
 
@@ -535,6 +547,7 @@ smc_memfile_copyin_segment(struct smc_memfile *mf)
 
     RHO_TRACE_ENTER();
 
+    memcpy(mf->f_iv, mf->f_pub_lock + SMC_LOCKFILE_IV_OFFSET, SMC_IV_SIZE);
     memcpy(mf->f_priv_seg, mf->f_pub_seg, mf->f_map_size);
     smc_decrypt(mf->f_priv_seg, mf->f_map_size, mf->f_key, mf->f_iv);
 
@@ -546,11 +559,20 @@ smc_memfile_copyin_segment(struct smc_memfile *mf)
 static void
 smc_memfile_copyout_segment(struct smc_memfile *mf)
 {
+    void *tmp = NULL;
+
     RHO_TRACE_ENTER();
 
+    tmp = rhoL_zalloc(mf->f_map_size);
+    memcpy(tmp, mf->f_priv_seg, mf->f_map_size);
+
     rho_rand_bytes(mf->f_iv, SMC_IV_SIZE);
-    smc_encrypt(mf->f_priv_seg, mf->f_map_size, mf->f_key, mf->f_iv);
-    memcpy(mf->f_pub_seg, mf->f_priv_seg, mf->f_map_size);
+    memcpy(mf->f_pub_lock + SMC_LOCKFILE_IV_OFFSET, mf->f_iv, SMC_IV_SIZE);
+
+    smc_encrypt(tmp, mf->f_map_size, mf->f_key, mf->f_iv);
+    memcpy(mf->f_pub_seg, tmp, mf->f_map_size);
+
+    rhoL_free(tmp);
 
     RHO_TRACE_EXIT();
 }
@@ -601,14 +623,13 @@ smc_memfile_do_mmap(struct smc_memfile *mf, void **addr, size_t map_size)
 
     RHO_TRACE_ENTER();
 
-    /* 
-     * TODO: create the segment file if it does not exist,
-     * and map in the segment file 
-     */
-
     mf->f_map_size = map_size;
     mf->f_type = SMC_TYPE_LOCK_WITH_UNINIT_SEGMENT;
     rho_rand_bytes(mf->f_key, SMC_KEY_SIZE);
+
+    error = smc_memfile_create_segmentfile(mf, map_size);
+    if (error != 0)
+        goto done;
 
     error = smc_memfile_map_segmentfile(mf);
     if (error != 0)
@@ -636,12 +657,11 @@ smc_memfile_do_lock(struct smc_memfile *mf)
     
     tl = (struct rho_ticketlock *)mf->f_pub_lock;
     (void)rho_ticketlock_lock(tl);
+
     memcpy(&mf->f_type, mf->f_pub_lock + SMC_LOCKFILE_TYPE_OFFSET, SMC_TYPE_SIZE);
 
-    if (mf->f_type == SMC_TYPE_LOCK_WITH_SEGMENT) {
-        memcpy(mf->f_iv, mf->f_pub_lock + SMC_LOCKFILE_IV_OFFSET, SMC_IV_SIZE);
+    if (mf->f_type == SMC_TYPE_LOCK_WITH_SEGMENT)
         error = smc_memfile_copyin_segment(mf);
-    }
 
     RHO_TRACE_EXIT();
     return (error);
@@ -657,13 +677,15 @@ smc_memfile_do_unlock(struct smc_memfile *mf)
 
     tl = (struct rho_ticketlock *)mf->f_pub_lock;
 
-    if (mf->f_type == SMC_TYPE_LOCK_WITH_SEGMENT) {
+    if (mf->f_type == SMC_TYPE_LOCK_WITH_SEGMENT || 
+            mf->f_type == SMC_TYPE_LOCK_WITH_UNINIT_SEGMENT) 
         smc_memfile_copyout_segment(mf);
-        memcpy(mf->f_pub_lock + SMC_LOCKFILE_IV_OFFSET, mf->f_iv, SMC_IV_SIZE);
-    }
 
-    memcpy(mf->f_pub_lock + SMC_LOCKFILE_TYPE_OFFSET, &mf->f_type,
+    if (mf->f_type == SMC_TYPE_LOCK_WITH_UNINIT_SEGMENT) {
+        mf->f_type = SMC_TYPE_LOCK_WITH_SEGMENT;
+        memcpy(mf->f_pub_lock + SMC_LOCKFILE_TYPE_OFFSET, &mf->f_type,
             SMC_TYPE_SIZE);
+    }
 
     rho_ticketlock_unlock(tl);
 
@@ -786,6 +808,7 @@ done:
     return (error);
 }
 
+#if 0
 static int
 smc_mdata_remap_lockfiles(struct smc_mdata *mdata)
 {
@@ -809,6 +832,7 @@ done:
     RHO_TRACE_EXIT();
     return (error);
 }
+#endif
 
 static int
 smc_mdata_inc_lockfile_refcnts(struct smc_mdata *mdata)
@@ -894,6 +918,7 @@ smc_mmap(struct shim_handle *hdl, void **addr, size_t size,
     struct smc_mdata *mdata = hdl->fs->data;
     struct shim_smc_handle *smh = &(hdl->info.smc);
     struct smc_memfile *mf = NULL;
+    uint8_t type = 0;
 
     (void)prot;
     (void)flags;
@@ -913,6 +938,12 @@ smc_mmap(struct shim_handle *hdl, void **addr, size_t size,
     smc_memfile_print(mf);
 
     error = smc_memfile_do_mmap(mf, addr, size);
+    if (!error) {
+        type = SMC_TYPE_LOCK_WITH_UNINIT_SEGMENT;
+        memcpy(mf->f_pub_lock + SMC_LOCKFILE_TYPE_OFFSET, &type,
+                SMC_TYPE_SIZE);
+    }
+
 done:
     RHO_TRACE_EXIT("error=%d", error);
     return (error);
@@ -991,6 +1022,78 @@ smc_advlock(struct shim_handle *hdl, int op, struct flock *flock)
 }
 
 static int
+smc_hstat(struct shim_handle *hdl, struct stat *stat)
+{
+    int error = 0;
+    struct smc_mdata *mdata = g_smc_mdata;
+    struct shim_smc_handle *smh = &(hdl->info.smc);
+    struct smc_memfile *mf = NULL;
+
+    RHO_TRACE_ENTER();
+    rho_shim_handle_print(hdl);
+
+    mf = smc_mdata_get_memfile_at_idx(mdata, smh->mf_idx);
+    if (mf == NULL) {
+        error = -EBADF;
+        goto done;
+    }
+    smc_memfile_print(mf);
+
+    stat->st_size = mf->f_map_size;
+
+done:
+    RHO_TRACE_EXIT();
+    return (error);
+}
+
+/* 
+ * TODO: what are the semantics of checkout and checkin?
+ * I'm pretty sure checkin is called by the parent
+ * and checkout by the child, and, vaguely, this has soemthign
+ * to do with altering the hdl state, but beyond that, I don't
+ * understand.
+ */
+static int
+smc_checkout(struct shim_handle *hdl)
+{
+    RHO_TRACE_ENTER();
+
+    rho_shim_handle_print(hdl);
+    hdl->fs = NULL;
+
+    RHO_TRACE_EXIT();
+    return (0);
+}
+
+static int
+smc_checkin(struct shim_handle *hdl)
+{
+    int error = 0;
+    struct smc_mdata *mdata = g_smc_mdata;
+    struct shim_smc_handle *smh = &(hdl->info.smc);
+    struct smc_memfile *mf = NULL;
+
+    RHO_TRACE_ENTER();
+
+    rho_shim_handle_print(hdl);
+
+    mf = smc_mdata_get_memfile_at_idx(mdata, smh->mf_idx);
+    if (mf == NULL) {
+        error = -EBADF;
+        goto done;
+    }
+
+    smc_memfile_map_lockfile(mf);
+        
+    if (mf->f_map_size > 0)
+        smc_memfile_map_segmentfile(mf);
+
+done:
+    RHO_TRACE_EXIT();
+    return (error);
+}
+
+static int
 smc_checkpoint(void **checkpoint, void *mount_data)
 {
     struct smc_mdata *mdata = mount_data;
@@ -1022,7 +1125,7 @@ smc_migrate(void *checkpoint, void **mount_data)
      * lockfile mappings get lost over fork; segmentfiles will
      * have fs's mmap invoked as part of fork 
      */
-    error = smc_mdata_remap_lockfiles(mdata);
+    //error = smc_mdata_remap_lockfiles(mdata);
 
     RHO_TRACE_EXIT();
     return (error);
@@ -1143,6 +1246,9 @@ struct shim_fs_ops smc_fs_ops = {
         .close       = &smc_close,
         .mmap        = &smc_mmap,
         .advlock     = &smc_advlock,
+        .hstat       = &smc_hstat,
+        .checkout    = &smc_checkout,
+        .checkin     = &smc_checkin,
         .checkpoint  = &smc_checkpoint,
         .migrate     = &smc_migrate,
     };
