@@ -78,7 +78,7 @@
  *
  * TODO: add a Graphene config entry to specify this directory
  */
-#define SMUF_ROOT_URI   "file:/home/smherwig/phoenix/memfiles"
+#define SMUF_ROOT_URI   "file:/home/smherwig/phoenix/memfiles/0"
 
 struct smuf_memfile {
     char        f_name[SMUF_MAX_NAME_SIZE];
@@ -223,7 +223,12 @@ smuf_map_fileuri(const char *fileuri, size_t size, void **addr)
         goto done;
     }
 
-    /* XXX: do we need to bkeep before this call? */
+    /* 
+     * XXX: do we need to bkeep before this call?
+     * We should call bkeep_unmapped_any, however, the problem is that
+     * we well then pass an address into DkStreamMap (instead of NULL), which
+     * will error due to the problems with untrusted mappings.
+     */
 
     mem = DkStreamMap(file, NULL, PAL_PROT_READ|PAL_PROT_WRITE, 0, ALIGN_UP(size));
     if (mem == NULL) {
@@ -372,12 +377,19 @@ smuf_memfile_copyin_segment(struct smuf_memfile *mf)
 static void
 smuf_memfile_copyout_segment(struct smuf_memfile *mf)
 {
+    void *tmp = NULL;
+
     RHO_TRACE_ENTER();
 
+    tmp = rhoL_zalloc(mf->f_map_size);
+    memcpy(tmp, mf->f_priv_seg, mf->f_map_size);
+
     rho_rand_bytes(mf->f_iv, SMUF_IV_SIZE);
-    smuf_encrypt(mf->f_priv_seg, mf->f_map_size, mf->f_key, mf->f_iv,
+    smuf_encrypt(tmp, mf->f_map_size, mf->f_key, mf->f_iv,
             mf->f_tag);
-    memcpy(mf->f_pub_seg, mf->f_priv_seg, mf->f_map_size);
+    memcpy(mf->f_pub_seg, tmp, mf->f_map_size);
+
+    rhoL_free(tmp);
 
     RHO_TRACE_EXIT();
 }
@@ -908,15 +920,35 @@ smuf_mmap(struct shim_handle *hdl, void **addr, size_t size,
     }
     smuf_memfile_print(mf);
 
-    /* TODO: you shouldn't be calling this on migration */
+    if (mf->f_type == SMUF_TYPE_LOCK_WITH_SEGMENT) {
+        /* 
+         * On migrate, mmap recalls mmap on any handle that was mmap'd.
+         * In our case, this is superflous.  With NGINX, it actually
+         * causes issues, since the lock file information is stored in the
+         * shared memory segment, and re-mmaping would zero out the client's
+         * segment and thereofre prevent it from knowing the name of the lock.
+         * -- this isn't true any more
+         */
+        debug("smuf_mmap: mfile already has a segment (%p, %p); skipping RPC call\n",
+                mf->f_priv_seg, *((void **)mf->f_priv_seg));
+        *addr = mf->f_priv_seg;
+    } else {
+        error = smuf_rpc_mmap(mdata->agent, mf->f_remote_fd, size);
+        if (error != 0)
+            goto done;
 
-    error = smuf_rpc_mmap(mdata->agent, mf->f_remote_fd, size);
-    if (error != 0)
-        goto done;
+        mf->f_map_size = size;
+        mf->f_type = SMUF_TYPE_LOCK_WITH_SEGMENT;
+        rho_rand_bytes(mf->f_key, SMUF_KEY_SIZE);
 
-    mf->f_map_size = size;
-    mf->f_type = SMUF_TYPE_LOCK_WITH_SEGMENT;
-    rho_rand_bytes(mf->f_key, SMUF_KEY_SIZE);
+        mf->f_priv_seg = DkVirtualMemoryAlloc(*addr, size, 0,
+                PAL_PROT((PROT_READ|PROT_WRITE), 0));
+        if (mf->f_priv_seg == NULL) {
+            error = -ENOMEM;
+            /* TODO: better cleanup on failure */
+            goto done;
+        }
+    }
 
     /* 
      * XXX: if this error's then we have orphaned a segmentfile on the
@@ -925,15 +957,6 @@ smuf_mmap(struct shim_handle *hdl, void **addr, size_t size,
     error = smuf_memfile_map_segmentfile(mf);
     if (error != 0)
         goto done;
-
-    mf->f_priv_seg = DkVirtualMemoryAlloc(*addr, size, 0,
-            PAL_PROT((PROT_READ|PROT_WRITE), 0));
-    if (mf->f_priv_seg == NULL) {
-        error = -ENOMEM;
-        /* TODO: better cleanup on failure */
-        goto done;
-    }
-
 
 done:
     RHO_TRACE_EXIT("error=%d", error);
@@ -1040,6 +1063,78 @@ smuf_advlock(struct shim_handle *hdl, int op, struct flock *flock)
 }
 
 static int
+smuf_hstat(struct shim_handle *hdl, struct stat *stat)
+{
+    int error = 0;
+    struct smuf_mdata *mdata = g_smuf_mdata;
+    struct shim_smuf_handle *smh = &(hdl->info.smuf);
+    struct smuf_memfile *mf = NULL;
+
+    RHO_TRACE_ENTER();
+    rho_shim_handle_print(hdl);
+
+    mf = smuf_mdata_get_memfile_at_idx(mdata, smh->mf_idx);
+    if (mf == NULL) {
+        error = -EBADF;
+        goto done;
+    }
+    smuf_memfile_print(mf);
+
+    stat->st_size = mf->f_map_size;
+
+done:
+    RHO_TRACE_EXIT();
+    return (error);
+}
+
+/* 
+ * TODO: what are the semantics of checkout and checkin?
+ * I'm pretty sure checkin is called by the parent
+ * and checkout by the child, and, vaguely, this has soemthign
+ * to do with altering the hdl state, but beyond that, I don't
+ * understand.
+ */
+static int
+smuf_checkout(struct shim_handle *hdl)
+{
+    RHO_TRACE_ENTER();
+
+    rho_shim_handle_print(hdl);
+    hdl->fs = NULL;
+
+    RHO_TRACE_EXIT();
+    return (0);
+}
+
+static int
+smuf_checkin(struct shim_handle *hdl)
+{
+    int error = 0;
+    struct smuf_mdata *mdata = g_smuf_mdata;
+    struct shim_smuf_handle *smh = &(hdl->info.smuf);
+    struct smuf_memfile *mf = NULL;
+
+    RHO_TRACE_ENTER();
+
+    rho_shim_handle_print(hdl);
+
+    mf = smuf_mdata_get_memfile_at_idx(mdata, smh->mf_idx);
+    if (mf == NULL) {
+        error = -EBADF;
+        goto done;
+    }
+
+    smuf_memfile_map_lockfile(mf);
+        
+    if (mf->f_map_size > 0)
+        smuf_memfile_map_segmentfile(mf);
+
+done:
+    RHO_TRACE_EXIT();
+    return (error);
+}
+
+static int
 smuf_checkpoint(void **checkpoint, void *mount_data)
 {
     struct smuf_mdata *mdata = mount_data;
@@ -1088,7 +1183,11 @@ smuf_migrate(void *checkpoint, void **mount_data)
     *mount_data = mdata;
     g_smuf_mdata = mdata;
 
-    /* the mappings get lost over fork */
+    /* 
+     * the mappings get lost over fork 
+     * FIXME: I don't think we need to do this anymore, now that we're doing it
+     * at checkin().
+     */
     error = smuf_mdata_remap_lockfiles(mdata);
 
     RHO_TRACE_EXIT();
@@ -1220,6 +1319,9 @@ struct shim_fs_ops smuf_fs_ops = {
         .close       = &smuf_close,
         .mmap        = &smuf_mmap,
         .advlock     = &smuf_advlock,
+        .hstat       = &smuf_hstat,
+        .checkout    = &smuf_checkout,
+        .checkin     = &smuf_checkin,
         .checkpoint  = &smuf_checkpoint,
         .migrate     = &smuf_migrate,
     };
