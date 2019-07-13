@@ -57,7 +57,7 @@
 
 #define SMDISH_TYPE_PURE_LOCK                 0
 #define SMDISH_TYPE_LOCK_WITH_SEGMENT         1
-#define SMDISH_TYPE_LOCK_WITH_UNINIT_SEGMENT  2
+#define SMDISH_TYPE_LOCK_WITH_UNINIT_SEGMENT  2  /* unusued */
 
 /*
  * For now, we have a hard limit of 32 memfiles opened.
@@ -637,6 +637,20 @@ smdish_mmap(struct shim_handle *hdl, void **addr, size_t size,
     }
     smdish_memfile_print(mf);
 
+    if (mf->f_type == SMDISH_TYPE_LOCK_WITH_SEGMENT) {
+        /* 
+         * On migrate, mmap recalls mmap on any handle that was mmap'd.
+         * In our case, this is superflous.  With NGINX, it actually
+         * causes issues, since the lock file information is stored in the
+         * shared memory segment, and re-mmaping would zero out the client's
+         * segment and thereofre prevent it from knowing the name of the lock.
+         */
+        debug("smdish_mmap: mfile already has a segment (%p, %p); skipping RPC call\n",
+                mf->f_addr, *((void **)mf->f_addr));
+        *addr = mf->f_addr;
+        goto done;
+    }
+
     error = smdish_rpc_mmap(mdata->agent, mf->f_remote_fd, size);
     if (error != 0)
         goto done;
@@ -734,6 +748,31 @@ smdish_advlock(struct shim_handle *hdl, int op, struct flock *flock)
     else
         error = -EINVAL;
 
+    RHO_TRACE_EXIT();
+    return (error);
+}
+
+static int
+smdish_hstat(struct shim_handle *hdl, struct stat *stat)
+{
+    int error = 0;
+    struct smdish_mdata *mdata = g_smdish_mdata;
+    struct shim_smdish_handle *smh = &(hdl->info.smdish);
+    struct smdish_memfile *mf = NULL;
+
+    RHO_TRACE_ENTER();
+    rho_shim_handle_print(hdl);
+
+    mf = smdish_mdata_get_memfile_at_idx(mdata, smh->mf_idx);
+    if (mf == NULL) {
+        error = -EBADF;
+        goto done;
+    }
+    smdish_memfile_print(mf);
+
+    stat->st_size = mf->f_map_size;
+
+done:
     RHO_TRACE_EXIT();
     return (error);
 }
@@ -933,6 +972,7 @@ struct shim_fs_ops smdish_fs_ops = {
         .close       = &smdish_close,      /**/
         .mmap        = &smdish_mmap,       /**/
         .advlock     = &smdish_advlock,
+        .hstat       = &smdish_hstat,      /**/
         .checkout    = &smdish_checkout,   /**/
         .checkin     = &smdish_checkin,
         .checkpoint  = &smdish_checkpoint, /**/
