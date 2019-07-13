@@ -808,32 +808,6 @@ done:
     return (error);
 }
 
-#if 0
-static int
-smc_mdata_remap_lockfiles(struct smc_mdata *mdata)
-{
-    int error = 0;
-    size_t i = 0;
-    int val = 0;
-    struct smc_memfile *mf = NULL;
-
-    RHO_TRACE_ENTER();
-
-    RHO_BITOPS_FOREACH(i, val, (uint8_t *)&mdata->mf_bitmap, 32) {
-        if (val == 1) {
-            mf = &(mdata->mf_tab[i]);
-            error = smc_memfile_map_lockfile(mf);
-            if (error != 0)
-                goto done;
-        }
-    }
-
-done:
-    RHO_TRACE_EXIT();
-    return (error);
-}
-#endif
-
 static int
 smc_mdata_inc_lockfile_refcnts(struct smc_mdata *mdata)
 {
@@ -1120,12 +1094,6 @@ smc_migrate(void *checkpoint, void **mount_data)
 
     *mount_data = mdata;
     g_smc_mdata = mdata;
-
-    /* 
-     * lockfile mappings get lost over fork; segmentfiles will
-     * have fs's mmap invoked as part of fork 
-     */
-    //error = smc_mdata_remap_lockfiles(mdata);
 
     RHO_TRACE_EXIT();
     return (error);
