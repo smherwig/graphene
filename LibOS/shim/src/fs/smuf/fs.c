@@ -523,31 +523,6 @@ done:
     return (error);
 }
 
-static int
-smuf_mdata_remap_lockfiles(struct smuf_mdata *mdata)
-{
-    int error = 0;
-    size_t i = 0;
-    int val = 0;
-     struct smuf_memfile *mf = NULL;
-
-    RHO_TRACE_ENTER();
-
-    RHO_BITOPS_FOREACH(i, val, (uint8_t *)&mdata->mf_bitmap, 32) {
-        if (val == 1) {
-            mf = &(mdata->mf_tab[i]);
-            error = smuf_memfile_map_lockfile(mf);
-            if (error != 0)
-                goto done;
-
-        }
-    }
-
-done:
-    RHO_TRACE_EXIT();
-    return (error);
-}
-
 /******************************************
  * RPC
  ******************************************/
@@ -1183,12 +1158,6 @@ smuf_migrate(void *checkpoint, void **mount_data)
     *mount_data = mdata;
     g_smuf_mdata = mdata;
 
-    /* 
-     * the mappings get lost over fork 
-     * FIXME: I don't think we need to do this anymore, now that we're doing it
-     * at checkin().
-     */
-    error = smuf_mdata_remap_lockfiles(mdata);
 
     RHO_TRACE_EXIT();
     return (error);
