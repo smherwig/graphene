@@ -711,7 +711,7 @@ rho_ssl_sock_send(struct rho_sock *sock, const void *buf, size_t len)
     int error = 0;
 
     debug("> rho_ssl_sock_send: len=%lu\n", (unsigned long)len);
-    rho_hexdump(buf, len, "rho_ssl_sock_send app buffer");
+    //rho_hexdump(buf, len, "rho_ssl_sock_send app buffer");
 
     n = br_sslio_write(&sc->ioc, buf, len);
     debug("> br_sslio_write returned %d\n", n);
