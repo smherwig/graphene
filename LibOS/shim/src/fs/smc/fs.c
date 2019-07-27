@@ -60,6 +60,7 @@
 
 #define SMC_MAX_NAME_SIZE          128
 #define SMC_MAX_PATH_SIZE          256
+#define SMC_MAX_URI_SIZE           512
 
 /*
  *  bytes
@@ -83,17 +84,12 @@
 #define SMC_TYPE_LOCK_WITH_SEGMENT         1
 #define SMC_TYPE_LOCK_WITH_UNINIT_SEGMENT  2
 
-/*
- * For now, we hardcode the directory to:
- * 
- *      file:/home/smherwig/phoenix/memfiles
- *
- * TODO: add a Graphene config entry to specify this directory
- */
-#define SMC_ROOT_URI   "file:/home/smherwig/phoenix/memfiles/0"
-
 struct smc_memfile {
     char        f_name[SMC_MAX_NAME_SIZE];
+
+    char        f_segment_uri[SMC_MAX_URI_SIZE];
+    char        f_lock_uri[SMC_MAX_URI_SIZE];
+
     int         f_fd_refcnt;
 
     void        *f_pub_lock;
@@ -119,6 +115,7 @@ struct smc_memfile {
  */
 struct smc_mdata {
     uint32_t mf_bitmap;
+    char mf_memdir_uri[SMC_MAX_URI_SIZE];
     struct smc_memfile mf_tab[32];
 };
 
@@ -154,7 +151,6 @@ static void
 smc_encrypt(uint8_t *data, size_t data_len, const uint8_t *key,
         const uint8_t *iv)
 {
-
     br_aes_x86ni_ctr_keys ctx;
     uint32_t cc = 0;
     uint32_t cc_out = 0;
@@ -302,9 +298,9 @@ done:
 /******************************************
  * MEMFILE
  ******************************************/ 
-
 static void
-smc_memfile_init(struct smc_memfile *mf, const char *name)
+smc_memfile_init(const char *memdir_uri, struct smc_memfile *mf,
+        const char *name)
 {
     size_t n = 0;
 
@@ -312,8 +308,32 @@ smc_memfile_init(struct smc_memfile *mf, const char *name)
 
     rho_memzero(mf, sizeof(*mf));
 
+    /* name relative to mount, (e.g., /foo) */
     n = rho_strlcpy(mf->f_name, name, SMC_MAX_NAME_SIZE);
     RHO_ASSERT(n < SMC_MAX_NAME_SIZE);
+
+    /*
+     * FIXME:
+     *  We assume memdir_uri does not end in '/' and that
+     *  f_name starts with a '/'.
+     */
+
+    /* construct lockfile uri (e.g, file:/home/bar/foo) */
+    n = rho_strlcpy(mf->f_lock_uri, memdir_uri, SMC_MAX_URI_SIZE);
+    RHO_ASSERT(n < SMC_MAX_URI_SIZE);
+
+    n = rho_strlcat(mf->f_lock_uri, mf->f_name, SMC_MAX_URI_SIZE);
+    RHO_ASSERT(n < SMC_MAX_URI_SIZE);
+
+    /* construct segment file uri (e.g., file:/home/bar/foo.segment) */
+    n = rho_strlcpy(mf->f_segment_uri, memdir_uri, SMC_MAX_URI_SIZE);
+    RHO_ASSERT(n < SMC_MAX_URI_SIZE);
+
+    n = rho_strlcat(mf->f_segment_uri, mf->f_name, SMC_MAX_URI_SIZE);
+    RHO_ASSERT(n < SMC_MAX_URI_SIZE);
+
+    n = rho_strlcat(mf->f_segment_uri, ".segment", SMC_MAX_URI_SIZE);
+    RHO_ASSERT(n < SMC_MAX_URI_SIZE);
 
     mf->f_fd_refcnt = 1;
     mf->f_type = SMC_TYPE_PURE_LOCK;
@@ -326,6 +346,8 @@ smc_memfile_print(const struct smc_memfile *mf)
 {
     debug("smc_memfile = {\n");
     debug("  f_name: \"%s\"\n", mf->f_name);
+    debug("  f_lock_uri: \"%s\"\n", mf->f_lock_uri);
+    debug("  f_segment_uri: \"%s\"\n", mf->f_segment_uri);
     debug("  f_fd_refcnt: %d\n", mf->f_fd_refcnt);
     debug("  f_type: %u\n", (unsigned)mf->f_type);
     debug("  f_pub_lock: %p\n", mf->f_pub_lock);
@@ -333,83 +355,6 @@ smc_memfile_print(const struct smc_memfile *mf)
     debug("  f_priv_seg: %p\n", mf->f_priv_seg);
     debug("  f_map_size: %lu\n", mf->f_map_size);
     debug("}\n");
-}
-
-static void
-smc_memfile_get_lockfile_uri(const struct smc_memfile *mf,
-        char *uri, size_t uri_size)
-{
-    size_t n = 0;
-
-    RHO_TRACE_ENTER("mf->f_name=\"\%s\"", mf->f_name);
-
-    n = rho_strlcpy(uri, SMC_ROOT_URI, uri_size);
-    RHO_ASSERT(n < uri_size);
-
-    n = rho_strlcat(uri, mf->f_name, uri_size);
-    RHO_ASSERT(n < uri_size);
-
-    RHO_TRACE_EXIT("lockfile uri=\"%s\"", uri);
-}
-
-static int
-smc_memfile_create_lockfile(struct smc_memfile *mf)
-{
-    int error = 0;
-    char uri[SMC_MAX_PATH_SIZE] = { 0 };
-
-    RHO_TRACE_ENTER();
-
-    smc_memfile_get_lockfile_uri(mf, uri, sizeof(uri));
-    error = smc_create_fileuri(uri, SMC_LOCKFILE_SIZE);
-
-    RHO_TRACE_EXIT("error=%d", error);
-    return (error);
-}
-
-static int
-smc_memfile_delete_lockfile(struct smc_memfile *mf)
-{
-    int error = 0;
-    char uri[SMC_MAX_PATH_SIZE] = { 0 };
-
-    RHO_TRACE_ENTER();
-
-    smc_memfile_get_lockfile_uri(mf, uri, sizeof(uri));
-    error = smc_delete_fileuri(uri);
-
-    RHO_TRACE_EXIT("error=%d", error);
-    return (error);
-}
-
-static int
-smc_memfile_map_lockfile(struct smc_memfile *mf)
-{
-    int error = 0;
-    char uri[SMC_MAX_PATH_SIZE] = { 0 };
-
-    RHO_TRACE_ENTER();
-
-    smc_memfile_get_lockfile_uri(mf, uri, sizeof(uri));
-    error = smc_map_fileuri(uri, SMC_LOCKFILE_SIZE, &mf->f_pub_lock);
-
-    RHO_TRACE_EXIT("error=%d", error);
-    return (error);
-}
-
-static int
-smc_memfile_unmap_lockfile(struct smc_memfile *mf)
-{
-    int error = 0;
-    char uri[SMC_MAX_PATH_SIZE] = { 0 };
-
-    RHO_TRACE_ENTER();
-
-    smc_memfile_get_lockfile_uri(mf, uri, sizeof(uri));
-    /* TODO: smc_unmap_fileuri */
-
-    RHO_TRACE_EXIT("error=%d", error);
-    return (error);
 }
 
 static uint32_t
@@ -459,86 +404,6 @@ smc_memfile_decref_lockfile(struct smc_memfile *mf)
     return (refcnt);
 }
 
-static void
-smc_memfile_get_segmentfile_uri(const struct smc_memfile *mf,
-        char *uri, size_t uri_size)
-{
-    size_t n = 0;
-
-    RHO_TRACE_ENTER("mf->f_name=\"\%s\"", mf->f_name);
-
-    n = rho_strlcpy(uri, SMC_ROOT_URI, uri_size);
-    RHO_ASSERT(n < uri_size);
-
-    n = rho_strlcat(uri, mf->f_name, uri_size);
-    RHO_ASSERT(n < uri_size);
-
-    n = rho_strlcat(uri, ".segment", uri_size);
-    RHO_ASSERT(n < uri_size);
-
-    RHO_TRACE_EXIT("segmentfile uri=\"%s\"", uri);
-}
-
-static int
-smc_memfile_create_segmentfile(struct smc_memfile *mf, size_t map_size)
-{
-    int error = 0;
-    char uri[SMC_MAX_PATH_SIZE] = { 0 };
-
-    RHO_TRACE_ENTER();
-
-    smc_memfile_get_segmentfile_uri(mf, uri, sizeof(uri));
-    error = smc_create_fileuri(uri, map_size);
-
-    RHO_TRACE_EXIT("error=%d", error);
-    return (error);
-}
-
-static int
-smc_memfile_delete_segmentfile(struct smc_memfile *mf)
-{
-    int error = 0;
-    char uri[SMC_MAX_PATH_SIZE] = { 0 };
-
-    RHO_TRACE_ENTER();
-
-    smc_memfile_get_segmentfile_uri(mf, uri, sizeof(uri));
-    error = smc_delete_fileuri(uri);
-
-    RHO_TRACE_EXIT("error=%d", error);
-    return (error);
-}
-
-static int
-smc_memfile_map_segmentfile(struct smc_memfile *mf)
-{
-    int error = 0;
-    char uri[SMC_MAX_PATH_SIZE] = { 0 };
-
-    RHO_TRACE_ENTER();
-
-    smc_memfile_get_segmentfile_uri(mf, uri, sizeof(uri));
-    error = smc_map_fileuri(uri, mf->f_map_size, &mf->f_pub_seg);
-
-    RHO_TRACE_EXIT("error=%d", error);
-    return (error);
-}
-
-static int
-smc_memfile_unmap_segmentfile(struct smc_memfile *mf)
-{
-    int error = 0;
-    char uri[SMC_MAX_PATH_SIZE] = { 0 };
-
-    RHO_TRACE_ENTER();
-
-    smc_memfile_get_segmentfile_uri(mf, uri, sizeof(uri));
-    /* TODO: smc_unmap_fileuri */
-
-    RHO_TRACE_EXIT("error=%d", error);
-    return (error);
-}
-
 /* decrypt file into private memory */
 static int
 smc_memfile_copyin_segment(struct smc_memfile *mf)
@@ -584,8 +449,9 @@ smc_memfile_do_open(struct smc_memfile *mf)
 
     RHO_TRACE_ENTER();
 
-    error = smc_memfile_create_lockfile(mf);
-    error = smc_memfile_map_lockfile(mf);
+    error = smc_create_fileuri(mf->f_lock_uri, SMC_LOCKFILE_SIZE);
+    error = smc_map_fileuri(mf->f_lock_uri, SMC_LOCKFILE_SIZE,
+            &mf->f_pub_lock);
 
     (void)smc_memfile_incref_lockfile(mf);
 
@@ -601,16 +467,20 @@ smc_memfile_do_close(struct smc_memfile *mf)
 
     RHO_TRACE_ENTER();
 
+    /* FIXME: check return values */
     client_refcnt = smc_memfile_decref_lockfile(mf);
     if (client_refcnt == 0) {
-        smc_memfile_delete_lockfile(mf);
-        if (mf->f_type != SMC_TYPE_PURE_LOCK)
-            smc_memfile_delete_segmentfile(mf);
+        (void)smc_delete_fileuri(mf->f_lock_uri);
+        if (mf->f_type != SMC_TYPE_PURE_LOCK) {
+            (void)smc_delete_fileuri(mf->f_segment_uri);
+        }
     }
 
-    smc_memfile_unmap_lockfile(mf);
-    if (mf->f_type != SMC_TYPE_PURE_LOCK)
-        smc_memfile_unmap_segmentfile(mf);
+    /* TODO: unmap lock file */
+    if (mf->f_type != SMC_TYPE_PURE_LOCK) {
+        /* TODO: unmap segment file -- currently not possible */
+        ;
+    }
 
     RHO_TRACE_EXIT();
     return (error);
@@ -627,11 +497,11 @@ smc_memfile_do_mmap(struct smc_memfile *mf, void **addr, size_t map_size)
     mf->f_type = SMC_TYPE_LOCK_WITH_UNINIT_SEGMENT;
     rho_rand_bytes(mf->f_key, SMC_KEY_SIZE);
 
-    error = smc_memfile_create_segmentfile(mf, map_size);
+    error = smc_create_fileuri(mf->f_segment_uri, map_size);
     if (error != 0)
         goto done;
 
-    error = smc_memfile_map_segmentfile(mf);
+    error = smc_map_fileuri(mf->f_segment_uri, mf->f_map_size, &mf->f_pub_seg);
     if (error != 0)
         goto done;
 
@@ -700,13 +570,16 @@ smc_memfile_do_unlock(struct smc_memfile *mf)
  **********************************************************/
 
 static struct smc_mdata *
-smc_mdata_create(void)
+smc_mdata_create(const char *memdir_uri)
 {
     struct smc_mdata *mdata = NULL;
+    size_t n = 0;
     
     RHO_TRACE_ENTER();
 
     mdata = rhoL_zalloc(sizeof(struct smc_mdata));
+    n = rho_strlcpy(mdata->mf_memdir_uri, memdir_uri, SMC_MAX_URI_SIZE);
+    RHO_ASSERT(n < SMC_MAX_URI_SIZE);
 
     RHO_TRACE_EXIT();
     return (mdata);
@@ -777,7 +650,7 @@ smc_mdata_new_memfile(struct smc_mdata *mdata, const char *name,
     RHO_BITOPS_SET((uint8_t *)&mdata->mf_bitmap, i);
 
     *mf = &(mdata->mf_tab[i]);
-    smc_memfile_init(*mf, name);
+    smc_memfile_init(mdata->mf_memdir_uri, *mf, name);
     if (mf_idx != NULL)
         *mf_idx = i;
 
@@ -847,7 +720,7 @@ smc_mount(const char *uri, const char *root, void **mount_data)
 
     RHO_TRACE_ENTER("uri=\"%s\", root=\"%s\"", uri, root);
 
-    mdata = smc_mdata_create();
+    mdata = smc_mdata_create(uri);
     *mount_data = mdata;
     g_smc_mdata = mdata;
 
@@ -1057,10 +930,14 @@ smc_checkin(struct shim_handle *hdl)
         goto done;
     }
 
-    smc_memfile_map_lockfile(mf);
+    error = smc_map_fileuri(mf->f_lock_uri, SMC_LOCKFILE_SIZE,
+            &mf->f_pub_lock);
         
-    if (mf->f_map_size > 0)
-        smc_memfile_map_segmentfile(mf);
+    if (mf->f_map_size > 0) {
+        /* FIXME: check error value */
+        (void)smc_map_fileuri(mf->f_segment_uri, mf->f_map_size,
+                &mf->f_pub_seg);
+    }
 
 done:
     RHO_TRACE_EXIT();

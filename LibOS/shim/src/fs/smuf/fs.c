@@ -58,6 +58,7 @@
 #define SMUF_OP_UNLOCK         6
 #define SMUF_OP_MMAP           7
 
+#define SMUF_MAX_URI_SIZE           512
 #define SMUF_MAX_NAME_SIZE          128
 #define SMUF_MAX_PATH_SIZE          256
 
@@ -71,17 +72,12 @@
 #define SMUF_TYPE_LOCK_WITH_SEGMENT         1
 #define SMUF_TYPE_LOCK_WITH_UNINIT_SEGMENT  2
 
-/*
- * For now, we hardcode the directory to:
- * 
- *      file:/home/smherwig/phoenix/memfiles
- *
- * TODO: add a Graphene config entry to specify this directory
- */
-#define SMUF_ROOT_URI   "file:/home/smherwig/phoenix/memfiles/0"
-
 struct smuf_memfile {
     char        f_name[SMUF_MAX_NAME_SIZE];
+
+    char        f_lock_uri[SMUF_MAX_URI_SIZE];
+    char        f_segment_uri[SMUF_MAX_URI_SIZE];
+
     int         f_fd_refcnt;
     uint32_t    f_remote_fd;
     void        *f_pub_lock;
@@ -109,7 +105,8 @@ struct smuf_memfile {
  * fd_bitmap is a map of the remote descriptors we have open.
  */
 struct smuf_mdata {
-    char url[512];           /* URL for server */
+    char server_uri[SMUF_MAX_URI_SIZE];
+    char memdir_uri[SMUF_MAX_URI_SIZE];
     uint64_t ident;             /* auth cookie for child */
     unsigned char ca_der[4096];
     size_t  ca_der_len;
@@ -252,13 +249,43 @@ done:
  ******************************************/ 
 
 static void
-smuf_memfile_init(struct smuf_memfile *mf, const char *name)
+smuf_memfile_init(const char *memdir_uri, struct smuf_memfile *mf,
+        const char *name)
 {
+    size_t n = 0;
+
     RHO_TRACE_ENTER("name=\"%s\"", name);
 
     rho_memzero(mf, sizeof(*mf));
-    /* TODO: use strlcpy */
-    memcpy(mf->f_name, name, strlen(name));
+
+    /* name relative to mount, (e.g., /foo) */
+    n = rho_strlcpy(mf->f_name, name, SMUF_MAX_NAME_SIZE);
+    RHO_ASSERT(n < SMUF_MAX_NAME_SIZE);
+
+    /*
+     * FIXME:
+     *  We assume memdir_uri does not end in '/' and that
+     *  f_name starts with a '/'.
+     */
+
+    /* construct lockfile uri (e.g, file:/home/bar/foo) */
+    n = rho_strlcpy(mf->f_lock_uri, memdir_uri, SMUF_MAX_URI_SIZE);
+    RHO_ASSERT(n < SMUF_MAX_URI_SIZE);
+
+    n = rho_strlcat(mf->f_lock_uri, mf->f_name, SMUF_MAX_URI_SIZE);
+    RHO_ASSERT(n < SMUF_MAX_URI_SIZE);
+
+    /* construct segment file uri (e.g., file:/home/bar/foo.segment) */
+    n = rho_strlcpy(mf->f_segment_uri, memdir_uri, SMUF_MAX_URI_SIZE);
+    RHO_ASSERT(n < SMUF_MAX_URI_SIZE);
+
+    n = rho_strlcat(mf->f_segment_uri, mf->f_name, SMUF_MAX_URI_SIZE);
+    RHO_ASSERT(n < SMUF_MAX_URI_SIZE);
+
+    n = rho_strlcat(mf->f_segment_uri, ".segment", SMUF_MAX_URI_SIZE);
+    RHO_ASSERT(n < SMUF_MAX_URI_SIZE);
+
+
     mf->f_fd_refcnt = 1;
     mf->f_type = SMUF_TYPE_PURE_LOCK;
 
@@ -270,6 +297,8 @@ smuf_memfile_print(const struct smuf_memfile *mf)
 {
     debug("smuf_memfile = {\n");
     debug("  f_name: \"%s\"\n", mf->f_name);
+    debug("  f_lock_uri: \"%s\"\n", mf->f_lock_uri);
+    debug("  f_segment_uri: \"%s\"\n", mf->f_segment_uri);
     debug("  f_fd_refcnt: %d\n", mf->f_fd_refcnt);
     debug("  f_remote_fd: %lu\n", (unsigned long)mf->f_remote_fd);
     debug("  f_type: %u\n", (unsigned)mf->f_type);
@@ -279,73 +308,6 @@ smuf_memfile_print(const struct smuf_memfile *mf)
     debug("  f_map_size: %lu\n", mf->f_map_size);
     debug("  f_turn: %d\n", mf->f_turn);
     debug("}\n");
-}
-
-static void
-smuf_memfile_get_lockfile_uri(const struct smuf_memfile *mf,
-        char *uri, size_t uri_size)
-{
-    size_t n = 0;
-
-    RHO_TRACE_ENTER("mf->f_name=\"\%s\"", mf->f_name);
-
-    n = rho_strlcpy(uri, SMUF_ROOT_URI, uri_size);
-    RHO_ASSERT(n < uri_size);
-
-    n = rho_strlcat(uri, mf->f_name, uri_size);
-    RHO_ASSERT(n < uri_size);
-
-    RHO_TRACE_EXIT("lockfile uri=\"%s\"", uri);
-}
-
-static int
-smuf_memfile_map_lockfile(struct smuf_memfile *mf)
-{
-    int error = 0;
-    char uri[SMUF_MAX_PATH_SIZE] = { 0 };
-
-    RHO_TRACE_ENTER();
-
-    smuf_memfile_get_lockfile_uri(mf, uri, sizeof(uri));
-    error = smuf_map_fileuri(uri, SMUF_LOCKFILE_SIZE, &mf->f_pub_lock);
-
-    RHO_TRACE_EXIT("error=%d", error);
-    return (error);
-}
-
-static void
-smuf_memfile_get_segmentfile_uri(const struct smuf_memfile *mf,
-        char *uri, size_t uri_size)
-{
-    size_t n = 0;
-
-    RHO_TRACE_ENTER("mf->f_name=\"\%s\"", mf->f_name);
-
-    n = rho_strlcpy(uri, SMUF_ROOT_URI, uri_size);
-    RHO_ASSERT(n < uri_size);
-
-    n = rho_strlcat(uri, mf->f_name, uri_size);
-    RHO_ASSERT(n < uri_size);
-
-    n = rho_strlcat(uri, ".segment", uri_size);
-    RHO_ASSERT(n < uri_size);
-
-    RHO_TRACE_EXIT("segmentfile uri=\"%s\"", uri);
-}
-
-static int
-smuf_memfile_map_segmentfile(struct smuf_memfile *mf)
-{
-    int error = 0;
-    char uri[SMUF_MAX_PATH_SIZE] = { 0 };
-
-    RHO_TRACE_ENTER();
-
-    smuf_memfile_get_segmentfile_uri(mf, uri, sizeof(uri));
-    error = smuf_map_fileuri(uri, mf->f_map_size, &mf->f_pub_seg);
-
-    RHO_TRACE_EXIT("error=%d", error);
-    return (error);
 }
 
 /* decrypt file into private memory */
@@ -401,15 +363,20 @@ smuf_memfile_copyout_segment(struct smuf_memfile *mf)
  **********************************************************/
 
 static struct smuf_mdata *
-smuf_mdata_create(const char *uri, unsigned char *ca_der,
-        size_t ca_der_len)
+smuf_mdata_create(const char *server_uri, const char *memdir_uri,
+        unsigned char *ca_der, size_t ca_der_len)
 {
     struct smuf_mdata *mdata = NULL;
+    size_t n = 0;
     
     RHO_TRACE_ENTER();
 
     mdata = rhoL_zalloc(sizeof(struct smuf_mdata));
-    memcpy(mdata->url, uri, strlen(uri));
+    n = rho_strlcpy(mdata->server_uri, server_uri, SMUF_MAX_URI_SIZE);
+    RHO_ASSERT(n < SMUF_MAX_URI_SIZE);
+    n = rho_strlcpy(mdata->memdir_uri, memdir_uri, SMUF_MAX_URI_SIZE);
+    RHO_ASSERT(n < SMUF_MAX_URI_SIZE);
+
     if (ca_der != NULL) {
         memcpy(mdata->ca_der, ca_der, ca_der_len);
         mdata->ca_der_len = ca_der_len;
@@ -422,9 +389,9 @@ smuf_mdata_create(const char *uri, unsigned char *ca_der,
 static void
 smuf_mdata_print(const struct smuf_mdata *mdata)
 {
-    debug("smuf_mdata = {url: %s, ident:%llu, ca_der[0]:%02x, ca_der_len:%lu}\n",
-            mdata->url, (unsigned long long)mdata->ident, mdata->ca_der[0],
-            (unsigned long)mdata->ca_der_len);
+    debug("smuf_mdata = {server_uri: %s, memdir_uri: %s, ident:%llu, ca_der[0]:%02x, ca_der_len:%lu}\n",
+            mdata->server_uri, mdata->memdir_uri, (unsigned long long)mdata->ident,
+            mdata->ca_der[0], (unsigned long)mdata->ca_der_len);
 }
 
 static struct smuf_memfile *
@@ -492,7 +459,7 @@ smuf_mdata_new_memfile(struct smuf_mdata *mdata, const char *name,
     RHO_BITOPS_SET((uint8_t *)&mdata->mf_bitmap, i);
 
     *mf = &(mdata->mf_tab[i]);
-    smuf_memfile_init(*mf, name);
+    smuf_memfile_init(mdata->memdir_uri, *mf, name);
     if (mf_idx != NULL)
         *mf_idx = i;
 
@@ -799,6 +766,8 @@ smuf_mount(const char *uri, const char *root, void **mount_data)
     ssize_t len = 0;
     struct smuf_mdata *mdata = NULL;
     struct rpc_agent *agent = NULL;
+    size_t n = 0;
+    char **uris = NULL;
 
     RHO_TRACE_ENTER("uri=\"%s\", root=\"%s\"", uri, root);
 
@@ -809,7 +778,9 @@ smuf_mount(const char *uri, const char *root, void **mount_data)
         rho_binascii_hex2bin(ca_der, ca_hex);
     }
 
-    agent = smuf_agent_open(uri, ca_der, len / 2);
+    uris = rho_str_splitc(uri, ',', &n);
+
+    agent = smuf_agent_open(uris[0], ca_der, len / 2);
     if (agent == NULL) {
         /* FIXME: better errno; what's in PAL_ERRNO? */
         error = -ENXIO;
@@ -821,7 +792,7 @@ smuf_mount(const char *uri, const char *root, void **mount_data)
     if (error != 0)
         goto fail;
 
-    mdata = smuf_mdata_create(uri, ca_der, len / 2);
+    mdata = smuf_mdata_create(uris[0], uris[1], ca_der, len / 2);
     mdata->agent = agent;
     *mount_data = mdata;
     g_smuf_mdata = mdata;
@@ -835,7 +806,8 @@ fail:
 succeed:
     if (ca_der != NULL)
         rhoL_free(ca_der);
-
+    if (uris != NULL)
+        rho_str_array_destroy(uris);
     RHO_TRACE_EXIT();
     return (error);
 }
@@ -929,7 +901,8 @@ smuf_mmap(struct shim_handle *hdl, void **addr, size_t size,
      * XXX: if this error's then we have orphaned a segmentfile on the
      * server
      */
-    error = smuf_memfile_map_segmentfile(mf);
+    error = smuf_map_fileuri(mf->f_segment_uri, mf->f_map_size,
+            &mf->f_pub_seg);
     if (error != 0)
         goto done;
 
@@ -1099,10 +1072,12 @@ smuf_checkin(struct shim_handle *hdl)
         goto done;
     }
 
-    smuf_memfile_map_lockfile(mf);
+    error = smuf_map_fileuri(mf->f_lock_uri, SMUF_LOCKFILE_SIZE,
+            &mf->f_pub_lock);
         
     if (mf->f_map_size > 0)
-        smuf_memfile_map_segmentfile(mf);
+        error = smuf_map_fileuri(mf->f_segment_uri, mf->f_map_size,
+                &mf->f_pub_seg);
 
 done:
     RHO_TRACE_EXIT();
@@ -1147,7 +1122,7 @@ smuf_migrate(void *checkpoint, void **mount_data)
      * fails
      */
     // smuf_agent_close(mdata->agent); 
-    agent = smuf_agent_open(mdata->url, 
+    agent = smuf_agent_open(mdata->server_uri, 
             mdata->ca_der[0] == 0x00 ? NULL : mdata->ca_der,
             mdata->ca_der_len);
 
@@ -1183,7 +1158,8 @@ smuf_open_new(struct smuf_mdata *mdata, const char *name, int *mf_idx)
     if (error != 0)
         smuf_mdata_remove_memfile_at_idx(mdata, *mf_idx);
 
-    error = smuf_memfile_map_lockfile(mf);
+    error = smuf_map_fileuri(mf->f_lock_uri, SMUF_LOCKFILE_SIZE,
+            &mf->f_pub_lock);
     if (error != 0) {
         /* 
          * XXX: corrupted state, as the server has created the
