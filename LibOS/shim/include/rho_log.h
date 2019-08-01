@@ -25,14 +25,14 @@ RHO_DECLS_BEGIN
     do { \
         sys_printf("die %s:%d " fmt ": %s\n", \
                 __func__, __LINE__,##__VA_ARGS__, PAL_STRERROR(errnum)); \
-        shim_terminate(); \
+        shim_terminate(-1); \
     } while (0)
 
 #define rho_die(fmt, ...) \
     do { \
         sys_printf("die %s:%d " fmt "\n", \
                 __func__, __LINE__,##__VA_ARGS__); \
-        shim_terminate(); \
+        shim_terminate(-1); \
     } while (0)
 
 #define rho_errno_warn(errnum, fmt, ...) \

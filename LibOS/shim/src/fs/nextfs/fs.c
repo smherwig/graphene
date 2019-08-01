@@ -214,7 +214,7 @@ nextfs_hdl_get_client(struct shim_handle *hdl)
     client = mdata->client;
     RHO_ASSERT(client != NULL);
 
-    debug("nextfs_mdata debug_cookie=%lu\n", mdata->debug_cookie);
+    debug("nextfs_mdata debug_cookie=%u\n", mdata->debug_cookie);
     return (client);
 }
 
@@ -234,7 +234,7 @@ nextfs_dentry_get_client(struct shim_dentry *dentry)
     client = mdata->client;
     RHO_ASSERT(client != NULL);
 
-    debug("nextfs_mdata debug_cookie=%lu\n", mdata->debug_cookie);
+    debug("nextfs_mdata debug_cookie=%u\n", mdata->debug_cookie);
     return (client);
 }
 
@@ -1290,7 +1290,7 @@ nextfs_mode(struct shim_dentry *dent, mode_t *mode, bool force)
     
 done:
     rho_buf_clear(buf);
-    debug("< nextfs_mode (error=%d, mode=%08x)\n", error, mode);
+    debug("< nextfs_mode (error=%d, mode=%08x)\n", error, *mode);
     return (error);
 }
 
