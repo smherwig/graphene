@@ -355,7 +355,10 @@ static int tcp_listen (PAL_HANDLE * handle, char * uri, int options)
 #endif
 
     struct sockopt sock_options;
+
     memset(&sock_options, 0x00, sizeof(struct sockopt));
+    sock_options.reuseaddr = 1; /* sockets are always set as reusable in Graphene */
+
     ret = ocall_sock_listen(bind_addr->sa_family,
                             sock_type(SOCK_STREAM, options), 0,
                             bind_addr, &bind_addrlen,
@@ -391,7 +394,10 @@ static int tcp_accept (PAL_HANDLE handle, PAL_HANDLE * client)
     int ret = 0;
 
     struct sockopt sock_options;
+
     memset(&sock_options, 0x00, sizeof(struct sockopt));
+    sock_options.reuseaddr = 1; /* sockets are always set as reusable in Graphene */
+
     ret = ocall_sock_accept(handle->sock.fd, &dest_addr, &dest_addrlen,
                             &sock_options);
     if (IS_ERR(ret))
@@ -439,7 +445,10 @@ static int tcp_connect (PAL_HANDLE * handle, char * uri, int options)
 
 
     struct sockopt sock_options;
+
     memset(&sock_options, 0x00, sizeof(struct sockopt));
+    sock_options.reuseaddr = 1; /* sockets are always set as reusable in Graphene */
+
     ret = ocall_sock_connect(dest_addr->sa_family,
                              sock_type(SOCK_STREAM, options), 0,
                              dest_addr, dest_addrlen,
@@ -569,7 +578,10 @@ static int udp_bind (PAL_HANDLE * handle, char * uri, int options)
 #endif
 
     struct sockopt sock_options;
+
     memset(&sock_options, 0x00, sizeof(struct sockopt));
+    sock_options.reuseaddr = 1; /* sockets are always set as reusable in Graphene */
+
     ret = ocall_sock_listen(bind_addr->sa_family,
                             sock_type(SOCK_DGRAM, options), 0,
                             bind_addr, &bind_addrlen, &sock_options);
@@ -610,7 +622,10 @@ static int udp_connect (PAL_HANDLE * handle, char * uri, int options)
 #endif
 
     struct sockopt sock_options;
+
     memset(&sock_options, 0x00, sizeof(struct sockopt));
+    sock_options.reuseaddr = 1; /* sockets are always set as reusable in Graphene */
+
     ret = ocall_sock_connect(dest_addr ? dest_addr->sa_family : AF_INET,
                              sock_type(SOCK_DGRAM, options), 0,
                              dest_addr, dest_addrlen,

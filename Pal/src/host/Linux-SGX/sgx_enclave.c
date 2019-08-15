@@ -303,6 +303,7 @@ static int sgx_ocall_futex(void * pms)
         ts->tv_sec = ms->ms_timeout / 1000000;
         ts->tv_nsec = (ms->ms_timeout - ts->tv_sec * 1000000) * 1000;
     }
+    // SMHERWIG: SGX_DBG(DBG_E, "futex called\n");
     ret = INLINE_SYSCALL(futex, 6, ms->ms_futex, ms->ms_op, ms->ms_val,
                          ts, NULL, 0);
     return ret;
@@ -321,8 +322,12 @@ static int sgx_ocall_socketpair(void * pms)
 
 static int sock_getopt(int fd, struct sockopt * opt)
 {
+
     SGX_DBG(DBG_M, "sock_getopt (fd = %d, sockopt addr = %p) is not implemented \
             always returns 0\n", fd, opt);
+    /* initalize *opt with constant */
+    memset(opt, 0x00, sizeof(struct sockopt));
+    opt->reuseaddr = 1;
     return 0;
 }
 
