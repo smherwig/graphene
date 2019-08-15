@@ -476,6 +476,27 @@ int initialize_enclave (struct pal_enclave * enclave)
 
     TRY(init_enclave, &enclave_secs, &enclave_sigstruct, &enclave_token);
 
+    /* SMHERWIG: patch from Chia-Che to support hardware performance counters */
+#ifdef DEBUG
+    char memfile[20];
+    snprintf(memfile, 20, "/proc/%d/mem", INLINE_SYSCALL(getpid, 0));
+    int memfd = INLINE_SYSCALL(open, 2, memfile, O_RDWR);
+    if (IS_ERR(memfd)) {
+        printf("Can't open %s\n", memfile);
+    } else {
+        for (int t = 0; t < enclave->thread_num; t++) {
+            uint64_t addr = enclave_secs.baseaddr +
+                            tcs_area->addr + pagesize * t +
+                            offsetof(sgx_arch_tcs_t, flags);
+            uint64_t flags;
+            INLINE_SYSCALL(pread64, 4, memfd, &flags, sizeof(flags), addr);
+            flags |= TCS_FLAGS_DBGOPTIN;
+            INLINE_SYSCALL(pwrite64, 4, memfd, &flags, sizeof(flags), addr);
+        }
+        INLINE_SYSCALL(close, 1, memfd);
+    }
+#endif
+
     create_tcs_mapper((void *) enclave_secs.baseaddr + tcs_area->addr,
                       enclave->thread_num);
 
