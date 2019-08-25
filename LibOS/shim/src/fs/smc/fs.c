@@ -123,8 +123,6 @@ struct smc_mdata {
  * GLOBALS
  ******************************************/
 
-struct smc_mdata *g_smc_mdata = NULL;
-
 /**********************************************************
  * U32 Bitmap operations
  **********************************************************/
@@ -568,6 +566,38 @@ smc_memfile_do_unlock(struct smc_memfile *mf)
  *
  * (acts like a fs-specific file descriptor table
  **********************************************************/
+static struct smc_mdata *
+smc_get_mdata_from_dentry(const struct shim_dentry *dentry)
+{
+    struct shim_mount *fs = NULL; 
+    struct smc_mdata *mdata = NULL;
+
+    RHO_ASSERT(dentry != NULL);
+
+    fs = dentry->fs;
+    RHO_ASSERT(fs != NULL);
+
+    mdata = fs->data;
+    RHO_ASSERT(mdata != NULL);
+
+    return (mdata);
+}
+
+static struct smc_mdata *
+smc_get_mdata_from_handle(const struct shim_handle *hdl)
+{
+    struct shim_mount *fs = NULL; 
+    struct smc_mdata *mdata = NULL;
+
+    fs = hdl->fs;
+    if (fs == NULL)
+        mdata = smc_get_mdata_from_dentry(hdl->dentry);
+    else
+        mdata = fs->data;
+
+    RHO_ASSERT(mdata != NULL);
+    return (mdata);
+}
 
 static struct smc_mdata *
 smc_mdata_create(const char *memdir_uri)
@@ -722,7 +752,6 @@ smc_mount(const char *uri, const char *root, void **mount_data)
 
     mdata = smc_mdata_create(uri);
     *mount_data = mdata;
-    g_smc_mdata = mdata;
 
     RHO_TRACE_EXIT();
     return (0);
@@ -800,15 +829,17 @@ static int
 smc_advlock_lock(struct shim_handle *hdl, struct flock *flock)
 {
     int error = 0;
-    struct smc_mdata *mdata = g_smc_mdata;
+    struct smc_mdata *mdata = NULL; 
     struct shim_smc_handle *smh = &(hdl->info.smc);
     struct smc_memfile *mf = NULL;
 
     (void)flock;
 
     RHO_TRACE_ENTER();
-    rho_shim_handle_print(hdl);
 
+    rho_shim_handle_print(hdl);
+    mdata = smc_get_mdata_from_handle(hdl);
+    
     mf = smc_mdata_get_memfile_at_idx(mdata, smh->mf_idx);
     if (mf == NULL) {
         error = -EBADF;
@@ -872,12 +903,14 @@ static int
 smc_hstat(struct shim_handle *hdl, struct stat *stat)
 {
     int error = 0;
-    struct smc_mdata *mdata = g_smc_mdata;
+    struct smc_mdata *mdata = NULL; 
     struct shim_smc_handle *smh = &(hdl->info.smc);
     struct smc_memfile *mf = NULL;
 
     RHO_TRACE_ENTER();
+
     rho_shim_handle_print(hdl);
+    mdata = smc_get_mdata_from_handle(hdl);
 
     mf = smc_mdata_get_memfile_at_idx(mdata, smh->mf_idx);
     if (mf == NULL) {
@@ -916,13 +949,14 @@ static int
 smc_checkin(struct shim_handle *hdl)
 {
     int error = 0;
-    struct smc_mdata *mdata = g_smc_mdata;
+    struct smc_mdata *mdata = NULL; 
     struct shim_smc_handle *smh = &(hdl->info.smc);
     struct smc_memfile *mf = NULL;
 
     RHO_TRACE_ENTER();
 
     rho_shim_handle_print(hdl);
+    mdata = smc_get_mdata_from_handle(hdl);
 
     mf = smc_mdata_get_memfile_at_idx(mdata, smh->mf_idx);
     if (mf == NULL) {
@@ -970,7 +1004,6 @@ smc_migrate(void *checkpoint, void **mount_data)
     memcpy(mdata, checkpoint, sizeof(struct smc_mdata));
 
     *mount_data = mdata;
-    g_smc_mdata = mdata;
 
     RHO_TRACE_EXIT();
     return (error);
@@ -1005,14 +1038,16 @@ static int
 smc_open(struct shim_handle *hdl, struct shim_dentry *dent, int flags)
 {
     int error = 0;
-    struct smc_mdata * mdata = g_smc_mdata;
+    struct smc_mdata * mdata = NULL;
     struct shim_smc_handle *smh = &(hdl->info.smc);
     char name[SMC_MAX_NAME_SIZE] = {0};
     struct smc_memfile *mf = NULL;
     int mf_idx = 0;
 
     RHO_TRACE_ENTER("flags=%d", flags);
+
     rho_shim_handle_print(hdl);
+    mdata = smc_get_mdata_from_dentry(dent);
 
     rho_shim_dentry_relpath(dent, name, sizeof(name));
 
