@@ -89,7 +89,7 @@ struct shim_thread {
     void * frameptr;
 
     REFTYPE ref_count;
-    LOCKTYPE lock;
+    struct shim_lock lock;
 
 #ifdef PROFILE
     unsigned long exit_time;
@@ -112,7 +112,7 @@ struct shim_simple_thread {
     LIST_TYPE(shim_simple_thread) list;
 
     REFTYPE ref_count;
-    LOCKTYPE lock;
+    struct shim_lock lock;
 
 #ifdef PROFILE
     unsigned long exit_time;
@@ -121,16 +121,25 @@ struct shim_simple_thread {
 
 int init_thread (void);
 
-#define SHIM_THREAD_SELF()                                     \
-    ({ struct shim_thread * __self;                            \
-        asm ("movq %%fs:%c1,%q0" : "=r" (__self)               \
-           : "i" (offsetof(__libc_tcb_t, shim_tcb.tp)));       \
-      __self; })
+static inline struct shim_thread * shim_thread_self(void)
+{
+    struct shim_thread * __self;
+    __asm__ ("movq %%fs:%c1,%q0" : "=r" (__self)
+             : "i" (offsetof(__libc_tcb_t, shim_tcb.tp)));
+    return __self;
+}
 
-#define SAVE_SHIM_THREAD_SELF(__self)                         \
-  ({ asm ("movq %q0,%%fs:%c1" : : "r" (__self),               \
-          "i" (offsetof(__libc_tcb_t, shim_tcb.tp)));         \
-     __self; })
+static inline struct shim_thread * save_shim_thread_self(struct shim_thread * __self)
+{
+    __asm__ ("movq %q0,%%fs:%c1" : : "r" (__self),
+             "i" (offsetof(__libc_tcb_t, shim_tcb.tp)));
+    return __self;
+}
+
+static inline bool is_internal(struct shim_thread *thread)
+{
+    return thread->tid >= INTERNAL_TID_BASE;
+}
 
 void get_thread (struct shim_thread * thread);
 void put_thread (struct shim_thread * thread);
@@ -159,7 +168,7 @@ static inline
 __attribute__((always_inline))
 struct shim_thread * get_cur_thread (void)
 {
-    return SHIM_THREAD_SELF();
+    return shim_thread_self();
 }
 
 static inline
@@ -174,7 +183,7 @@ static inline
 __attribute__((always_inline))
 void set_cur_thread (struct shim_thread * thread)
 {
-    shim_tcb_t * tcb = SHIM_GET_TLS();
+    shim_tcb_t * tcb = shim_get_tls();
     IDTYPE tid = 0;
 
     if (thread) {
@@ -188,7 +197,7 @@ void set_cur_thread (struct shim_thread * thread)
         thread->tcb = container_of(tcb, __libc_tcb_t, shim_tcb);
         tid = thread->tid;
 
-        if (!IS_INTERNAL(thread) && !thread->signal_logs)
+        if (!is_internal(thread) && !thread->signal_logs)
             thread->signal_logs = malloc(sizeof(struct shim_signal_log) *
                                          NUM_SIGS);
     } else if (tcb->tp) {
@@ -237,7 +246,7 @@ static inline void thread_wakeup (struct shim_thread * thread)
     DkEventSet(thread->scheduler_event);
 }
 
-extern LOCKTYPE thread_list_lock;
+extern struct shim_lock thread_list_lock;
 
 struct shim_thread * __lookup_thread (IDTYPE tid);
 struct shim_thread * lookup_thread (IDTYPE tid);
@@ -313,9 +322,6 @@ struct clone_args {
 int clone_implementation_wrapper(struct clone_args * arg);
 
 void * allocate_stack (size_t size, size_t protect_size, bool user);
-int populate_user_stack (void * stack, size_t stack_size,
-                         int nauxv, elf_auxv_t ** auxpp,
-                         const char *** argvp, const char *** envpp);
 
 static inline __attribute__((always_inline))
 bool check_stack_size (struct shim_thread * cur_thread, int size)
@@ -324,7 +330,7 @@ bool check_stack_size (struct shim_thread * cur_thread, int size)
         cur_thread = get_cur_thread();
 
     void * rsp;
-    asm volatile ("movq %%rsp, %0" : "=r"(rsp) :: "memory");
+    __asm__ volatile ("movq %%rsp, %0" : "=r"(rsp) :: "memory");
 
     if (rsp <= cur_thread->stack_top && rsp > cur_thread->stack)
         return size < rsp - cur_thread->stack;
@@ -341,7 +347,8 @@ bool check_on_stack (struct shim_thread * cur_thread, void * mem)
     return (mem <= cur_thread->stack_top && mem > cur_thread->stack);
 }
 
-int init_stack (const char ** argv, const char ** envp, const char *** argpp,
+int init_stack (const char ** argv, const char ** envp,
+                int ** argcpp, const char *** argpp,
                 int nauxv, elf_auxv_t ** auxpp);
 
 #endif /* _SHIM_THREAD_H_ */

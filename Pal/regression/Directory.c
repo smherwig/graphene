@@ -15,7 +15,7 @@ int main (int argc, char ** argv, char ** envp)
         pal_printf("Directory Open Test 1 OK\n");
 
         PAL_STREAM_ATTR attr1;
-        if (DkStreamAttributesQuerybyHandle(dir1, &attr1))
+        if (DkStreamAttributesQueryByHandle(dir1, &attr1))
             pal_printf("Query by Handle: type = %d\n", attr1.handle_type);
 
         char buffer[80];
@@ -52,7 +52,7 @@ int main (int argc, char ** argv, char ** envp)
     PAL_HANDLE dir4 = DkStreamOpen("dir:dir_nonexist.tmp",
                                    PAL_ACCESS_RDONLY,
                                    PAL_SHARE_OWNER_R|PAL_SHARE_OWNER_W|PAL_SHARE_OWNER_X,
-                                   PAL_CREAT_TRY|PAL_CREAT_ALWAYS, 0);
+                                   PAL_CREATE_TRY|PAL_CREATE_ALWAYS, 0);
     if (dir4) {
         pal_printf("Directory Creation Test 1 OK\n");
         DkObjectClose(dir4);
@@ -61,7 +61,7 @@ int main (int argc, char ** argv, char ** envp)
     PAL_HANDLE dir5 = DkStreamOpen("dir:dir_nonexist.tmp",
                                    PAL_ACCESS_RDONLY,
                                    PAL_SHARE_OWNER_R|PAL_SHARE_OWNER_W|PAL_SHARE_OWNER_X,
-                                   PAL_CREAT_TRY|PAL_CREAT_ALWAYS, 0);
+                                   PAL_CREATE_TRY|PAL_CREATE_ALWAYS, 0);
     if (dir5) {
         DkObjectClose(dir5);
     } else {
@@ -71,7 +71,7 @@ int main (int argc, char ** argv, char ** envp)
     PAL_HANDLE dir6 = DkStreamOpen("dir:dir_nonexist.tmp",
                                    PAL_ACCESS_RDWR,
                                    PAL_SHARE_OWNER_R|PAL_SHARE_OWNER_W,
-                                   PAL_CREAT_TRY, 0);
+                                   PAL_CREATE_TRY, 0);
     if (dir6) {
         pal_printf("Directory Creation Test 3 OK\n");
         DkObjectClose(dir6);

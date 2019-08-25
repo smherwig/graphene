@@ -460,7 +460,7 @@ static int tcp_connect (PAL_HANDLE * handle, char * uri, int options)
     int ret, fd = -1;
 
     options = HOST_SOCKET_OPTIONS(options);
-	
+
     /* accepting two kind of different uri:
        dest-ip:dest-port or bind-ip:bind-port:dest-ip:dest-port */
     if ((ret = socket_parse_uri(uri, &bind_addr, &bind_addrlen,
@@ -548,10 +548,10 @@ static int tcp_open (PAL_HANDLE *handle, const char * type, const char * uri,
     char uri_buf[PAL_SOCKADDR_SIZE];
     memcpy(uri_buf, uri, uri_len);
 
-    if (strpartcmp_static(type, "tcp.srv:"))
+    if (strcmp_static(type, "tcp.srv"))
         return tcp_listen(handle, uri_buf, options);
 
-    if (strpartcmp_static(type, "tcp:"))
+    if (strcmp_static(type, "tcp"))
         return tcp_connect(handle, uri_buf, options);
 
     return -PAL_ERROR_NOTSUPPORT;
@@ -614,7 +614,7 @@ static int tcp_write (PAL_HANDLE handle, int offset, int len, const void * buf)
     hdr.msg_control = NULL;
     hdr.msg_controllen = 0;
     hdr.msg_flags = 0;
-    
+
     int bytes = INLINE_SYSCALL(sendmsg, 3, handle->sock.fd, &hdr, MSG_NOSIGNAL);
 
     if (IS_ERR(bytes))
@@ -716,7 +716,7 @@ static int udp_connect (PAL_HANDLE * handle, char * uri, int options)
 #endif
 
     options = HOST_SOCKET_OPTIONS(options);
-	
+
     fd = INLINE_SYSCALL(socket, 3, dest_addr ? dest_addr->sa_family : AF_INET,
                         SOCK_DGRAM|SOCK_CLOEXEC|options, 0);
 
@@ -770,10 +770,10 @@ static int udp_open (PAL_HANDLE *hdl, const char * type, const char * uri,
     memcpy(buf, uri, len + 1);
     options &= PAL_OPTION_MASK;
 
-    if (!strpartcmp_static(type, "udp.srv:"))
+    if (!strcmp_static(type, "udp.srv"))
         return udp_bind(hdl, buf, options);
 
-    if (!strpartcmp_static(type, "udp:"))
+    if (!strcmp_static(type, "udp"))
         return udp_connect(hdl, buf, options);
 
     return -PAL_ERROR_NOTSUPPORT;
@@ -1016,7 +1016,7 @@ static int socket_attrquerybyhdl (PAL_HANDLE handle, PAL_STREAM_ATTR  * attr)
     if (handle->sock.conn) {
         /* try use ioctl FIONEAD to get the size of socket */
         ret = INLINE_SYSCALL(ioctl, 3, fd, FIONREAD, &val);
-		
+
         if (IS_ERR(ret))
             return unix_to_pal_error(ERRNO(ret));
 

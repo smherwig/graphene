@@ -23,32 +23,23 @@
 #include <shim_tls.h>
 #include <shim_unistd_defs.h>
 
+#include "asm-offsets.h"
+
         .global syscalldb
         .type syscalldb, @function
         .extern shim_table, debug_unsupp
+        .global syscall_wrapper
+        .type syscall_wrapper, @function
 
 
 syscalldb:
         .cfi_startproc
 
-        # DEP 7/9/12: Push a stack pointer so clone can find the return address
+        # Create shim_regs struct on the stack.
+        pushfq
+        cld
         pushq %rbp
-        .cfi_def_cfa_offset 16
-        movq %rsp, %rbp
-        .cfi_offset 6,-16
-        .cfi_def_cfa_register 6
-
         pushq %rbx
-
-        cmp $LIBOS_SYSCALL_BOUND, %rax
-        jae isundef
-
-        leaq shim_table(%rip), %rbx
-        movq (%rbx,%rax,8), %rbx
-        cmp $0, %rbx
-        je isundef
-
-isdef:
         pushq %rdi
         pushq %rsi
         pushq %rdx
@@ -61,24 +52,41 @@ isdef:
         pushq %r13
         pushq %r14
         pushq %r15
+        # shim_regs struct ends here.
 
-        movq %rax, %fs:(SHIM_TCB_OFFSET + 24)
-        leaq 16(%rbp), %rax
-        movq %rax, %fs:(SHIM_TCB_OFFSET + 32)
-        movq 8(%rbp), %rax
-        movq %rax, %fs:(SHIM_TCB_OFFSET + 40)
-        movq %rsp, %fs:(SHIM_TCB_OFFSET + 48)
+        movq %rsp, %rbp
+        .cfi_def_cfa_offset SHIM_REGS_SIZE+8  # +8 for ret_addr
+        .cfi_offset %rbp, -3 * 8    # saved_rbp is at CFA-24 (ret + saved_rflags + saved_rbp)
+        .cfi_def_cfa_register %rbp  # %rbp
+
+        cmp $LIBOS_SYSCALL_BOUND, %rax
+        jae isundef
+
+        movq shim_table@GOTPCREL(%rip), %rbx
+        movq (%rbx,%rax,8), %rbx
+        cmp $0, %rbx
+        je isundef
+
+        movq %rax, %fs:(SHIM_TCB_OFFSET + TCB_SYSCALL_NR)
+        leaq SHIM_REGS_SIZE+8(%rbp), %rax
+        movq %rax, %fs:(SHIM_TCB_OFFSET + TCB_SP)
+        movq SHIM_REGS_SIZE(%rbp), %rax
+        movq %rax, %fs:(SHIM_TCB_OFFSET + TCB_RET_IP)
+        movq %rbp, %fs:(SHIM_TCB_OFFSET + TCB_REGS)
 
         /* Translating x86_64 kernel calling convention to user-space
          * calling convention */
         movq %r10, %rcx
+        andq $~0xF, %rsp  # Required by System V AMD64 ABI.
         call *%rbx
 
-        movq $0, %fs:(SHIM_TCB_OFFSET + 24)
-        movq $0, %fs:(SHIM_TCB_OFFSET + 32)
-        movq $0, %fs:(SHIM_TCB_OFFSET + 40)
-        movq $0, %fs:(SHIM_TCB_OFFSET + 48)
+        movq $0, %fs:(SHIM_TCB_OFFSET + TCB_SYSCALL_NR)
+        movq $0, %fs:(SHIM_TCB_OFFSET + TCB_SP)
+        movq $0, %fs:(SHIM_TCB_OFFSET + TCB_RET_IP)
+        movq $0, %fs:(SHIM_TCB_OFFSET + TCB_REGS)
 
+ret:
+        movq %rbp, %rsp
         popq %r15
         popq %r14
         popq %r13
@@ -91,20 +99,48 @@ isdef:
         popq %rdx
         popq %rsi
         popq %rdi
-
-        jmp ret
+        popq %rbx
+        popq %rbp
+        popfq
+        retq
 
 isundef:
 #ifdef DEBUG
         mov %rax, %rdi
-        call debug_unsupp
+        andq $~0xF, %rsp  # Required by System V AMD64 ABI.
+        call *debug_unsupp@GOTPCREL(%rip)
 #endif
-        movq $-38, %rax
-
-ret:
-        popq %rbx
-        popq %rbp
-        retq
+        movq $-38, %rax  # ENOSYS
+        jmp ret
 
         .cfi_endproc
         .size syscalldb, .-syscalldb
+
+        /*
+         * syscall_wrapper: emulate syscall instruction
+         *   prohibited in e.g. Linux-SGX PAL which raises a SIGILL exception
+         *
+         * input:
+         * %rcx: Instruction address to continue app execution after trapped
+         *       syscall instruction
+         * %r11: rflags on entering syscall
+         *
+         * FIXME: preserve rflags.
+         *        remember that clone-child can't use parent stack.
+         */
+syscall_wrapper:
+        .cfi_startproc
+
+        subq $RED_ZONE_SIZE, %rsp
+        callq *syscalldb@GOTPCREL(%rip)
+        addq $RED_ZONE_SIZE, %rsp
+#if 0
+        # TODO: once clone emulation is fixed, remove this #if 0
+        xchg %r11, (%rsp)
+        popfq
+        pushq %r11
+#endif
+        jmp *%rcx
+
+        .cfi_endproc
+        .size syscall_wrapper, .-syscall_wrapper

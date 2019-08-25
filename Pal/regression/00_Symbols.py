@@ -1,5 +1,3 @@
-#!/usr/bin/python
-
 import os, sys, mmap
 from regression import Regression
 
@@ -26,8 +24,8 @@ all_symbols = [
     'DkSendHandle',
     'DkReceiveHandle',
     'DkStreamAttributesQuery',
-    'DkStreamAttributesQuerybyHandle',
-    'DkStreamAttributesSetbyHandle',
+    'DkStreamAttributesQueryByHandle',
+    'DkStreamAttributesSetByHandle',
     'DkStreamGetName',
     'DkStreamChangeName',
     'DkThreadCreate',

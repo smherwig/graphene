@@ -33,7 +33,7 @@
 #define alias_str(name) #name
 
 #define extern_alias(name) \
-    extern __typeof(name) shim_##name __attribute ((alias (alias_str(name))))
+    extern __typeof__(name) shim_##name __attribute ((alias (alias_str(name))))
 
 #define static_always_inline static inline __attribute__((always_inline))
 
@@ -42,14 +42,20 @@
 #include <atomic.h>
 #include <shim_tls.h>
 
-/* important macros */
-#define get_cur_tid()           (SHIM_GET_TLS()->tid)
-#define PAL_NATIVE_ERRNO        (SHIM_GET_TLS()->pal_errno)
+/* important macros and static inline functions */
+static inline unsigned int get_cur_tid(void)
+{
+    return shim_get_tls()->tid;
+}
+
+#define PAL_NATIVE_ERRNO        (shim_get_tls()->pal_errno)
 
 #define INTERNAL_TID_BASE       ((IDTYPE) 1 << (sizeof(IDTYPE) * 8 - 1))
-#define IS_INTERNAL_TID(tid)    ((tid) >= INTERNAL_TID_BASE)
-#define IS_INTERNAL(thread)     ((thread)->tid >= INTERNAL_TID_BASE)
-#define TID_PRINTFMT
+
+static inline bool is_internal_tid(unsigned int tid)
+{
+    return tid >= INTERNAL_TID_BASE;
+}
 
 struct debug_buf {
     int start;
@@ -65,10 +71,10 @@ extern PAL_HANDLE debug_handle;
 
 # include <stdarg.h>
 
-void debug_printf (const char * fmt, ...);
+void debug_printf (const char * fmt, ...) __attribute__((format (printf, 1, 2)));
 void debug_puts (const char * str);
 void debug_putch (int ch);
-void debug_vprintf (const char * fmt, va_list * ap);
+void debug_vprintf (const char * fmt, va_list * ap) __attribute__((format (printf, 1, 0)));
 
 # define VMID_PREFIX     "[P%05u] "
 # define TID_PREFIX      "[%-6u] "
@@ -82,8 +88,8 @@ void debug_vprintf (const char * fmt, va_list * ap);
 /* print system messages */
 #define SYSPRINT_BUFFER_SIZE    256
 
-void handle_printf (PAL_HANDLE hdl, const char * fmt, ...);
-void handle_vprintf (PAL_HANDLE hdl, const char * fmt, va_list * ap);
+void handle_printf (PAL_HANDLE hdl, const char * fmt, ...) __attribute__((format (printf, 2, 3)));
+void handle_vprintf (PAL_HANDLE hdl, const char * fmt, va_list * ap) __attribute__((format (printf, 2, 0)));
 
 #define __sys_printf(fmt, ...)                                              \
     do {                                                                    \
@@ -139,7 +145,7 @@ static inline PAL_HANDLE __open_shim_stdio (void)
     return shim_stdio;
 }
 
-int shim_terminate (void);
+int shim_terminate (int err);
 
 /* assertions */
 #define USE_PAUSE       0
@@ -150,14 +156,14 @@ static inline void do_pause (void);
 #if USE_PAUSE == 1
 # define pause() do { do_pause(); } while (0)
 #else
-# define pause() do { asm volatile ("int $3"); } while (0)
+# define pause() do { __asm__ volatile ("int $3"); } while (0)
 #endif
 
 #define bug()                                                               \
     do {                                                                    \
         __sys_printf("bug() " __FILE__ ":%d\n", __LINE__);                  \
         pause();                                                            \
-        shim_terminate();                                                   \
+        shim_terminate(-ENOTRECOVERABLE);                                   \
     } while (0)
 
 #if USE_ASSERT == 1
@@ -172,13 +178,14 @@ static inline void do_pause (void);
 /* definition for syscall table */
 void handle_signal (bool delayed_only);
 long convert_pal_errno (long err);
+void syscall_wrapper(void);
 
 #define PAL_ERRNO  convert_pal_errno(PAL_NATIVE_ERRNO)
 
 #define SHIM_ARG_TYPE long
 
 #ifdef PROFILE
-# define ENTER_TIME     SHIM_GET_TLS()->context.enter_time
+# define ENTER_TIME     shim_get_tls()->context.enter_time
 # define BEGIN_SYSCALL_PROFILE()        \
     do { ENTER_TIME = GET_PROFILE_INTERVAL(); } while (0)
 # define END_SYSCALL_PROFILE(name)      \
@@ -196,7 +203,7 @@ long convert_pal_errno (long err);
 void check_stack_hook (void);
 
 static inline uint64_t get_cur_preempt (void) {
-    shim_tcb_t* tcb = SHIM_GET_TLS();
+    shim_tcb_t* tcb = shim_get_tls();
     assert(tcb);
     return tcb->context.preempt;
 }
@@ -393,18 +400,6 @@ void parse_syscall_after (int sysno, const char * name, int nr, ...);
     END_SHIM(name)                                                  \
     EXPORT_SHIM_SYSCALL(name, n, __VA_ARGS__)
 
-#ifndef container_of
-/**
- * container_of - cast a member of a structure out to the containing structure
- * @ptr:	the pointer to the member.
- * @type:	the type of the container struct this is embedded in.
- * @field:	the name of the field within the struct.
- *
- */
-#define container_of(ptr, type, field) ((type *)((char *)(ptr) - offsetof(type, field)))
-#endif
-
-
 #define CONCAT2(t1, t2) __CONCAT2(t1, t2)
 #define __CONCAT2(t1, t2) t1##_##t2
 
@@ -432,7 +427,7 @@ static inline void enable_locking (void)
 static inline PAL_HANDLE thread_create (void * func, void * arg, int option)
 {
     assert(lock_enabled);
-    return DkThreadCreate(func, arg, option);
+    return DkThreadCreate(func, arg);
 }
 
 static inline void __disable_preempt (shim_tcb_t * tcb)
@@ -446,7 +441,7 @@ static inline void __disable_preempt (shim_tcb_t * tcb)
 
 static inline void disable_preempt (shim_tcb_t * tcb)
 {
-    if (!tcb && !(tcb = SHIM_GET_TLS()))
+    if (!tcb && !(tcb = shim_get_tls()))
         return;
 
     __disable_preempt(tcb);
@@ -465,7 +460,7 @@ void __handle_signal (shim_tcb_t * tcb, int sig, ucontext_t * uc);
 
 static inline void enable_preempt (shim_tcb_t * tcb)
 {
-    if (!tcb && !(tcb = SHIM_GET_TLS()))
+    if (!tcb && !(tcb = shim_get_tls()))
         return;
 
     if (!(tcb->context.preempt & ~SIGNAL_DELAYED))
@@ -479,38 +474,58 @@ static inline void enable_preempt (shim_tcb_t * tcb)
 
 #define DEBUG_LOCK      0
 
-#define lock_created(l)  ((l).lock != NULL)
+static inline bool __lock_created(struct shim_lock* l)
+{
+    return l->lock != NULL;
+}
 
-#define clear_lock(l)  do { (l).lock = NULL; (l).owner = 0; } while (0)
+#define lock_created(l)  __lock_created(&(l))
 
-#define create_lock(l)                          \
-    do {                                        \
-        (l).lock = DkMutexCreate(0);               \
-        /* (l).owner = LOCK_FREE;               */ \
-        /* (l).reowned = 0;                     */ \
-    } while (0)
+static inline void __clear_lock(struct shim_lock* l)
+{
+    l->lock = NULL;
+    l->owner = 0;
+}
 
-#define destroy_lock(l)                         \
-    do {                                        \
-        DkObjectClose((l).lock);                \
-    } while (0)
+#define clear_lock(l)  __clear_lock(&(l))
 
-#define try_create_lock(l)              \
-    do { if (!lock_created(l)) create_lock(l); } while (0)
+static inline void __create_lock(struct shim_lock* l)
+{
+    l->lock = DkMutexCreate(0);
+    /* l->owner = LOCK_FREE; */
+    /* l->reowned = 0; */
+}
+
+#define create_lock(l)  __create_lock(&(l))
+
+static inline void __destroy_lock(struct shim_lock* l)
+{
+    DkObjectClose(l->lock);
+}
+
+#define destroy_lock(l) __destroy_lock(&(l))
+
+static inline void ____try_create_lock(struct shim_lock* l)
+{
+    if (!__lock_created(l))
+        __create_lock(l);
+}
+
+#define try_create_lock(l)  ____try_create_lock(&(l))
 
 #if DEBUG_LOCK == 1
 # define lock(l) __lock(&(l), #l, __FILE__, __LINE__)
-static inline void __lock (LOCKTYPE * l,
+static inline void __lock (struct shim_lock* l,
                            const char * name, const char * file, int line)
 #else
 # define lock(l) __lock(&(l))
-static inline void __lock (LOCKTYPE * l)
+static inline void __lock (struct shim_lock* l)
 #endif
 {
     if (!lock_enabled || !l->lock)
         return;
 
-    shim_tcb_t * tcb = SHIM_GET_TLS();
+    shim_tcb_t * tcb = shim_get_tls();
     disable_preempt(tcb);
 
 #if DEBUG_LOCK == 1
@@ -526,17 +541,17 @@ static inline void __lock (LOCKTYPE * l)
 
 #if DEBUG_LOCK == 1
 # define unlock(l) __unlock(&(l), #l, __FILE__, __LINE__)
-static inline void __unlock (LOCKTYPE * l,
+static inline void __unlock (struct shim_lock* l,
                              const char * name, const char * file, int line)
 #else
 # define unlock(l) __unlock(&(l))
-static inline void __unlock (LOCKTYPE * l)
+static inline void __unlock (struct shim_lock* l)
 #endif
 {
     if (!lock_enabled || !l->lock)
         return;
 
-    shim_tcb_t * tcb = SHIM_GET_TLS();
+    shim_tcb_t * tcb = shim_get_tls();
 
 #if DEBUG_LOCK == 1
     debug("unlock(%s=%p) %s:%d\n", name, l, file, line);
@@ -547,12 +562,12 @@ static inline void __unlock (LOCKTYPE * l)
     enable_preempt(tcb);
 }
 
-static inline bool __locked (LOCKTYPE * l)
+static inline bool __locked (struct shim_lock* l)
 {
     if (!lock_enabled || !l->lock)
         return false;
 
-    shim_tcb_t * tcb = SHIM_GET_TLS();
+    shim_tcb_t * tcb = shim_get_tls();
     return tcb->tid == l->owner;
 }
 
@@ -560,7 +575,7 @@ static inline bool __locked (LOCKTYPE * l)
 
 #define DEBUG_MASTER_LOCK       0
 
-extern LOCKTYPE __master_lock;
+extern struct shim_lock __master_lock;
 
 #if DEBUG_MASTER_LOCK == 1
 # define master_lock()                                              \
@@ -578,7 +593,7 @@ extern LOCKTYPE __master_lock;
 # define master_unlock() do { unlock(__master_lock); } while (0)
 #endif
 
-static inline void create_lock_runtime (LOCKTYPE * l)
+static inline void create_lock_runtime (struct shim_lock* l)
 {
     if (!lock_created(*l)) {
         master_lock();
@@ -595,9 +610,15 @@ static inline void create_event (AEVENTTYPE * e)
                                 PAL_OPTION_NONBLOCK);
 }
 
-#define event_created(e)    ((e)->event != NULL)
+static inline bool event_created (AEVENTTYPE * e)
+{
+    return e->event != NULL;
+}
 
-#define event_handle(e)     ((e)->event)
+static inline PAL_HANDLE event_handle (AEVENTTYPE * e)
+{
+    return e->event;
+}
 
 static inline void destroy_event (AEVENTTYPE * e)
 {
@@ -619,7 +640,7 @@ static inline void wait_event (AEVENTTYPE * e)
 {
     if (e->event) {
         char byte;
-        int n;
+        int n = 0;
         do {
             if (!DkObjectsWaitAny(1, &e->event, NO_TIMEOUT))
                 continue;
@@ -720,14 +741,17 @@ void __system_free (void * addr, size_t size);
 extern void * migrated_memory_start;
 extern void * migrated_memory_end;
 
-#define MEMORY_MIGRATED(mem)                                    \
-        ((void *) (mem) >= migrated_memory_start &&             \
-         (void *) (mem) < migrated_memory_end)
+static inline bool memory_migrated(void * mem)
+{
+    return mem >= migrated_memory_start && mem < migrated_memory_end;
+}
+
 
 extern void * __load_address, * __load_address_end;
 extern void * __code_address, * __code_address_end;
 
-int shim_clean (void);
+/* cleanup and terminate process, preserve exit code if err == 0 */
+int shim_clean (int err);
 
 unsigned long parse_int (const char * str);
 
@@ -736,34 +760,33 @@ extern const char ** initial_envp;
 
 #define ALIGNED(addr)   (!(((unsigned long) addr) & allocshift))
 #define ALIGN_UP(addr)      \
-    ((typeof(addr)) ((((unsigned long) addr) + allocshift) & allocmask))
+    ((__typeof__(addr)) ((((unsigned long) addr) + allocshift) & allocmask))
 #define ALIGN_DOWN(addr)    \
-    ((typeof(addr)) (((unsigned long) addr) & allocmask))
+    ((__typeof__(addr)) (((unsigned long) addr) & allocmask))
 
-#define switch_stack(stack_top)                                     \
-    ({                                                              \
-        void * _rsp, * _rbp;                                        \
-        void * _stack = (stack_top);                                \
-        asm volatile ("movq %%rsp, %0" : "=r"(_rsp) :: "memory");   \
-        asm volatile ("movq %%rbp, %0" : "=r"(_rbp) :: "memory");   \
-        _rsp = _stack - (_rbp - _rsp);                              \
-        _rbp = _stack;                                              \
-        asm volatile ("movq %0, %%rsp" :: "r"(_rsp) : "memory");    \
-        asm volatile ("movq %0, %%rbp" :: "r"(_rbp) : "memory");    \
-        asm volatile ("movq %%rbp, %0" : "=r"(_stack) :: "memory"); \
-        _stack;                                                     \
+#define switch_stack(stack_top)                                         \
+    ({                                                                  \
+        void * _rsp, * _rbp;                                            \
+        void * _stack = (stack_top);                                    \
+        __asm__ volatile ("movq %%rsp, %0" : "=r"(_rsp) :: "memory");   \
+        __asm__ volatile ("movq %%rbp, %0" : "=r"(_rbp) :: "memory");   \
+        _rsp = _stack - (_rbp - _rsp);                                  \
+        _rbp = _stack;                                                  \
+        __asm__ volatile ("movq %0, %%rsp" :: "r"(_rsp) : "memory");    \
+        __asm__ volatile ("movq %0, %%rbp" :: "r"(_rbp) : "memory");    \
+        __asm__ volatile ("movq %%rbp, %0" : "=r"(_stack) :: "memory"); \
+        _stack;                                                         \
     })
 
-#define current_stack()                                             \
-    ({                                                              \
-        void * _rsp;                                                \
-        asm volatile ("movq %%rsp, %0" : "=r"(_rsp) :: "memory");   \
-        _rsp;                                                       \
-    })
+static_always_inline void * current_stack(void)
+{
+    void * _rsp;
+    __asm__ volatile ("movq %%rsp, %0" : "=r"(_rsp) :: "memory");
+    return _rsp;
+}
 
 void get_brk_region (void ** start, void ** end, void ** current);
 
-int init_randgen (void);
 int reset_brk (void);
 int init_brk_region (void * brk_region);
 int init_heap (void);

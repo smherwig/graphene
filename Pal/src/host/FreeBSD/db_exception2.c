@@ -117,15 +117,10 @@ typedef struct {
 
 #define SIGNAL_MASK_TIME 1000
 
-#define save_return_point(ptr)                      \
-    asm volatile ("leaq 0(%%rip), %%rax\r\n"        \
-                  "movq %%rax, %0\r\n"              \
-                  : "=b"(ptr) :: "memory", "rax")
-
 static int get_event_num (int signum)
 {
     switch(signum) {
-        case SIGFPE:                return PAL_EVENT_DIVZERO;
+        case SIGFPE:                return PAL_EVENT_ARITHMETIC_ERROR;
         case SIGSEGV: case SIGBUS:  return PAL_EVENT_MEMFAULT;
         case SIGILL:  case SIGSYS:  return PAL_EVENT_ILLEGAL;
         case SIGTERM:               return PAL_EVENT_QUIT;
@@ -135,9 +130,9 @@ static int get_event_num (int signum)
     }
 }
 
-void _DkGenericEventTrigger (PAL_IDX event_num, PAL_EVENT_HANDLER upcall,
-                             PAL_NUM arg, struct pal_frame * frame,
-                             ucontext_t * uc, void * eframe)
+static void _DkGenericEventTrigger (PAL_IDX event_num, PAL_EVENT_HANDLER upcall,
+                                    PAL_NUM arg, struct pal_frame * frame,
+                                    ucontext_t * uc, void * eframe)
 {
     PAL_EVENT event;
     event.event_num = event_num;
@@ -199,7 +194,7 @@ static bool _DkGenericSignalHandle (int event_num, siginfo_t * info,
     if (upcall) {
         PAL_NUM arg = 0;
 
-        if (event_num == PAL_EVENT_DIVZERO ||
+        if (event_num == PAL_EVENT_ARITHMETIC_ERROR ||
             event_num == PAL_EVENT_MEMFAULT ||
             event_num == PAL_EVENT_ILLEGAL)
             arg = (PAL_NUM) (info ? info->si_addr : 0);
@@ -218,11 +213,11 @@ static bool _DkGenericSignalHandle (int event_num, siginfo_t * info,
  * that was saved upon entry to the PAL, if an exception/interrupt
  * comes in during a PAL call.  This is needed to support the behavior that an
  * exception in the PAL has Unix-style, EAGAIN semantics.
- * 
- * The PAL_FRAME is supposed to be in the first PAL frame, and we look for 
+ *
+ * The PAL_FRAME is supposed to be in the first PAL frame, and we look for
  * it by matching a special magic number, that should only appear on the stack
  * once.
- * 
+ *
  * If an exception comes in while we are not in the PAL, this PAL_FRAME won't
  * exist, and it is ok to return NULL.
  */
@@ -352,18 +347,18 @@ struct signal_ops {
 };
 
 struct signal_ops on_signals[] = {
-        [PAL_EVENT_DIVZERO]     = { .signum = { SIGFPE, 0 },
-                                    .handler = _DkGenericSighandler },
-        [PAL_EVENT_MEMFAULT]    = { .signum = { SIGSEGV, SIGBUS, 0 },
-                                    .handler = _DkGenericSighandler },
-        [PAL_EVENT_ILLEGAL]     = { .signum = { SIGILL,  SIGSYS, 0 },
-                                    .handler = _DkGenericSighandler },
-        [PAL_EVENT_QUIT]        = { .signum = { SIGTERM, 0, 0 },
-                                    .handler = _DkTerminateSighandler },
-        [PAL_EVENT_SUSPEND]     = { .signum = { SIGINT, 0 },
-                                    .handler = _DkTerminateSighandler },
-        [PAL_EVENT_RESUME]      = { .signum = { SIGCONT, 0 },
-                                    .handler = _DkGenericSighandler },
+        [PAL_EVENT_ARITHMETIC_ERROR] = { .signum = { SIGFPE, 0 },
+                                         .handler = _DkGenericSighandler },
+        [PAL_EVENT_MEMFAULT]         = { .signum = { SIGSEGV, SIGBUS, 0 },
+                                         .handler = _DkGenericSighandler },
+        [PAL_EVENT_ILLEGAL]          = { .signum = { SIGILL,  SIGSYS, 0 },
+                                         .handler = _DkGenericSighandler },
+        [PAL_EVENT_QUIT]             = { .signum = { SIGTERM, 0, 0 },
+                                         .handler = _DkTerminateSighandler },
+        [PAL_EVENT_SUSPEND]          = { .signum = { SIGINT, 0 },
+                                         .handler = _DkTerminateSighandler },
+        [PAL_EVENT_RESUME]           = { .signum = { SIGCONT, 0 },
+                                         .handler = _DkGenericSighandler },
     };
 
 static int _DkPersistentSighandlerSetup (int event_num)
@@ -392,7 +387,7 @@ void signal_setup (void)
         goto err;
 
     int events[] = {
-        PAL_EVENT_DIVZERO,
+        PAL_EVENT_ARITHMETIC_ERROR,
         PAL_EVENT_MEMFAULT,
         PAL_EVENT_ILLEGAL,
         PAL_EVENT_QUIT,

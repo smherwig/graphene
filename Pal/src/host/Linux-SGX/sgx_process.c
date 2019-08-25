@@ -56,15 +56,13 @@ int sgx_create_process (const char * uri, int nargs, const char ** args,
     int fds[6] = { -1, -1, -1, -1, -1, -1 };
 
     if (!uri || !strpartcmp_static(uri, "file:"))
-        return -PAL_ERROR_INVAL;
+        return -EINVAL;
 
     if (IS_ERR((ret = INLINE_SYSCALL(pipe, 1, &fds[0]))) ||
         IS_ERR((ret = INLINE_SYSCALL(pipe, 1, &fds[2]))) ||
         IS_ERR((ret = INLINE_SYSCALL(socketpair, 4, AF_UNIX, SOCK_STREAM,
-                                     0, &fds[4])))) {
-        ret = -PAL_ERROR_DENIED;
+                                     0, &fds[4]))))
         goto out;
-    }
 
     int proc_fds[2][3] = {
         { fds[0], fds[3], fds[4] },
@@ -78,32 +76,23 @@ int sgx_create_process (const char * uri, int nargs, const char ** args,
 
     ret = ARCH_VFORK();
 
-    if (IS_ERR(ret)) {
-        ret = -PAL_ERROR_DENIED;
+    if (IS_ERR(ret))
         goto out;
-    }
 
     if (!ret) {
         for (int i = 0 ; i < 3 ; i++)
             INLINE_SYSCALL(close, 1, proc_fds[1][i]);
 
-        INLINE_SYSCALL(close, 1, PROC_INIT_FD);
-        rete = INLINE_SYSCALL(dup2, 2, proc_fds[0][0], PROC_INIT_FD);
-        if (IS_ERR(rete))
-            goto out_child;
+        ret = INLINE_SYSCALL(dup2, 2, proc_fds[0][0], PROC_INIT_FD);
+        if (!IS_ERR(ret)) {
+            extern char** environ;
+            ret = INLINE_SYSCALL(execve, 3, PAL_LOADER, argv, environ);
 
-        rete = INLINE_SYSCALL(execve, 3, PAL_LOADER, argv, NULL);
-
-        /* shouldn't get to here */
-        SGX_DBG(DBG_E, "unexpected failure of new process\n");
-out_child:
-        asm("hlt");
+            /* shouldn't get to here */
+            SGX_DBG(DBG_E, "unexpected failure of new process\n");
+        }
+        __asm__ volatile ("hlt");
         return 0;
-    }
-
-    if (IS_ERR(rete)) {
-        ret = -PAL_ERROR_DENIED;
-        goto out;
     }
 
     child = ret;
@@ -128,18 +117,18 @@ out_child:
                          sizeof(struct proc_args));
 
     if (IS_ERR(ret) || ret < sizeof(struct proc_args)) {
-        ret = -PAL_ERROR_DENIED;
+        ret = -EPERM;
         goto out;
     }
 
     ret = INLINE_SYSCALL(read, 3, pipe_in, &rete, sizeof(int));
 
     if (IS_ERR(ret) || ret < sizeof(int)) {
-        ret = -PAL_ERROR_DENIED;
+        ret = -EPERM;
         goto out;
     }
 
-    if (rete < 0) {
+    if (IS_ERR(rete)) {
         ret = rete;
         goto out;
     }
@@ -151,7 +140,7 @@ out_child:
 
     ret = child;
 out:
-    if (ret < 0) {
+    if (IS_ERR(ret)) {
         for (int i = 0 ; i < 6 ; i++)
             if (fds[i] >= 0)
                 INLINE_SYSCALL(close, 1, fds[i]);
@@ -171,13 +160,13 @@ int sgx_init_child_process (struct pal_sec * pal_sec)
         return 0;
 
     if (IS_ERR(ret))
-        return -PAL_ERROR_DENIED;
+        return ret;
 
     int child_status = 0;
     ret = INLINE_SYSCALL(write, 3, proc_args.proc_fds[1], &child_status,
                          sizeof(int));
     if (IS_ERR(ret))
-        return -PAL_ERROR_DENIED;
+        return ret;
 
     memcpy(pal_sec->exec_name, proc_args.exec_name, sizeof(PAL_SEC_STR));
     pal_sec->instance_id   = proc_args.instance_id;

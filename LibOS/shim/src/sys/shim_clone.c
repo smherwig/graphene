@@ -67,18 +67,18 @@
 
 /*
  * This Function is a wrapper around the user provided function.
- * Code flow for clone is as follows - 
- * 1) User application allocates stack for child process and  
- *    calls clone. The clone code sets up the user function 
+ * Code flow for clone is as follows -
+ * 1) User application allocates stack for child process and
+ *    calls clone. The clone code sets up the user function
  *    address and the argument address on the child stack.
- * 2)we Hijack the clone call and control flows to shim_clone 
- * 3)In Shim Clone we just call the DK Api to create a thread by providing a 
- *   wrapper function around the user provided function 
+ * 2)we Hijack the clone call and control flows to shim_clone
+ * 3)In Shim Clone we just call the DK Api to create a thread by providing a
+ *   wrapper function around the user provided function
  * 4)PAL layer allocates a stack and then invokes the clone syscall
  * 5)PAL runs thread_init function on PAL allocated Stack
- * 6)thread_init calls our wrapper and gives the user provided stack 
+ * 6)thread_init calls our wrapper and gives the user provided stack
  *   address.
- * 7.In the wrapper function ,we just do the stack switch to user 
+ * 7.In the wrapper function ,we just do the stack switch to user
  *   Provided stack and execute the user Provided function.
  */
 
@@ -96,7 +96,7 @@ int clone_implementation_wrapper(struct clone_args * arg)
 
     struct clone_args *pcargs = arg;
     int stack_allocated = 0;
-    
+
     DkObjectsWaitAny(1, &pcargs->create_event, NO_TIMEOUT);
     DkObjectClose(pcargs->create_event);
 
@@ -115,8 +115,8 @@ int clone_implementation_wrapper(struct clone_args * arg)
     debug_setbuf(tcb, true);
     debug("set tcb to %p (stack allocated? %d)\n", my_thread->tcb, stack_allocated);
 
-    struct shim_regs * regs = __alloca(sizeof(struct shim_regs));
-    *regs = *((__libc_tcb_t *) arg->parent->tcb)->shim_tcb.context.regs;
+    struct shim_regs regs;
+    regs = *((__libc_tcb_t *) arg->parent->tcb)->shim_tcb.context.regs;
 
     if (my_thread->set_child_tid)
         *(my_thread->set_child_tid) = my_thread->tid;
@@ -129,7 +129,11 @@ int clone_implementation_wrapper(struct clone_args * arg)
     my_thread->stack_top = vma.addr + vma.length;
     my_thread->stack_red = my_thread->stack = vma.addr;
 
-    /* Don't signal the initialize event until we are actually init-ed */ 
+    /* until now we're not ready to be exposed to other thread */
+    add_thread(my_thread);
+    set_as_child(arg->parent, my_thread);
+
+    /* Don't signal the initialize event until we are actually init-ed */
     DkEventSet(pcargs->initialize_event);
 
     /***** From here down, we are switching to the user-provided stack ****/
@@ -140,7 +144,7 @@ int clone_implementation_wrapper(struct clone_args * arg)
     debug("child swapping stack to %p return %p: %d\n",
           stack, return_pc, my_thread->tid);
 
-    tcb->context.regs = regs;
+    tcb->context.regs = &regs;
     tcb->context.sp = stack;
     tcb->context.ret_ip = return_pc;
 
@@ -166,6 +170,13 @@ int shim_do_clone (int flags, void * user_stack_addr, int * parent_tidptr,
     assert(self);
     int * set_parent_tid = NULL;
     int ret = 0;
+
+    /* special case for vfork. some runtime uses clone() for vfork */
+    if (flags == (CLONE_VFORK | CLONE_VM | SIGCHLD) &&
+        user_stack_addr == NULL && parent_tidptr == NULL &&
+        child_tidptr == NULL && tls == NULL) {
+        return shim_do_vfork();
+    }
 
     assert((flags & ~(CLONE_PARENT_SETTID|CLONE_CHILD_SETTID|
                       CLONE_CHILD_CLEARTID|CLONE_SETTLS|
@@ -259,7 +270,7 @@ int shim_do_clone (int flags, void * user_stack_addr, int * parent_tidptr,
             thread->stack_top = vma.addr + vma.length;
             thread->stack_red = thread->stack = vma.addr;
             tcb->shim_tcb.context.sp = user_stack_addr;
-            tcb->shim_tcb.context.ret_ip = *(void **) user_stack_addr;
+            tcb->shim_tcb.context.ret_ip = shim_get_tls()->context.ret_ip;
         }
 
         thread->is_alive = true;
@@ -289,34 +300,34 @@ int shim_do_clone (int flags, void * user_stack_addr, int * parent_tidptr,
 
     enable_locking();
 
-    struct clone_args * new_args = __alloca(sizeof(struct clone_args));
-    memset(new_args, 0, sizeof(struct clone_args));
+    struct clone_args new_args;
+    memset(&new_args, 0, sizeof(new_args));
 
-    new_args->create_event = DkNotificationEventCreate(PAL_FALSE);
-    if (!new_args->create_event) {
+    new_args.create_event = DkNotificationEventCreate(PAL_FALSE);
+    if (!new_args.create_event) {
         ret = -PAL_ERRNO;
         goto clone_thread_failed;
     }
 
-    new_args->initialize_event = DkNotificationEventCreate(PAL_FALSE);
-    if (!new_args->initialize_event) {
+    new_args.initialize_event = DkNotificationEventCreate(PAL_FALSE);
+    if (!new_args.initialize_event) {
         ret = -PAL_ERRNO;
         goto clone_thread_failed;
     }
 
-    new_args->thread    = thread;
-    new_args->parent    = self;
-    new_args->stack     = user_stack_addr;
-    new_args->return_pc = *(void **) user_stack_addr;
+    new_args.thread    = thread;
+    new_args.parent    = self;
+    new_args.stack     = user_stack_addr;
+    new_args.return_pc = shim_get_tls()->context.ret_ip;
 
-    // Invoke DkThreadCreate to spawn off a child process using the actual 
-    // "clone" system call. DkThreadCreate allocates a stack for the child 
-    // and then runs the given function on that stack However, we want our 
-    // child to run on the Parent allocated stack , so once the DkThreadCreate 
-    // returns .The parent comes back here - however, the child is Happily 
+    // Invoke DkThreadCreate to spawn off a child process using the actual
+    // "clone" system call. DkThreadCreate allocates a stack for the child
+    // and then runs the given function on that stack However, we want our
+    // child to run on the Parent allocated stack , so once the DkThreadCreate
+    // returns .The parent comes back here - however, the child is Happily
     // running the function we gave to DkThreadCreate.
     PAL_HANDLE pal_handle = thread_create(clone_implementation_wrapper,
-                                          new_args, flags);
+                                          &new_args, flags);
     if (!pal_handle) {
         ret = -PAL_ERRNO;
         goto clone_thread_failed;
@@ -324,23 +335,21 @@ int shim_do_clone (int flags, void * user_stack_addr, int * parent_tidptr,
 
     thread->pal_handle = pal_handle;
     thread->in_vm = thread->is_alive = true;
-    add_thread(thread);
-    set_as_child(self, thread);
 
     if (set_parent_tid)
         *set_parent_tid = tid;
 
-    DkEventSet(new_args->create_event);
-    DkObjectsWaitAny(1, &new_args->initialize_event, NO_TIMEOUT);
-    DkObjectClose(new_args->initialize_event);
+    DkEventSet(new_args.create_event);
+    DkObjectsWaitAny(1, &new_args.initialize_event, NO_TIMEOUT);
+    DkObjectClose(new_args.initialize_event);
     put_thread(thread);
     return tid;
 
 clone_thread_failed:
-    if (new_args->create_event)
-        DkObjectClose(new_args->create_event);
-    if (new_args->initialize_event)
-        DkObjectClose(new_args->initialize_event);
+    if (new_args.create_event)
+        DkObjectClose(new_args.create_event);
+    if (new_args.initialize_event)
+        DkObjectClose(new_args.initialize_event);
 failed:
     if (thread)
         put_thread(thread);

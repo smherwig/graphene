@@ -216,6 +216,8 @@ PAL_CONTROL * pal_control_addr (void);
 #define PAL_PROT_EXEC       0x4     /* 0x4 Page can be executed. */
 #define PAL_PROT_WRITECOPY  0x8     /* 0x8 Copy on write */
 
+#define PAL_PROT_MASK       0xF
+
 
 // If addr != NULL, then the returned region is always exactly at addr.
 PAL_PTR
@@ -241,7 +243,7 @@ DkVirtualMemoryProtect (PAL_PTR addr, PAL_NUM size, PAL_FLG prot);
 #define PAL_PROCESS_MASK         0x0
 
 PAL_HANDLE
-DkProcessCreate (PAL_STR uri, PAL_FLG flags, PAL_STR * args);
+DkProcessCreate (PAL_STR uri, PAL_STR * args);
 
 void
 DkProcessExit (PAL_NUM exitCode);
@@ -251,8 +253,8 @@ DkProcessExit (PAL_NUM exitCode);
 PAL_BOL
 DkProcessSandboxCreate (PAL_STR manifest, PAL_FLG flags);
 
-/* The stream ABI includes nine calls to open, read, write, map, unmap, 
- * truncate, flush, delete and wait for I/O streams and three calls to 
+/* The stream ABI includes nine calls to open, read, write, map, unmap,
+ * truncate, flush, delete and wait for I/O streams and three calls to
  * access metadata about an I/O stream. The ABI purposefully does not
  * provide an ioctl call. Supported URI schemes include file:, pipe:,
  * http:, https:, tcp:, udp:, pipe.srv:, http.srv, tcp.srv:, and udp.srv:.
@@ -287,15 +289,17 @@ DkProcessSandboxCreate (PAL_STR manifest, PAL_FLG flags);
 #define PAL_SHARE_MASK      0777
 
 /* Stream Create Flags */
-#define PAL_CREAT_TRY        0100       /* 0100 Create file if file not
+#define PAL_CREATE_TRY        0100       /* 0100 Create file if file not
                                            exist (O_CREAT) */
-#define PAL_CREAT_ALWAYS     0200       /* 0300 Create file and fail if file
+#define PAL_CREATE_ALWAYS     0200       /* 0300 Create file and fail if file
                                            already exist (O_CREAT|O_EXCL) */
-#define PAL_CREAT_MASK       0300
+#define PAL_CREATE_MASK       0300
 
 /* Stream Option Flags */
 #define PAL_OPTION_NONBLOCK     04000
 #define PAL_OPTION_MASK         04000
+
+#define WITHIN_MASK(val, mask)  (((val)|(mask)) == (mask))
 
 PAL_HANDLE
 DkStreamOpen (PAL_STR uri, PAL_FLG access, PAL_FLG share_flags,
@@ -325,6 +329,9 @@ DkStreamMap (PAL_HANDLE handle, PAL_PTR address, PAL_FLG prot,
 void
 DkStreamUnmap (PAL_PTR addr, PAL_NUM size);
 
+/* Sets the length of the file referenced by handle to length.  Returns the 0
+ * on success, a _positive_ errno on failure.
+ */
 PAL_NUM
 DkStreamSetLength (PAL_HANDLE handle, PAL_NUM length);
 
@@ -361,11 +368,11 @@ PAL_BOL
 DkStreamAttributesQuery (PAL_STR uri, PAL_STREAM_ATTR * attr);
 
 PAL_BOL
-DkStreamAttributesQuerybyHandle (PAL_HANDLE handle,
+DkStreamAttributesQueryByHandle (PAL_HANDLE handle,
                                  PAL_STREAM_ATTR * attr);
 
 PAL_BOL
-DkStreamAttributesSetbyHandle (PAL_HANDLE handle, PAL_STREAM_ATTR * attr);
+DkStreamAttributesSetByHandle (PAL_HANDLE handle, PAL_STREAM_ATTR * attr);
 
 PAL_NUM
 DkStreamGetName (PAL_HANDLE handle, PAL_PTR buffer, PAL_NUM size);
@@ -382,7 +389,7 @@ DkStreamChangeName (PAL_HANDLE handle, PAL_STR uri);
 #define PAL_THREAD_MASK         0
 
 PAL_HANDLE
-DkThreadCreate (PAL_PTR addr, PAL_PTR param, PAL_FLG flags);
+DkThreadCreate (PAL_PTR addr, PAL_PTR param);
 
 // assuming duration to be in microseconds
 PAL_NUM
@@ -391,29 +398,29 @@ DkThreadDelayExecution (PAL_NUM duration);
 void
 DkThreadYieldExecution (void);
 
-void
+__attribute__((noreturn)) void
 DkThreadExit (void);
 
 PAL_BOL
 DkThreadResume (PAL_HANDLE thread);
 
 /* Exception Handling */
-/* Div-by-zero */
-#define PAL_EVENT_DIVZERO       1
+/* arithmetic error (div-by-zero, floating point exception, etc.) */
+#define PAL_EVENT_ARITHMETIC_ERROR 1
 /* segmentation fault, protection fault, bus fault */
-#define PAL_EVENT_MEMFAULT      2
+#define PAL_EVENT_MEMFAULT         2
 /* illegal instructions */
-#define PAL_EVENT_ILLEGAL       3
+#define PAL_EVENT_ILLEGAL          3
 /* terminated by external program */
-#define PAL_EVENT_QUIT          4
+#define PAL_EVENT_QUIT             4
 /* suspended by external program */
-#define PAL_EVENT_SUSPEND       5
+#define PAL_EVENT_SUSPEND          5
 /* continued by external program */
-#define PAL_EVENT_RESUME        6
+#define PAL_EVENT_RESUME           6
 /* failure within PAL calls */
-#define PAL_EVENT_FAILURE       7
+#define PAL_EVENT_FAILURE          7
 
-#define PAL_EVENT_NUM_BOUND     8
+#define PAL_EVENT_NUM_BOUND        8
 
 #define PAL_EVENT_PRIVATE      0x0001       /* upcall specific to thread */
 #define PAL_EVENT_RESET        0x0002       /* reset the event upcall */
@@ -421,8 +428,7 @@ DkThreadResume (PAL_HANDLE thread);
 typedef void (*PAL_EVENT_HANDLER) (PAL_PTR event, PAL_NUM arg, PAL_CONTEXT *);
 
 PAL_BOL
-DkSetExceptionHandler (PAL_EVENT_HANDLER handler, PAL_NUM event,
-                       PAL_FLG flags);
+DkSetExceptionHandler (PAL_EVENT_HANDLER handler, PAL_NUM event);
 
 void DkExceptionReturn (PAL_PTR event);
 
@@ -433,7 +439,7 @@ void DkExceptionReturn (PAL_PTR event);
  */
 /* Create a Mutex.
  * initialCount of 0 is totally unlocked; an initialCount of 1
- * is initialized to locked. */ 
+ * is initialized to locked. */
 PAL_HANDLE
 DkMutexCreate (PAL_NUM initialCount);
 
@@ -460,7 +466,7 @@ DkEventClear (PAL_HANDLE eventHandle);
 
 #define NO_TIMEOUT      ((PAL_NUM) -1)
 
-/* assuming timeout to be in microseconds 
+/* assuming timeout to be in microseconds
  * NO_TIMEOUT means no timeout, as the name implies.
  */
 /* Returns: NULL if the call times out, the ready handle on success */
@@ -482,6 +488,10 @@ void DkObjectClose (PAL_HANDLE objectHandle);
 PAL_NUM
 DkSystemTimeQuery (void);
 
+/*
+ * Cryptographically secure random.
+ * 0 on success, negative on failure.
+ */
 PAL_NUM
 DkRandomBitsRead (PAL_PTR buffer, PAL_NUM size);
 
@@ -497,8 +507,7 @@ PAL_HANDLE
 DkCreatePhysicalMemoryChannel (PAL_NUM * key);
 
 PAL_NUM
-DkPhysicalMemoryCommit (PAL_HANDLE channel, PAL_NUM entries, PAL_PTR * addrs,
-                        PAL_NUM * sizes, PAL_FLG flags);
+DkPhysicalMemoryCommit (PAL_HANDLE channel, PAL_NUM entries, PAL_PTR * addrs, PAL_NUM * sizes);
 
 PAL_NUM
 DkPhysicalMemoryMap (PAL_HANDLE channel, PAL_NUM entries, PAL_PTR * addrs,
@@ -506,7 +515,20 @@ DkPhysicalMemoryMap (PAL_HANDLE channel, PAL_NUM entries, PAL_PTR * addrs,
 
 PAL_NUM DkMemoryAvailableQuota (void);
 
+#define PAL_CPUID_WORD_EAX  0
+#define PAL_CPUID_WORD_EBX  1
+#define PAL_CPUID_WORD_ECX  2
+#define PAL_CPUID_WORD_EDX  3
+#define PAL_CPUID_WORD_NUM  4
+
 PAL_BOL
 DkCpuIdRetrieve (PAL_IDX leaf, PAL_IDX subleaf, PAL_IDX values[4]);
+
+#ifdef __GNUC__
+# define symbol_version_default(real, name, version) \
+    __asm__ (".symver " #real "," #name "@@" #version "\n")
+#else
+# define symbol_version_default(real, name, version)
+#endif
 
 #endif /* PAL_H */

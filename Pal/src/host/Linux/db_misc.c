@@ -122,7 +122,7 @@ int _DkRandomBitsRead (void * buffer, int size)
     do {
         unsigned long rand;
         asm volatile (".Lretry: rdrand %%rax\r\n jnc .Lretry\r\n"
-                      : "=a"(rand) :: "memory");
+                      : "=a"(rand) :: "memory", "cc");
 
         if (total_bytes + sizeof(rand) <= size) {
             *(unsigned long *) (buffer + total_bytes) = rand;
@@ -133,7 +133,7 @@ int _DkRandomBitsRead (void * buffer, int size)
             total_bytes = size;
         }
     } while (total_bytes < size);
-    return total_bytes;
+    return 0;
 }
 #else
 int _DkRandomBitsRead (void * buffer, int size)
@@ -156,7 +156,7 @@ int _DkRandomBitsRead (void * buffer, int size)
         total_bytes += bytes;
     } while (total_bytes < size);
 
-    return total_bytes;
+    return 0;
 }
 #endif
 
@@ -232,11 +232,15 @@ int _DkSegmentRegisterGet (int reg, void ** addr)
 
 int _DkInstructionCacheFlush (const void * addr, int size)
 {
+    __UNUSED(addr);
+    __UNUSED(size);
+
     return -PAL_ERROR_NOTIMPLEMENTED;
 }
 
 int _DkCpuIdRetrieve (unsigned int leaf, unsigned int subleaf,
                       unsigned int values[4])
 {
-    return -PAL_ERROR_NOTIMPLEMENTED;
+    cpuid(leaf, subleaf, values);
+    return 0;
 }

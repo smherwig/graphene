@@ -126,7 +126,7 @@ static int __do_poll (int npolls, struct poll_handle * polls,
 
     lock(map->lock);
 
-    for (p = polls ; p < &polls[npolls] ; p++) {
+    for (p = polls ; p < polls + npolls ; p++) {
         bool do_r = p->flags & DO_R;
         bool do_w = p->flags & DO_W;
 
@@ -321,7 +321,7 @@ done_finding:
             break;
 
         PAL_STREAM_ATTR attr;
-        if (!DkStreamAttributesQuerybyHandle(polled, &attr))
+        if (!DkStreamAttributesQueryByHandle(polled, &attr))
             break;
 
         n = &polling;
@@ -419,9 +419,8 @@ int shim_do_poll (struct pollfd * fds, nfds_t nfds, int timeout)
             fds[i].revents |= (fds[i].events & (POLLIN|POLLRDNORM));
         if (polls[i].flags & RET_W)
             fds[i].revents |= (fds[i].events & (POLLOUT|POLLWRNORM));
-        if (polls[i].flags & RET_E) {
+        if (polls[i].flags & RET_E)
             fds[i].revents |= (POLLERR|POLLHUP);
-        }
 
         if (fds[i].revents)
             ret++;

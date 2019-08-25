@@ -29,6 +29,7 @@
 #include "pal.h"
 #include "pal_internal.h"
 #include "pal_linux.h"
+#include "pal_linux_error.h"
 #include "pal_debug.h"
 #include "pal_error.h"
 #include "api.h"
@@ -58,10 +59,9 @@ static const struct handle_ops * pal_device_ops [PAL_DEVICE_TYPE_BOUND] = {
             &term_ops,
         };
 
-/* parse-device_uri scan the uri, parse the prefix of the uri and search
-   for stream handler wich will open or access the device */
-static int parse_device_uri (const char ** uri, const char ** type,
-                             struct handle_ops ** ops)
+/* parse_device_uri scans the uri, parses the prefix of the uri and searches
+   for stream handler wich will open or access the device. */
+static int parse_device_uri(const char ** uri, char ** type, struct handle_ops ** ops)
 {
     struct handle_ops * dops = NULL;
     const char * p, * u = (*uri);
@@ -75,8 +75,12 @@ static int parse_device_uri (const char ** uri, const char ** type,
         return -PAL_ERROR_NOTSUPPORT;
 
     *uri = (*p) ? p + 1 : p;
-    if (type)
-        *type = u;
+    if (type) {
+        *type = malloc_copy(u, p - u + 1);
+        if (!*type)
+            return -PAL_ERROR_NOMEM;
+        (*type)[p - u] = '\0';
+    }
     if (ops)
         *ops = dops;
     return 0;
@@ -123,6 +127,14 @@ static int open_standard_term (PAL_HANDLE * handle, const char * param,
 static int term_open (PAL_HANDLE *handle, const char * type, const char * uri,
                       int access, int share, int create, int options)
 {
+    if (!strcmp_static(type, "tty"))
+        return -PAL_ERROR_INVAL;
+
+    if (!WITHIN_MASK(share, PAL_SHARE_MASK) ||
+        !WITHIN_MASK(create, PAL_CREATE_MASK) ||
+        !WITHIN_MASK(options, PAL_OPTION_MASK))
+        return -PAL_ERROR_INVAL;
+
     const char * term = NULL;
     const char * param = NULL;
 
@@ -145,6 +157,7 @@ static int term_open (PAL_HANDLE *handle, const char * type, const char * uri,
 
 static int term_close (PAL_HANDLE handle)
 {
+    __UNUSED(handle);
     return 0;
 }
 
@@ -152,6 +165,11 @@ static int term_close (PAL_HANDLE handle)
 static int term_attrquery (const char * type, const char * uri,
                            PAL_STREAM_ATTR * attr)
 {
+    __UNUSED(uri);
+
+    if (!strcmp_static(type, "tty"))
+        return -PAL_ERROR_INVAL;
+
     attr->handle_type = pal_type_dev;
     attr->readable  = PAL_TRUE;
     attr->writeable = PAL_TRUE;
@@ -185,6 +203,9 @@ static struct handle_ops term_ops = {
 static int64_t char_read (PAL_HANDLE handle, uint64_t offset, uint64_t size,
                           void * buffer)
 {
+    if (offset)
+        return -PAL_ERROR_INVAL;
+
     int fd = handle->dev.fd_in;
 
     if (fd == PAL_IDX_POISON)
@@ -193,13 +214,17 @@ static int64_t char_read (PAL_HANDLE handle, uint64_t offset, uint64_t size,
     if (size >= (1ULL << (sizeof(unsigned int) * 8)))
         return -PAL_ERROR_INVAL;
 
-    return ocall_read(fd, buffer, size);
+    int bytes = ocall_read(fd, buffer, size);
+    return IS_ERR(bytes) ? unix_to_pal_error(ERRNO(bytes)) : bytes;
 }
 
 /* 'write' operation for character streams. */
 static int64_t char_write (PAL_HANDLE handle, uint64_t offset, uint64_t size,
                            const void * buffer)
 {
+    if (offset)
+        return -PAL_ERROR_INVAL;
+
     int fd = handle->dev.fd_out;
 
     if (fd == PAL_IDX_POISON)
@@ -208,15 +233,19 @@ static int64_t char_write (PAL_HANDLE handle, uint64_t offset, uint64_t size,
     if (size >= (1ULL << (sizeof(unsigned int) * 8)))
         return -PAL_ERROR_INVAL;
 
-    return ocall_write(fd, buffer, size);
+    int bytes = ocall_write(fd, buffer, size);
+    return IS_ERR(bytes) ? unix_to_pal_error(ERRNO(bytes)) : bytes;
 }
 
 /* 'open' operation for device streams */
 static int dev_open (PAL_HANDLE * handle, const char * type, const char * uri,
                      int access, int share, int create, int options)
 {
+    if (!strcmp_static(type, "dev"))
+        return -PAL_ERROR_INVAL;
+
     struct handle_ops * ops = NULL;
-    const char * dev_type = NULL;
+    char* dev_type = NULL;
     int ret = 0;
 
     ret = parse_device_uri(&uri, &dev_type, &ops);
@@ -233,8 +262,10 @@ static int dev_open (PAL_HANDLE * handle, const char * type, const char * uri,
     hdl->dev.fd_out = PAL_IDX_POISON;
     *handle = hdl;
 
-    return ops->open(handle, dev_type, uri,
-                     access, share, create, options);
+    ret = ops->open(handle, dev_type, uri,
+                    access, share, create, options);
+    free(dev_type);
+    return ret;
 }
 
 /* 'read' operation for device stream */
@@ -341,8 +372,11 @@ dev_attrcopy (PAL_STREAM_ATTR * attr, struct stat * stat)
 static int dev_attrquery (const char * type, const char * uri,
                           PAL_STREAM_ATTR * attr)
 {
+    if (!strcmp_static(type, "dev"))
+        return -PAL_ERROR_INVAL;
+
     struct handle_ops * ops = NULL;
-    const char * dev_type = NULL;
+    char* dev_type = NULL;
     int ret = 0;
 
     ret = parse_device_uri(&uri, &dev_type, &ops);
@@ -353,7 +387,9 @@ static int dev_attrquery (const char * type, const char * uri,
     if (!ops || !ops->attrquery)
         return -PAL_ERROR_NOTSUPPORT;
 
-    return ops->attrquery(dev_type, uri, attr);
+    ret = ops->attrquery(dev_type, uri, attr);
+    free(dev_type);
+    return ret;
 }
 
 /* 'attrquerybyhdl' operation for device stream */
@@ -372,13 +408,13 @@ static int dev_attrquerybyhdl (PAL_HANDLE handle,
 
     if (handle->dev.fd_in != PAL_IDX_POISON) {
         ret = ocall_fstat(handle->dev.fd_in, &stat_buf);
-        if (!ret)
+        if (!IS_ERR(ret))
             stat_in = &stat_buf;
     }
 
     if (handle->dev.fd_in != PAL_IDX_POISON) {
         ret = ocall_fstat(handle->dev.fd_in, &stat_buf);
-        if (!ret)
+        if (!IS_ERR(ret))
             stat_out = &stat_buf;
     }
 

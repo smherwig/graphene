@@ -52,7 +52,7 @@ getuint(va_list *ap, int lflag)
 #if !defined(__i386__)
 	if (lflag >= 2)
 		return va_arg(*ap, unsigned long long);
-	else 
+	else
 #endif
 	if (lflag)
 		return va_arg(*ap, unsigned long);
@@ -120,7 +120,7 @@ vfprintfmt(int (*_fputch)(void *, int, void *), void * f, void * putdat,
 		case '-':
 			padc = ' ';
 			goto reswitch;
-			
+
 		// flag to pad with 0's instead of spaces
 		case '0':
 			padc = '0';
@@ -196,6 +196,7 @@ vfprintfmt(int (*_fputch)(void *, int, void *), void * f, void * putdat,
 
 		// (signed) decimal
 		case 'd':
+		case 'i':
 			num = getint(ap, lflag);
 #if !defined(__i386__)
 			if ((long long) num < 0) {
@@ -261,7 +262,7 @@ vfprintfmt(int (*_fputch)(void *, int, void *), void * f, void * putdat,
 		case '%':
 			(*_fputch) (f, ch, putdat);
 			break;
-			
+
 		// unrecognized escape sequence - just print it literally
 		default:
 			(*_fputch) (f, '%', putdat);
@@ -291,6 +292,8 @@ struct sprintbuf {
 static int
 sprintputch(void * f, int ch, struct sprintbuf * b)
 {
+    __UNUSED(f);
+
 	if (b->cnt >= b->max)
 		return -1;
 

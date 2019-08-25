@@ -168,7 +168,7 @@ static int make_uri (struct shim_dentry * dent)
     assert(mdata);
 
     struct shim_file_data * data = FILE_DENTRY_DATA(dent);
-    char * uri = __alloca(URI_MAX_SIZE);
+    char uri[URI_MAX_SIZE];
     int len = concat_uri(uri, URI_MAX_SIZE, data->type,
                          mdata->root_uri,
                          mdata->root_uri_len,
@@ -197,6 +197,7 @@ static int create_data (struct shim_dentry * dent, const char * uri, int len)
     assert(mdata);
     data->type = (dent->state & DENTRY_ISDIRECTORY) ?
                  FILE_DIR : mdata->base_type;
+    data->mode = NO_MODE;
 
     if (uri) {
         qstrsetstr(&data->host_uri, uri, len);
@@ -220,16 +221,16 @@ static int __query_attr (struct shim_dentry * dent,
     enum shim_file_type old_type = data->type;
 
     if (pal_handle ?
-        !DkStreamAttributesQuerybyHandle(pal_handle, &pal_attr) :
+        !DkStreamAttributesQueryByHandle(pal_handle, &pal_attr) :
         !DkStreamAttributesQuery(qstrgetstr(&data->host_uri), &pal_attr))
         return -PAL_ERRNO;
 
     /* need to correct the data type */
     if (data->type == FILE_UNKNOWN)
         switch (pal_attr.handle_type) {
-            case pal_type_file: data->type = FILE_REGULAR;  break;
-            case pal_type_dir:  data->type = FILE_DIR;      break;
-            case pal_type_dev:  data->type = FILE_DEV;      break;
+            case pal_type_file: data->type = FILE_REGULAR; if (dent) dent->type = S_IFREG; break;
+            case pal_type_dir:  data->type = FILE_DIR;     if (dent) dent->type = S_IFDIR; break;
+            case pal_type_dev:  data->type = FILE_DEV;     if (dent) dent->type = S_IFCHR; break;
         }
 
     data->mode = (pal_attr.readable  ? S_IRUSR : 0) |
@@ -268,7 +269,7 @@ static int __query_attr (struct shim_dentry * dent,
     } else {
         /* DEP 3/18/17: Right now, we don't support hard links,
          * so just return 1;
-         */ 
+         */
         data->nlink = 1;
     }
 
@@ -400,7 +401,7 @@ static int __chroot_open (struct shim_dentry * dent,
     int version = atomic_read(&data->version);
     int oldmode = flags & O_ACCMODE;
     int accmode = oldmode;
-    int creat   = flags & PAL_CREAT_MASK;
+    int creat   = flags & PAL_CREATE_MASK;
     int option  = flags & PAL_OPTION_MASK;
 
     if ((data->type == FILE_REGULAR || data->type == FILE_UNKNOWN)
@@ -452,6 +453,13 @@ static int chroot_open (struct shim_handle * hdl, struct shim_dentry * dent,
     if ((ret = try_create_data(dent, NULL, 0, &data)) < 0)
         return ret;
 
+    if (dent->mode == NO_MODE) {
+        lock(data->lock);
+        ret = __query_attr(dent, data, NULL);
+        dent->mode = data->mode;
+        unlock(data->lock);
+    }
+
     if ((ret = __chroot_open(dent, NULL, 0, flags, dent->mode, hdl, data)) < 0)
         return ret;
 
@@ -462,7 +470,8 @@ static int chroot_open (struct shim_handle * hdl, struct shim_dentry * dent,
     hdl->type       = TYPE_FILE;
     file->marker    = (flags & O_APPEND) ? size : 0;
     file->size      = size;
-    file->buf_type  = (data->type == FILE_REGULAR) ? FILEBUF_MAP : FILEBUF_NONE;
+    // SMHERWIG file->buf_type  = (data->type == FILE_REGULAR) ? FILEBUF_MAP : FILEBUF_NONE;
+    file->buf_type  = FILEBUF_NONE;
     hdl->flags      = flags;
     hdl->acc_mode   = ACC_MODE(flags & O_ACCMODE);
     qstrcopy(&hdl->uri, &data->host_uri);
@@ -492,7 +501,8 @@ static int chroot_creat (struct shim_handle * hdl, struct shim_dentry * dir,
     hdl->type       = TYPE_FILE;
     file->marker    = (flags & O_APPEND) ? size : 0;
     file->size      = size;
-    file->buf_type  = (data->type == FILE_REGULAR) ? FILEBUF_MAP : FILEBUF_NONE;
+    // SMHERWIG file->buf_type  = (data->type == FILE_REGULAR) ? FILEBUF_MAP : FILEBUF_NONE;
+    file->buf_type = FILEBUF_NONE;
     hdl->flags      = flags;
     hdl->acc_mode   = ACC_MODE(flags & O_ACCMODE);
     qstrcopy(&hdl->uri, &data->host_uri);
@@ -593,7 +603,8 @@ static int chroot_hstat (struct shim_handle * hdl, struct stat * stat)
             stat->st_dev  = mdata ? (dev_t) mdata->ino_base : 0;
             stat->st_ino  = dent ? (ino_t) dent->ino : 0;
             stat->st_size = file->size;
-            stat->st_mode |= (file->buf_type == FILEBUF_MAP) ? S_IFREG : S_IFCHR;
+            // SMHERWIG stat->st_mode |= (file->buf_type == FILEBUF_MAP) ? S_IFREG : S_IFCHR;
+            stat->st_mode |= S_IFREG;
         }
 
         return 0;
@@ -806,7 +817,7 @@ static int chroot_read (struct shim_handle * hdl, void * buf,
     ret = DkStreamRead(hdl->pal_handle, file->marker, count, buf, NULL, 0) ? :
            (PAL_NATIVE_ERRNO == PAL_ERROR_ENDOFSTREAM ? 0 : -PAL_ERRNO);
 
-    if (ret > 0)
+    if (ret > 0 && file->type != FILE_TTY)
         file->marker += ret;
 
     unlock(hdl->lock);
@@ -847,7 +858,7 @@ static int chroot_write (struct shim_handle * hdl, const void * buf,
     ret = DkStreamWrite(hdl->pal_handle, file->marker, count, (void *) buf, NULL) ? :
           -PAL_ERRNO;
 
-    if (ret > 0)
+    if (ret > 0 && file->type != FILE_TTY)
         file->marker += ret;
 
     unlock(hdl->lock);
@@ -929,6 +940,7 @@ out:
 static int chroot_truncate (struct shim_handle * hdl, uint64_t len)
 {
     int ret = 0;
+    uint64_t rv;
 
     if (NEED_RECREATE(hdl) && (ret = chroot_recreate(hdl)) < 0)
         return ret;
@@ -945,8 +957,10 @@ static int chroot_truncate (struct shim_handle * hdl, uint64_t len)
         struct shim_file_data * data = FILE_HANDLE_DATA(hdl);
         atomic_set(&data->size, len);
     }
-
-    if ((ret = DkStreamSetLength(hdl->pal_handle, len)) != len) {
+    rv = DkStreamSetLength(hdl->pal_handle, len);
+    if (rv) {
+        // For an error, cast it back down to an int return code
+        ret = -((int)rv);
         goto out;
     }
 
@@ -1278,7 +1292,7 @@ static int chroot_chmod (struct shim_dentry * dent, mode_t mode)
 
     PAL_STREAM_ATTR attr = { .share_flags = mode };
 
-    if (!DkStreamAttributesSetbyHandle(pal_hdl, &attr)) {
+    if (!DkStreamAttributesSetByHandle(pal_hdl, &attr)) {
         DkObjectClose(pal_hdl);
         return -PAL_ERRNO;
     }

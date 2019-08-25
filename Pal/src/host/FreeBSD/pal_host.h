@@ -50,6 +50,7 @@ typedef struct mutex_handle {
 
 #define _DkInternalLock _DkMutexLock
 #define _DkInternalUnlock _DkMutexUnlock
+#define MAX_FDS         (3)
 typedef union pal_handle
 {
     /* TSAI: Here we define the internal types of PAL_HANDLE
@@ -87,7 +88,7 @@ typedef union pal_handle
 
     struct {
         PAL_HDR hdr;
-        PAL_IDX fds[2];
+        PAL_IDX fds[MAX_FDS];
         PAL_BOL nonblocking;
     } pipeprv;
 
@@ -175,7 +176,6 @@ typedef union pal_handle
 #define WFD(n)          (00010 << (n))
 #define WRITEABLE(n)    (00100 << (n))
 #define ERROR(n)        (01000 << (n))
-#define MAX_FDS         (3)
 #define HAS_FDS         (00077)
 
 #define HANDLE_TYPE(handle)  ((handle)->hdr.type)
@@ -235,11 +235,11 @@ struct pal_frame {
 };
 
 /* When a PAL call is issued, a special PAL_FRAME is placed on the stack.
- * This stores both a magic identifier, debugging information, 
+ * This stores both a magic identifier, debugging information,
  * as well as callee-saved state.  This is used as a way to deal
  * with PAL-internal failures where the goal is to exit the PAL and return a
  * failure.
- * 
+ *
  * Arguably, an alternative is to unwind the stack and handle error cases at
  * each stage.  In general, this is probably more robust, but would take work
  * in the short term.  The one exception where the current strategy is
@@ -248,7 +248,7 @@ struct pal_frame {
  */
 
 /* DEP 12/25/17: This frame storage thing is important to mark volatile.
- * The compiler should not optimize out any of these changes, and 
+ * The compiler should not optimize out any of these changes, and
  * because some accesses can happen during an exception, these are not
  * visible to the compiler in an otherwise stack-local variable (so the
  * compiler will try to optimize out these assignments.

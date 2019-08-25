@@ -49,9 +49,6 @@
 struct r_debug pal_r_debug =
         { 1, NULL, (ElfW(Addr)) &pal_dl_debug_state, RT_CONSISTENT, 0 };
 
-extern __typeof(pal_r_debug) _r_debug
-    __attribute ((alias ("pal_r_debug")));
-
 /* This function exists solely to have a breakpoint set on it by the
    debugger.  The debugger is supposed to find this function's address by
    examining the r_brk member of struct r_debug, but GDB 4.15 in fact looks
@@ -108,6 +105,8 @@ void _DkDebugAddMap (struct link_map * map)
 
     dbg->r_state = RT_CONSISTENT;
     pal_dl_debug_state();
+#else
+    __UNUSED(map);
 #endif
 }
 
@@ -149,6 +148,8 @@ void _DkDebugDelMap (struct link_map * map)
 
     dbg->r_state = RT_CONSISTENT;
     pal_dl_debug_state();
+#else
+    __UNUSED(map);
 #endif
 }
 
@@ -242,10 +243,3 @@ void setup_vdso_map (ElfW(Addr) addr)
 #endif
 }
 #endif
-
-ElfW(Addr) resolve_rtld (const char * sym_name)
-{
-    /* We are not using this, because in Linux we can rely on
-       rtld_map to directly lookup symbols */
-    return 0;
-}

@@ -32,6 +32,8 @@
 #include "list.h"
 #include "pal_debug.h"
 
+#include <errno.h>
+
 #define INIT_EVENT_HANDLER      { .lock = LOCK_INIT }
 
 struct pal_event_handler {
@@ -40,13 +42,13 @@ struct pal_event_handler {
 };
 
 struct pal_event_handler handlers[] = {
-        [PAL_EVENT_DIVZERO]     = INIT_EVENT_HANDLER,
-        [PAL_EVENT_MEMFAULT]    = INIT_EVENT_HANDLER,
-        [PAL_EVENT_ILLEGAL]     = INIT_EVENT_HANDLER,
-        [PAL_EVENT_QUIT]        = INIT_EVENT_HANDLER,
-        [PAL_EVENT_SUSPEND]     = INIT_EVENT_HANDLER,
-        [PAL_EVENT_RESUME]      = INIT_EVENT_HANDLER,
-        [PAL_EVENT_FAILURE]     = INIT_EVENT_HANDLER,
+        [PAL_EVENT_ARITHMETIC_ERROR] = INIT_EVENT_HANDLER,
+        [PAL_EVENT_MEMFAULT]         = INIT_EVENT_HANDLER,
+        [PAL_EVENT_ILLEGAL]          = INIT_EVENT_HANDLER,
+        [PAL_EVENT_QUIT]             = INIT_EVENT_HANDLER,
+        [PAL_EVENT_SUSPEND]          = INIT_EVENT_HANDLER,
+        [PAL_EVENT_RESUME]           = INIT_EVENT_HANDLER,
+        [PAL_EVENT_FAILURE]          = INIT_EVENT_HANDLER,
     };
 
 PAL_EVENT_HANDLER _DkGetExceptionHandler (PAL_NUM event)
@@ -61,7 +63,7 @@ PAL_EVENT_HANDLER _DkGetExceptionHandler (PAL_NUM event)
 }
 
 PAL_BOL
-DkSetExceptionHandler (PAL_EVENT_HANDLER handler, PAL_NUM event, PAL_FLG flags)
+DkSetExceptionHandler (PAL_EVENT_HANDLER handler, PAL_NUM event)
 {
     ENTER_PAL_CALL(DkSetExceptionHandler);
 
@@ -87,11 +89,11 @@ void DkExceptionReturn (PAL_PTR event)
 
 /* This does not return */
 void __abort(void) {
-    _DkProcessExit(1);
+    _DkProcessExit(-ENOTRECOVERABLE);
 }
 
 void warn (const char *format, ...)
-{ 
+{
     va_list args;
     va_start (args, format);
     vprintf(format, &args);

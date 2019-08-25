@@ -15,8 +15,6 @@
 #define DEBUG_ECALL         (0)
 #define DEBUG_OCALL         (0)
 
-#define SGX_HAS_FSGSBASE    (1)
-
 #define TRUSTED_STUB_SIZE   (PRESET_PAGESIZE * 4)
 
 #define CACHE_FILE_STUBS    (1)
@@ -24,5 +22,10 @@
 //#define USE_AES_NI          (1)
 
 #define PRINT_ENCLAVE_STAT  (0)
+
+#define MAX_ARGS_SIZE       (10000000)
+#define MAX_ENV_SIZE        (10000000)
+
+#define RED_ZONE_SIZE       (128)
 
 #endif /* PAL_LINUX_DEFS_H */

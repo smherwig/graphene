@@ -14,6 +14,8 @@ default: all
 level = ../
 include ../Makefile
 
+CFLAGS-libos = -L../../../build/libos -I../../include
+
 ifeq ($(findstring x86_64,$(SYS))$(findstring linux,$(SYS)),x86_64linux)
 $(c_executables): %: %.c
 	@echo [ $@ ]
@@ -47,19 +49,21 @@ endif
 PYTHONENV="PYTHONPATH=../../../../Scripts"
 
 ifeq ($(SGX_RUN),1)
-	PYTHONENV += "TIMEOUT=5000"
+	PYTHONENV += "TIMEOUT=20000"
 endif
 
 .PHONY: regression
 regression: $(target)
 	@echo "\n\nBasic Bootstrapping:"
-	@for f in $(wildcard 00_*.py); do env $(PYTHONENV) python $$f $(RUNTIME)/pal-$(PAL_HOST) || exit $$?; done
+	@for f in $(wildcard 00_*.py); do env $(PYTHONENV) python3 $$f $(RUNTIME)/pal-$(PAL_HOST) || exit $$?; done
 	@echo "\n\nSyscall Support:"
-	@for f in $(wildcard 30_*.py); do env $(PYTHONENV) python $$f $(RUNTIME)/pal-$(PAL_HOST) || exit $$?; done
+	@for f in $(wildcard 30_*.py); do env $(PYTHONENV) python3 $$f $(RUNTIME)/pal-$(PAL_HOST) || exit $$?; done
+	@echo "\n\nFile System Support:"
+	@for f in $(wildcard 40_*.py); do env $(PYTHONENV) python3 $$f $(RUNTIME)/pal-$(PAL_HOST) || exit $$?; done
 	@echo "\n\nSocket Support:"
-	@for f in $(wildcard 80_*.py); do env $(PYTHONENV) python $$f $(RUNTIME)/pal-$(PAL_HOST) || exit $$?; done
+	@for f in $(wildcard 80_*.py); do env $(PYTHONENV) python3 $$f $(RUNTIME)/pal-$(PAL_HOST) || exit $$?; done
 	@echo "\n\nLarge File Support:"
-	@for f in $(wildcard 90_*.py); do env $(PYTHONENV) python $$f $(RUNTIME)/pal-$(PAL_HOST) || exit $$?; done
+	@for f in $(wildcard 90_*.py); do env $(PYTHONENV) python3 $$f $(RUNTIME)/pal-$(PAL_HOST) || exit $$?; done
 
 .PHONY: clean-tmp
 clean-tmp:

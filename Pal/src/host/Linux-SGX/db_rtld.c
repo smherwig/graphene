@@ -51,7 +51,7 @@ void _DkDebugAddMap (struct link_map * map)
     const ElfW(Phdr) * ph;
 
     int fd = ocall_open(map->l_name, O_RDONLY, 0);
-    if (fd < 0)
+    if (IS_ERR(fd))
         return;
 
     for (ph = phdr; ph < &phdr[ehdr->e_phnum]; ++ph)
@@ -170,11 +170,4 @@ void setup_pal_map (struct link_map * pal_map)
     ocall_load_debug(buffer);
     pal_map->l_prev = pal_map->l_next = NULL;
     loaded_maps = pal_map;
-}
-
-ElfW(Addr) resolve_rtld (const char * sym_name)
-{
-    /* We are not using this, because in Linux we can rely on
-       rtld_map to directly lookup symbols */
-    return 0;
 }

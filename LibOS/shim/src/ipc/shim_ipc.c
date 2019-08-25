@@ -44,7 +44,7 @@
 
 static MEM_MGR ipc_info_mgr;
 
-LOCKTYPE ipc_info_lock;
+struct shim_lock ipc_info_lock;
 
 struct shim_process cur_process;
 
@@ -203,9 +203,7 @@ lookup_and_alloc_client (IDTYPE vmid, const char * uri)
             unlock(ipc_info_lock);
             return p;
         }
-    unlock(ipc_info_lock);
 
-    lock(ipc_info_lock);
     p = __get_new_ipc_info(vmid, uri, len);
     if (p) {
         listp_add(p, head, hlist);

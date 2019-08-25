@@ -47,7 +47,7 @@ DEFINE_LISTP(shim_msg_handle);
 static LISTP_TYPE(shim_msg_handle) msgq_list;
 static LISTP_TYPE(shim_msg_handle) msgq_key_hlist [MSGQ_HASH_NUM];
 static LISTP_TYPE(shim_msg_handle) msgq_qid_hlist [MSGQ_HASH_NUM];
-static LOCKTYPE msgq_list_lock;
+static struct shim_lock msgq_list_lock;
 
 static int __load_msg_persist (struct shim_msg_handle * msgq, bool readmsg);
 static int __store_msg_persist(struct shim_msg_handle * msgq);
@@ -782,7 +782,7 @@ static int __store_msg_persist (struct shim_msg_handle * msgq)
     snprintf(fileuri, 20, "file:msgq.%08x", msgq->msqid);
 
     PAL_HANDLE file = DkStreamOpen(fileuri, PAL_ACCESS_RDWR, 0600,
-                                   PAL_CREAT_TRY, 0);
+                                   PAL_CREATE_TRY, 0);
     if (!file) {
         ret = -PAL_ERRNO;
         goto out;
@@ -792,7 +792,7 @@ static int __store_msg_persist (struct shim_msg_handle * msgq)
                         sizeof(struct msg_backup) * msgq->nmsgs +
                         msgq->currentsize;
 
-    if (DkStreamSetLength(file, expected_size) != expected_size)
+    if (DkStreamSetLength(file, expected_size))
         goto err_file;
 
     void * mem = (void *) DkStreamMap(file, NULL,
@@ -905,7 +905,7 @@ static int __load_msg_persist (struct shim_msg_handle * msgq, bool readmsg)
         struct msg_backup * m = mem;
         mem += sizeof(struct msg_backup) + m->size;
 
-        debug("load msg: type=%d, size=%d\n", m->type, m->size);
+        debug("load msg: type=%ld, size=%d\n", m->type, m->size);
 
         if (!mtype || mtype->type != m->type)
             mtype = __add_msg_type(m->type, &msgq->types, &msgq->ntypes,

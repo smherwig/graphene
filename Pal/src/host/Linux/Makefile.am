@@ -7,10 +7,10 @@ AS	= gcc
 AR	= ar rcs
 LD	= ld
 
-CFLAGS	= -Wall -fPIC -O2 -std=gnu99 -fgnu89-inline -U_FORTIFY_SOURCE \
+CFLAGS	= -Wall -fPIC -O2 -std=c11 -U_FORTIFY_SOURCE \
 	  -fno-stack-protector -fno-builtin
 
-EXTRAFLAGS = -Wextra -Wno-unused-parameter -Wno-sign-compare
+EXTRAFLAGS = -Wextra -Wno-sign-compare
 
 CFLAGS += $(EXTRAFLAGS)
 
@@ -19,6 +19,10 @@ ASFLAGS = -DPIC -DSHARED -fPIC -DASSEMBLER -Wa,--noexecstack \
 LDFLAGS	= -shared -nostdlib -z combreloc -z defs \
 	  --version-script $(HOST_DIR)/pal.map -T $(HOST_DIR)/pal.lds
 ARFLAGS	=
+
+ifeq ($(WERROR),1)
+CFLAGS += -Werror
+endif
 
 pal_loader = $(HOST_DIR)/libpal.so
 pal_sec = $(SEC_DIR)/libpal_sec.so

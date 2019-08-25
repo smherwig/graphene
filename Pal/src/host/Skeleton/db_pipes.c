@@ -60,7 +60,7 @@ static int pipe_open (PAL_HANDLE *handle, const char * type,
                       const char * uri, int access, int share,
                       int create, int options)
 {
-    if (strpartcmp_static(type, "pipe:") && !*uri)
+    if (strcmp_static(type, "pipe") && !*uri)
         return pipe_private(handle);
 
     char * endptr;
@@ -68,7 +68,7 @@ static int pipe_open (PAL_HANDLE *handle, const char * type,
     PAL_IDX connid = 0;
 
     if (*endptr == ':') {
-        if (create & PAL_CREAT_TRY)
+        if (create & PAL_CREATE_TRY)
             return -PAL_ERROR_INVAL;
 
         connid = strtol(endptr + 1, &endptr, 10);
@@ -77,25 +77,25 @@ static int pipe_open (PAL_HANDLE *handle, const char * type,
     if (*endptr)
         return -PAL_ERROR_INVAL;
 
-    if (strpartcmp_static(type, "pipe.srv:"))
+    if (strcmp_static(type, "pipe.srv"))
         return pipe_listen(handle, pipeid, create);
 
-    if (strpartcmp_static(type, "pipe:"))
+    if (strcmp_static(type, "pipe"))
         return pipe_connect(handle, pipeid, connid, create);
 
     return -PAL_ERROR_INVAL;
 }
 
 /* 'read' operation of pipe stream. offset does not apply here. */
-static int pipe_read (PAL_HANDLE handle, int offset, int len,
-                      void * buffer)
+static int64_t pipe_read (PAL_HANDLE handle, uint64_t offset, uint64_t len,
+                          void * buffer)
 {
     return -PAL_ERROR_NOTIMPLEMENTED;
 }
 
 /* 'write' operation of pipe stream. offset does not apply here. */
-static int pipe_write (PAL_HANDLE handle, int offset, int len,
-                       const void * buffer)
+static int64_t pipe_write (PAL_HANDLE handle, uint64_t offset, uint64_t len,
+                           const void * buffer)
 {
     return -PAL_ERROR_NOTIMPLEMENTED;
 }

@@ -7,11 +7,31 @@ GLIBC_SRC = glibc-2.19
 GLIBC_CHECKSUM = 18ad6db70724699d264add80b1f813630d0141cf3a3558b4e1a7c15f6beac796
 SHIM_DIR = shim
 BUILD_DIR = glibc-build
-GLIBC_TARGET = $(addprefix $(BUILD_DIR)/,libc.so.6 ld-linux-x86-64.so.2 libpthread.so.0 libm.so.6 libdl.so.2 libutil.so.1 crt1.o crti.o crtn.o liblibos.so.1 libnss_dns.so.2 libresolv.so.2)
+RUNTIME_DIR = $(CURDIR)/../Runtime
+GLIBC_LIBS = \
+	csu/crt1.o \
+	csu/crti.o \
+	csu/crtn.o \
+	dlfcn/libdl.so.2 \
+	elf/ld-linux-x86-64.so.2 \
+	libc.so \
+	libc.so.6 \
+	libos/liblibos.so.1 \
+	login/libutil.so.1 \
+	math/libm.so.6 \
+	nptl/libpthread.so.0 \
+	nptl_db/libthread_db.so.1 \
+	resolv/libnss_dns.so.2 \
+	resolv/libresolv.so.2 \
+	rt/librt.so.1
+GLIBC_TARGET = $(addprefix $(BUILD_DIR)/, $(GLIBC_LIBS))
+GLIBC_RUNTIME = $(addprefix $(RUNTIME_DIR)/, $(notdir $(GLIBC_TARGET)))
 
 .PHONY: all
-all: $(GLIBC_TARGET)
+all: $(GLIBC_TARGET) $(GLIBC_RUNTIME)
 	$(MAKE) -C $(SHIM_DIR) all
+
+include ../Makefile.rules
 
 .PHONY: format
 format:
@@ -19,11 +39,25 @@ format:
 
 ifeq ($(findstring x86_64,$(SYS))$(findstring linux,$(SYS)),x86_64linux)
 
-.INTERMEDIATE: $(BUILD_DIR)/Build.success
+.SECONDARY: $(BUILD_DIR)/Build.success
 
-$(BUILD_DIR)/Build.success: $(BUILD_DIR)/Makefile
+GLIBC_ADDED_FILES = \
+        $(GLIBC_SRC)/syscallas.S \
+        $(GLIBC_SRC)/syscalldb.c \
+        $(GLIBC_SRC)/syscalldb.h \
+        $(GLIBC_SRC)/libos/Makefile \
+        $(GLIBC_SRC)/libos/Versions \
+        $(GLIBC_SRC)/libos/benchmark.c \
+        $(GLIBC_SRC)/libos/checkpoint.c \
+        $(GLIBC_SRC)/libos/msgpersist.c \
+        $(GLIBC_SRC)/libos/sandbox.c \
+        $(GLIBC_SRC)/elf/syscalldb.c \
+        $(GLIBC_SRC)/elf/syscallas.S \
+        $(GLIBC_SRC)/sysdeps/unix/sysv/linux/x86_64/syscalldb.h
+
+$(BUILD_DIR)/Build.success: $(BUILD_DIR)/Makefile $(GLIBC_ADDED_FILES)
 	@echo "Building glibc, may take a while to finish. Warning messages may show up. If this process terminates with failures, see \"$(BUILD_DIR)/build.log\" for more information."
-	cd $(BUILD_DIR) && ($(MAKE) 2>&1 >> build.log)
+	($(MAKE) -C $(BUILD_DIR) 2>&1 >> build.log) && touch $@
 #  2>&1 | tee -a build.log)
 
 $(GLIBC_TARGET): $(BUILD_DIR)/Build.success
@@ -35,12 +69,24 @@ else
 	./buildglibc.py --quiet
 endif
 
+define LN_SF_TO_RUNTIME_DIR_template =
+$(RUNTIME_DIR)/$(notdir $(1)): $(1)
+	$$(call cmd,ln_sf)
+endef
+
+$(foreach lib,$(GLIBC_TARGET),$(eval $(call LN_SF_TO_RUNTIME_DIR_template,$(lib))))
+
 GLIBC_MIRRORS ?= https://ftp.gnu.org/gnu/ \
 		https://mirrors.kernel.org/gnu/ \
 		https://mirrors.ocf.berkeley.edu/gnu/
 
 ifeq ($(shell git ls-files $(GLIBC_SRC)/configure),)
-$(GLIBC_SRC)/configure: $(GLIBC_SRC).patch
+GLIBC_PATCHES = \
+	$(GLIBC_SRC).patch \
+	glibc-fix-warning.patch \
+	glibc-no-pie.patch
+
+$(GLIBC_SRC)/configure: $(GLIBC_PATCHES) Makefile
 	[ -f $(GLIBC_SRC).tar.gz ] || \
 	for MIRROR in $(GLIBC_MIRRORS); do \
 		wget --timeout=10 $${MIRROR}glibc/$(GLIBC_SRC).tar.gz \
@@ -49,9 +95,11 @@ $(GLIBC_SRC)/configure: $(GLIBC_SRC).patch
 	[ "`sha256sum $(GLIBC_SRC).tar.gz`" = "$(GLIBC_CHECKSUM)  $(GLIBC_SRC).tar.gz" ] || \
 		(echo "*** $(GLIBC_SRC).tar.gz has a wrong checksum ***"; exit 255)
 	tar -xzf $(GLIBC_SRC).tar.gz
-	cd $(GLIBC_SRC) && patch -p1 < ../$(GLIBC_SRC).patch
-	cd $(GLIBC_SRC) && patch -p1 < ../glibc-fix-warning.patch
-	cd $(GLIBC_SRC) && patch -p1 < ../glibc-no-pie.patch
+	cd $(GLIBC_SRC) && \
+	for p in $(GLIBC_PATCHES); do \
+		echo applying $$p; \
+		patch -p1 < ../$$p; \
+	done
 endif
 
 .PHONY: clean

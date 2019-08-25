@@ -55,7 +55,7 @@ int unmap_tcs (void)
     struct thread_map * map = &enclave_thread_map[index];
     if (index >= enclave_thread_num)
         return 0;
-    SGX_DBG(DBG_I, "unmap TCS at 0x%08lx\n", map->tcs);
+    SGX_DBG(DBG_I, "unmap TCS at %p\n", map->tcs);
     current_tcs = NULL;
     ((struct enclave_dbginfo *) DBGINFO_ADDR)->thread_tids[index] = 0;
     map->tid = 0;
@@ -79,7 +79,10 @@ static void * thread_start (void * arg)
     current_enclave = arg;
 
     if (!current_tcs) {
-        SGX_DBG(DBG_E, "Cannot attach to any TCS!\n");
+        SGX_DBG(DBG_E,
+                "There are no available TCS pages left for a new thread!\n"
+                "Please try to increase sgx.thread_num in the manifest.\n"
+                "The current value is %d\n", enclave_thread_num);
         return NULL;
     }
 

@@ -35,7 +35,7 @@ void init_pages (void)
     heap_base = pal_sec.heap_min;
     heap_size = pal_sec.heap_max - pal_sec.heap_min;
 
-    SGX_DBG(DBG_M, "available heap size: %llu M\n",
+    SGX_DBG(DBG_M, "available heap size: %lu M\n",
            (heap_size - pal_sec.exec_size) / 1024 / 1024);
 
     if (pal_sec.exec_size) {
@@ -61,7 +61,7 @@ static void assert_vma_list (void)
             SGX_DBG(DBG_E, "*** [%d] corrupted heap vma: %p - %p (last = %p) ***\n", pal_sec.pid, vma->bottom, vma->top, last_addr);
 #ifdef DEBUG
             if (pal_sec.in_gdb)
-                asm volatile ("int $3" ::: "memory");
+                __asm__ volatile ("int $3" ::: "memory");
 #endif
             ocall_exit();
         }
@@ -77,7 +77,7 @@ void * get_reserved_pages(void * addr, uint64_t size)
     if (!size)
         return NULL;
 
-    SGX_DBG(DBG_M, "*** get_reserved_pages: heap_base %p, heap_size %llu, limit %p ***\n", heap_base, heap_size, heap_base + heap_size);
+    SGX_DBG(DBG_M, "*** get_reserved_pages: heap_base %p, heap_size %lu, limit %p ***\n", heap_base, heap_size, heap_base + heap_size);
     if (addr >= heap_base + heap_size) {
         SGX_DBG(DBG_E, "*** allocating out of heap: %p ***\n", addr);
         return NULL;
@@ -89,7 +89,7 @@ void * get_reserved_pages(void * addr, uint64_t size)
     if ((uintptr_t) addr & (pgsz - 1))
         addr = (void *) ((uintptr_t) addr & ~(pgsz - 1));
 
-    SGX_DBG(DBG_M, "allocate %d bytes at %p\n", size, addr);
+    SGX_DBG(DBG_M, "allocate %ld bytes at %p\n", size, addr);
 
     _DkInternalLock(&heap_vma_lock);
 
@@ -98,9 +98,9 @@ void * get_reserved_pages(void * addr, uint64_t size)
 
     /* Allocating in the heap region.  This loop searches the vma list to
      * find the first vma with a starting address lower than the requested
-     * address.  Recall that vmas are in descending order.  
-     * 
-     * If the very first vma matches, prev will be null.  
+     * address.  Recall that vmas are in descending order.
+     *
+     * If the very first vma matches, prev will be null.
      */
     if (addr && addr >= heap_base &&
         addr + size <= heap_base + heap_size) {
@@ -135,8 +135,8 @@ void * get_reserved_pages(void * addr, uint64_t size)
 
     _DkInternalUnlock(&heap_vma_lock);
 
-    SGX_DBG(DBG_E, "*** Not enough space on the heap (requested = %llu) ***\n", size);
-    asm volatile("int $3");
+    SGX_DBG(DBG_E, "*** Not enough space on the heap (requested = %lu) ***\n", size);
+    __asm__ volatile("int $3");
     return NULL;
 
 allocated:
@@ -144,13 +144,13 @@ allocated:
         // If this is the last entry, don't wrap around
         if (prev->list.next == listp_first_entry(&heap_vma_list, struct heap_vma, list))
             next = NULL;
-        else 
+        else
             next = prev->list.next;
     } else {
-        /* In this case, the list is empty, or 
+        /* In this case, the list is empty, or
          * first vma starts at or below the allocation site.
-         * 
-         * The next field will be used to merge vmas with the allocation, if 
+         *
+         * The next field will be used to merge vmas with the allocation, if
          * they overlap, until the vmas drop below the requested addr
          * (traversing in decreasing virtual address order)
          */
@@ -241,7 +241,7 @@ allocated:
                 vma->bottom, vma->top);
 #ifdef DEBUG
         if (pal_sec.in_gdb)
-            asm volatile ("int $3" ::: "memory");
+            __asm__ volatile ("int $3" ::: "memory");
 #endif
     }
     assert_vma_list();
@@ -256,8 +256,8 @@ void free_pages(void * addr, uint64_t size)
 {
     void * addr_top = addr + size;
 
-    SGX_DBG(DBG_M, "free_pages: trying to free %p %llu\n", addr, size);
-    
+    SGX_DBG(DBG_M, "free_pages: trying to free %p %lu\n", addr, size);
+
     if (!addr || !size)
         return;
 
@@ -276,7 +276,7 @@ void free_pages(void * addr, uint64_t size)
     if (addr < heap_base)
         addr = heap_base;
 
-    SGX_DBG(DBG_M, "free %d bytes at %p\n", size, addr);
+    SGX_DBG(DBG_M, "free %ld bytes at %p\n", size, addr);
 
     _DkInternalLock(&heap_vma_lock);
 
@@ -317,6 +317,6 @@ void print_alloced_pages (void)
     unsigned int max = atomic_read(&max_alloced_pages);
 
     printf("                >>>>>>>> "
-           "Enclave heap size =         %10ld pages / %10ld pages\n",
+           "Enclave heap size =         %10d pages / %10ld pages\n",
            val > max ? val : max, heap_size / pgsz);
 }

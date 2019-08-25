@@ -85,7 +85,9 @@ int init_brk_region (void * brk_region)
     if (brk_region) {
         while (true) {
             uint32_t rand;
-            getrand(&rand, sizeof(rand));
+            int ret = DkRandomBitsRead(&rand, sizeof(rand));
+            if (ret < 0)
+                return -convert_pal_errno(-ret);
             rand %= 0x2000000;
             rand = ALIGN_UP(rand);
 
@@ -223,7 +225,7 @@ out:
 BEGIN_CP_FUNC(brk)
 {
     if (region.brk_start) {
-        ADD_CP_FUNC_ENTRY(region.brk_start);
+        ADD_CP_FUNC_ENTRY((ptr_t)region.brk_start);
         ADD_CP_ENTRY(ADDR, region.brk_current);
         ADD_CP_ENTRY(SIZE, region.brk_end - region.brk_start);
         assert(brk_max_size);

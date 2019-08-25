@@ -202,7 +202,7 @@ static void set_debug_type (void)
         ret = _DkStreamOpen(&handle, cfgbuf,
                             PAL_ACCESS_RDWR,
                             PAL_SHARE_OWNER_R|PAL_SHARE_OWNER_W,
-                            PAL_CREAT_TRY, 0);
+                            PAL_CREATE_TRY, 0);
         goto out;
     }
 
@@ -221,7 +221,7 @@ out:
 static int loader_filter (const char * key, int len)
 {
     /* try to do this as fast as possible */
-    return (key[0] == 'l' && key[1] == 'o' && key[2] == 'a' && key[3] == 'd' &&
+    return (len > 7 && key[0] == 'l' && key[1] == 'o' && key[2] == 'a' && key[3] == 'd' &&
             key[4] == 'e' && key[5] == 'r' && key[6] == '.') ? 0 : 1;
 }
 
@@ -317,7 +317,7 @@ has_manifest:
 #endif
 
         PAL_STREAM_ATTR attr;
-        ret = _DkStreamAttributesQuerybyHandle(manifest_handle, &attr);
+        ret = _DkStreamAttributesQueryByHandle(manifest_handle, &attr);
         if (ret < 0)
             init_fail(-ret, "cannot open manifest file");
 
@@ -337,8 +337,11 @@ has_manifest:
         root_config->free = free;
 
         const char * errstring = NULL;
-        if ((ret = read_config(root_config, loader_filter, &errstring)) < 0)
+        if ((ret = read_config(root_config, loader_filter, &errstring)) < 0) {
+            if (_DkStreamGetName(manifest_handle, uri_buf, URI_MAX) > 0)
+                printf("reading manifest \"%s\" failed\n", uri_buf);
             init_fail(-ret, errstring);
+        }
 
         pal_state.root_config = root_config;
 

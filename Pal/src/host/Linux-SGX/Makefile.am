@@ -6,11 +6,11 @@ AS	= gcc
 AR	= ar rcs
 LD	= ld
 
-CFLAGS	= -Wall -fPIC -O2 -maes -std=gnu99 -fgnu89-inline -U_FORTIFY_SOURCE \
+CFLAGS	= -Wall -fPIC -O2 -maes -std=c11 -U_FORTIFY_SOURCE \
 	  -fno-omit-frame-pointer \
 	  -fno-stack-protector -fno-builtin -DIN_ENCLAVE
 
-EXTRAFLAGS = -Wextra -Wno-unused-parameter -Wno-sign-compare
+EXTRAFLAGS = -Wextra -Wno-sign-compare
 
 CFLAGS += $(EXTRAFLAGS)
 
@@ -18,11 +18,15 @@ ASFLAGS = -DPIC -DSHARED -fPIC -DASSEMBLER -Wa,--noexecstack \
 	  -x assembler-with-cpp -DIN_ENCLAVE
 LDFLAGS	= -shared -nostdlib -z combreloc -z defs \
 	  --version-script $(HOST_DIR)/pal.map -T $(HOST_DIR)/enclave.lds \
-	  --hash-style=gnu -e enclave_entry
+	  --hash-style=gnu
 ARFLAGS	=
 
 CRYPTO_PROVIDER = mbedtls
 CFLAGS += -DCRYPTO_USE_MBEDTLS
+
+ifeq ($(WERROR),1)
+CFLAGS += -Werror
+endif
 
 pal_loader = $(HOST_DIR)/pal-sgx
 pal_sec =

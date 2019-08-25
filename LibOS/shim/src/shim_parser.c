@@ -509,7 +509,7 @@ void parse_syscall_before (int sysno, const char * name, int nr, ...)
 
     PUTCH(')');
 dotdotdot:
-    PRINTF(" ...\n", name);
+    PRINTF(" ... %s\n", name);
     va_end(ap);
 }
 
@@ -557,7 +557,7 @@ void parse_syscall_after (int sysno, const char * name, int nr, ...)
 
     if (is_pointer(ret_type)) {
         if (ret_ptr < -4095L)
-            PRINTF(") = %p\n", ret_ptr);
+            PRINTF(") = 0x%08lx\n", ret_ptr);
         else
             PRINTF(") = %ld\n", (long) ret_ptr);
     } else {
@@ -861,7 +861,7 @@ const char *const siglist[NUM_KNOWN_SIGS + 1] =
 
 static void parse_signum (const char * type, va_list * ap)
 {
-    unsigned int signum = va_arg(*ap, unsigned int);
+    int signum = va_arg(*ap, int);
 
     if (signum >= 0 && signum <= NUM_KNOWN_SIGS)
         PUTS(signal_name(signum));
@@ -918,7 +918,7 @@ static void parse_timespec (const char * type, va_list * ap)
         return;
     }
 
-    PRINTF("[%ld,%lld]", tv->tv_sec, tv->tv_nsec);
+    PRINTF("[%ld,%ld]", tv->tv_sec, tv->tv_nsec);
 }
 
 static void parse_sockaddr (const char * type, va_list *ap)
@@ -1209,7 +1209,7 @@ static void parse_ioctlop (const char * type, va_list * ap)
             "TIOCGSID",     /* 0x5429 */    "TCGETS2",      /* 0x542A */
             "TCSETS2",      /* 0x542B */    "TCSETSW2",     /* 0x542C */
             "TCSETSF2",     /* 0x542D */    "TIOCGRS485",   /* 0x542E */
-            "TIOCSRS485",   /* 0x542F */    "TIOCGPTN"      /* 0x5430 */
+            "TIOCSRS485",   /* 0x542F */    "TIOCGPTN",     /* 0x5430 */
             "TIOCSPTLCK",   /* 0x5431 */    "TCGETX",       /* 0x5432 */
             "TCSETX",       /* 0x5433 */    "TCSETXF",      /* 0x5434 */
             "TCSETXW",      /* 0x5435 */    "TIOCSIG",      /* 0x5436 */

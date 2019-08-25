@@ -36,6 +36,7 @@
 #include "pal_debug.h"
 #include "pal_error.h"
 #include "pal_security.h"
+#include "pal_rtld.h"
 #include "graphene.h"
 #include "graphene-ipc.h"
 #include "api.h"
@@ -142,7 +143,6 @@ static int child_process (void * param)
     struct proc_param * proc_param = param;
     int ret;
 
-    INLINE_SYSCALL(close, 1, PROC_INIT_FD);
     ret = INLINE_SYSCALL(dup2, 2, proc_param->parent->process.stream_in,
                          PROC_INIT_FD);
     if (IS_ERR(ret))
@@ -164,9 +164,9 @@ failed:
     return ret;
 }
 
-int _DkProcessCreate (PAL_HANDLE * handle,
-                      const char * uri, int flags, const char ** args)
+int _DkProcessCreate (PAL_HANDLE * handle, const char * uri, const char ** args)
 {
+
     PAL_HANDLE exec = NULL;
     PAL_HANDLE parent_handle = NULL, child_handle = NULL;
     int ret;
@@ -184,6 +184,20 @@ int _DkProcessCreate (PAL_HANDLE * handle,
             ret = -PAL_ERROR_INVAL;
             goto out;
         }
+
+        /* If this process creation is for fork emulation,
+         * map address of executable is already determined.
+         * tell its address to forked process.
+         */
+        size_t len;
+        const char * file_uri = "file:";
+        if (exec_map && exec_map->l_name &&
+            (len = strlen(uri)) >= 5 && !memcmp(uri, file_uri, 5) &&
+            /* skip "file:"*/
+            strlen(exec_map->l_name) == len - 5 &&
+            /* + 1 for lasting * NUL */
+            !memcmp(exec_map->l_name, uri + 5, len - 5 + 1))
+            exec->file.map_start = (PAL_PTR)exec_map->l_map_start;
     }
 
     /* step 2: create parant and child process handle */
@@ -431,7 +445,7 @@ static int set_graphene_task (const char * uri, int flags)
 
     PAL_STREAM_ATTR attr;
 
-    if ((ret = _DkStreamAttributesQuerybyHandle(handle, &attr)) < 0)
+    if ((ret = _DkStreamAttributesQueryByHandle(handle, &attr)) < 0)
         goto out;
 
     void * addr = NULL;
@@ -497,6 +511,9 @@ int _DkProcessSandboxCreate (const char * manifest, int flags)
 static int64_t proc_read (PAL_HANDLE handle, uint64_t offset, uint64_t count,
                       void * buffer)
 {
+    if (offset)
+        return -PAL_ERROR_INVAL;
+
     int64_t bytes = INLINE_SYSCALL(read, 3, handle->process.stream_in, buffer,
                                    count);
 
@@ -516,6 +533,9 @@ static int64_t proc_read (PAL_HANDLE handle, uint64_t offset, uint64_t count,
 static int64_t proc_write (PAL_HANDLE handle, uint64_t offset, uint64_t count,
                        const void * buffer)
 {
+    if (offset)
+        return -PAL_ERROR_INVAL;
+
     int64_t bytes = INLINE_SYSCALL(write, 3, handle->process.stream_out, buffer,
                                    count);
 

@@ -113,7 +113,11 @@ int create_checkpoint (const char * cpdir, IDTYPE * sid)
             }
     } else {
 retry:
-        getrand(&cpsession->sid, sizeof(IDTYPE));
+        ret = DkRandomBitsRead(&cpsession->sid, sizeof(cpsession->sid));
+        if (ret < 0) {
+            ret = -convert_pal_errno(-ret);
+            goto err_locked;
+        }
 
         listp_for_each_entry(s, &cp_sessions, list)
             if (s->sid == cpsession->sid)
@@ -273,7 +277,7 @@ int shim_do_checkpoint (const char * filename)
     if (ret < 0)
         return ret;
 
-    shim_tcb_t * tcb = SHIM_GET_TLS();
+    shim_tcb_t * tcb = shim_get_tls();
     assert(tcb && tcb->tp);
     struct shim_signal signal;
     __store_context(tcb, NULL, &signal);

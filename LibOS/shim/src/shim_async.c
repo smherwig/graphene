@@ -51,7 +51,7 @@ static enum {  HELPER_NOTALIVE, HELPER_ALIVE } async_helper_state;
 static struct shim_thread * async_helper_thread;
 static AEVENTTYPE           async_helper_event;
 
-static LOCKTYPE async_helper_lock;
+static struct shim_lock async_helper_lock;
 
 /* Returns remaining usecs */
 int64_t install_async_event (PAL_HANDLE object, unsigned long time,
@@ -63,8 +63,8 @@ int64_t install_async_event (PAL_HANDLE object, unsigned long time,
 
     unsigned long install_time = DkSystemTimeQuery();
     int64_t rv = 0;
-    
-    debug("install async event at %llu\n", install_time);
+
+    debug("install async event at %lu\n", install_time);
 
     event->callback     = callback;
     event->arg          = arg;
@@ -82,10 +82,10 @@ int64_t install_async_event (PAL_HANDLE object, unsigned long time,
             break;
     }
 
-    /* 
+    /*
      * man page of alarm system call :
      * DESCRIPTION
-     * alarm() arranges for a SIGALRM signal to be delivered to the 
+     * alarm() arranges for a SIGALRM signal to be delivered to the
 	 * calling process in seconds seconds.
      * If seconds is zero, any pending alarm is canceled.
      * In any event any previously set alarm() is canceled.
@@ -93,27 +93,30 @@ int64_t install_async_event (PAL_HANDLE object, unsigned long time,
     if (!listp_empty(&async_list)) {
         tmp = listp_first_entry(&async_list, struct async_event, list);
         tmp = tmp->list.prev;
+
+        rv = tmp->expire_time - install_time;
+
         /*
          * any previously set alarm() is canceled.
          * There should be exactly only one timer pending
          */
-		listp_del(tmp, &async_list, list);
+        listp_del(tmp, &async_list, list);
         free(tmp);
-        rv = tmp->expire_time - install_time;
-    } else
-	   tmp = NULL;
-    
+    } else {
+        tmp = NULL;
+    }
+
     INIT_LIST_HEAD(event, list);
     if (!time)    // If seconds is zero, any pending alarm is canceled.
         free(event);
     else
-        listp_add_tail(event, &async_list, list);   
+        listp_add_tail(event, &async_list, list);
 
     if (async_helper_state == HELPER_NOTALIVE)
         create_async_helper();
 
     unlock(async_helper_lock);
-    
+
     set_event(&async_helper_event, 1);
     return rv;
 }
@@ -188,10 +191,10 @@ static void shim_async_helper (void * arg)
 
         polled = DkObjectsWaitAny(object_num + 1, local_objects, sleep_time);
         barrier();
-        
+
         if (!polled) {
             if (next_event) {
-                debug("async event trigger at %llu\n",
+                debug("async event trigger at %lu\n",
                       next_event->expire_time);
 
                 next_event->callback(next_event->caller, next_event->arg);
@@ -223,7 +226,7 @@ update_status:
 
         listp_for_each_entry_safe(tmp, n, &async_list, list) {
             if (tmp->object == polled) {
-                debug("async event trigger at %llu\n",
+                debug("async event trigger at %lu\n",
                       latest_time);
                 unlock(async_helper_lock);
                 tmp->callback(tmp->caller, tmp->arg);
@@ -253,7 +256,7 @@ update_list:
                     break;
                 }
 
-                debug("async event trigger at %llu (expire at %llu)\n",
+                debug("async event trigger at %lu (expire at %lu)\n",
                       latest_time, tmp->expire_time);
                 listp_del(tmp, &async_list, list);
                 unlock(async_helper_lock);
@@ -281,6 +284,7 @@ update_list:
     unlock(async_helper_lock);
     put_thread(self);
     debug("async helper thread terminated\n");
+    free(local_objects);
 
     DkThreadExit();
 }
@@ -314,18 +318,31 @@ int create_async_helper (void)
     /* Publish new and update the state once fully initialized */
     async_helper_thread = new;
     async_helper_state = HELPER_ALIVE;
-    
+
     return 0;
 }
 
-int terminate_async_helper (void)
+/*
+ * On success, the reference to the thread of async helper is returned with
+ * reference count incremented.
+ * It's caller the responsibility to wait for its exit and release the
+ * final reference to free related resources.
+ * It's problematic for the thread itself to release its resources which it's
+ * using. For example stack.
+ * So defer releasing it after its exit and make the releasing the caller
+ * responsibility.
+ */
+struct shim_thread * terminate_async_helper (void)
 {
     if (async_helper_state != HELPER_ALIVE)
-        return 0;
+        return NULL;
 
     lock(async_helper_lock);
+    struct shim_thread * ret = async_helper_thread;
+    if (ret)
+        get_thread(ret);
     async_helper_state = HELPER_NOTALIVE;
     unlock(async_helper_lock);
     set_event(&async_helper_event, 1);
-    return 0;
+    return ret;
 }

@@ -39,7 +39,7 @@ static IDTYPE tid_alloc_idx __attribute_migratable = 0;
 static LISTP_TYPE(shim_thread) thread_list = LISTP_INIT;
 DEFINE_LISTP(shim_simple_thread);
 static LISTP_TYPE(shim_simple_thread) simple_thread_list = LISTP_INIT;
-LOCKTYPE thread_list_lock;
+struct shim_lock thread_list_lock;
 
 static IDTYPE internal_tid_alloc_idx = INTERNAL_TID_BASE;
 
@@ -101,12 +101,12 @@ struct shim_thread * lookup_thread (IDTYPE tid)
 
 struct shim_thread * __get_cur_thread (void)
 {
-    return SHIM_THREAD_SELF();
+    return shim_thread_self();
 }
 
 shim_tcb_t * __get_cur_tcb (void)
 {
-    return SHIM_GET_TLS();
+    return shim_get_tls();
 }
 
 IDTYPE get_pid (void)
@@ -148,7 +148,7 @@ static IDTYPE get_internal_pid (void)
     internal_tid_alloc_idx++;
     IDTYPE idx = internal_tid_alloc_idx;
     unlock(thread_list_lock);
-    assert(IS_INTERNAL_TID(idx));
+    assert(is_internal_tid(idx));
     return idx;
 }
 
@@ -326,7 +326,7 @@ void put_thread (struct shim_thread * thread)
         if (thread->exec)
             put_handle(thread->exec);
 
-        if (!IS_INTERNAL(thread))
+        if (!is_internal(thread))
             release_pid(thread->tid);
 
         if (thread->pal_handle &&
@@ -387,7 +387,7 @@ void set_as_child (struct shim_thread * parent,
 
 void add_thread (struct shim_thread * thread)
 {
-    if (IS_INTERNAL(thread) || !list_empty(thread, list))
+    if (is_internal(thread) || !list_empty(thread, list))
         return;
 
     struct shim_thread * tmp, * prev = NULL;
@@ -412,10 +412,10 @@ void add_thread (struct shim_thread * thread)
 
 void del_thread (struct shim_thread * thread)
 {
-    debug("del_thread(%p, %d, %d)\n", thread, thread ? thread->tid : -1,
-            thread->ref_count);
+    debug("del_thread(%p, %d, %ld)\n", thread, thread ? thread->tid : -1,
+          atomic_read(&thread->ref_count));
 
-    if (IS_INTERNAL(thread) || list_empty(thread, list)) {
+    if (is_internal(thread) || list_empty(thread, list)) {
         debug("del_thread: internal\n");
         return;
     }
@@ -480,7 +480,7 @@ int check_last_thread (struct shim_thread * self)
         }
     }
 
-    debug("this is the only thread\n", self->tid);
+    debug("this is the only thread %d\n", self->tid);
     unlock(thread_list_lock);
     return 0;
 }
@@ -588,12 +588,12 @@ void switch_dummy_thread (struct shim_thread * thread)
 
     /* jump onto old stack
        we actually pop rbp as rsp, and later we will call 'ret' */
-    asm volatile("movq %0, %%rbp\r\n"
-                 "leaveq\r\n"
-                 "retq\r\n" :
-                 : "g"(real_thread->frameptr),
-                   "a"(child)
-                 : "memory");
+    __asm__ volatile("movq %0, %%rbp\r\n"
+                     "leaveq\r\n"
+                     "retq\r\n" :
+                     : "g"(real_thread->frameptr),
+                       "a"(child)
+                     : "memory");
 }
 
 BEGIN_CP_FUNC(thread)
@@ -649,7 +649,7 @@ BEGIN_CP_FUNC(thread)
         *objp = (void *) new_thread;
 }
 END_CP_FUNC(thread)
-    
+
 BEGIN_RS_FUNC(thread)
 {
     struct shim_thread * thread = (void *) (base + GET_CP_FUNC_ENTRY());
@@ -707,7 +707,7 @@ BEGIN_CP_FUNC(running_thread)
     }
 }
 END_CP_FUNC(running_thread)
-    
+
 int resume_wrapper (void * param)
 {
     struct shim_thread * thread = (struct shim_thread *) param;
@@ -742,7 +742,7 @@ BEGIN_RS_FUNC(running_thread)
                                  NUM_SIGS);
 
     if (cur_thread) {
-        PAL_HANDLE handle = DkThreadCreate(resume_wrapper, thread, 0);
+        PAL_HANDLE handle = DkThreadCreate(resume_wrapper, thread);
         if (!thread)
             return -PAL_ERRNO;
 
@@ -753,7 +753,7 @@ BEGIN_RS_FUNC(running_thread)
         if (libc_tcb) {
             shim_tcb_t * tcb = &libc_tcb->shim_tcb;
             assert(tcb->context.sp);
-            tcb->debug_buf = SHIM_GET_TLS()->debug_buf;
+            tcb->debug_buf = shim_get_tls()->debug_buf;
             allocate_tls(libc_tcb, thread->user_tcb, thread);
             /* Temporarily disable preemption until the thread resumes. */
             __disable_preempt(tcb);

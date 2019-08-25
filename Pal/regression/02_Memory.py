@@ -1,13 +1,8 @@
-#!/usr/bin/python
-
 import os, sys, mmap
 from regression import Regression
 
 loader = os.environ['PAL_LOADER']
-try:
-    sgx = os.environ['SGX_RUN']
-except KeyError:
-    sgx = 0
+sgx = os.environ.get('SGX_RUN') == '1'
 
 regression = Regression(loader, "Memory")
 
@@ -17,11 +12,15 @@ regression.add_check(name="Memory Allocation",
 regression.add_check(name="Memory Allocation with Address",
     check=lambda res: "Memory Allocation with Address OK" in res[0].log)
 
-regression.add_check(name="Memory Protection", flaky = sgx,
+# SGX1 does not support unmapping a page or changing its permission after
+# enclave init. Therefore the memory protection and deallocation tests will
+# fail. By utilizing SGX2 it's possibile to fix this.
+
+regression.add_check(name="Memory Protection", ignore_failure = sgx,
     check=lambda res: "Memory Allocation Protection (RW) OK" in res[0].log and
                       "Memory Protection (R) OK" in res[0].log)
 
-regression.add_check(name="Memory Deallocation", flaky = sgx,
+regression.add_check(name="Memory Deallocation", ignore_failure = sgx,
     check=lambda res: "Memory Deallocation OK" in res[0].log)
 
 def check_quota(res):

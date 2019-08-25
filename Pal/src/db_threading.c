@@ -33,13 +33,13 @@
 /* PAL call DkThreadCreate: create a thread inside the current
    process */
 PAL_HANDLE
-DkThreadCreate (PAL_PTR addr, PAL_PTR param, PAL_FLG flags)
+DkThreadCreate (PAL_PTR addr, PAL_PTR param)
 {
     ENTER_PAL_CALL(DkThreadCreate);
 
     PAL_HANDLE handle = NULL;
     int ret = _DkThreadCreate (&handle, (int (*)(void *)) addr,
-                               (const void *) param, flags);
+                               (const void *) param);
 
     if (ret < 0) {
         _DkRaiseFailure(-ret);
@@ -79,11 +79,12 @@ void DkThreadYieldExecution (void)
 
 /* PAL call DkThreadExit: simply exit the current thread
    no matter what */
-void DkThreadExit (void)
+__attribute__((noreturn)) void DkThreadExit (void)
 {
     ENTER_PAL_CALL(DkThreadExit);
     _DkThreadExit();
     _DkRaiseFailure(PAL_ERROR_NOTKILLABLE);
+    while (1) {}
     LEAVE_PAL_CALL();
 }
 

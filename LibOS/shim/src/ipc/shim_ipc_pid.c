@@ -40,6 +40,7 @@
 #define NS      pid
 #define NS_CAP  PID
 
+#define INCLUDE_IPC_NSIMPL
 #include "shim_ipc_nsimpl.h"
 
 static int thread_add_subrange (struct shim_thread * thread, void * arg,
@@ -748,7 +749,7 @@ DEFINE_LISTP(rpcmsg);
 DEFINE_LISTP(rpcreq);
 static LISTP_TYPE(rpcmsg) rpc_msgs;
 static LISTP_TYPE(rpcreq) rpc_reqs;
-static LOCKTYPE rpc_queue_lock;
+static struct shim_lock rpc_queue_lock;
 
 int get_rpc_msg (IDTYPE * sender, void * buf, int len)
 {

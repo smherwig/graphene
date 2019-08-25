@@ -1,4 +1,5 @@
-#!/usr/bin/python
+## This test is specifically for the reference monitor code, not process creation in general.
+## It is not well-tested right now, but keep the tests around for future work.
 
 import os, sys, mmap
 from regression import Regression
@@ -6,7 +7,7 @@ from regression import Regression
 loader = os.environ['PAL_SEC']
 
 if not os.path.exists(loader):
-    print "Reference monitor mode is not available on this platform"
+    print("Reference monitor mode is not available on this platform")
     exit(0)
 
 regression = Regression(loader, "Process")
@@ -47,4 +48,3 @@ regression.add_check(name="Process Creation without Executable",
 
 rv = regression.run_checks()
 #if rv: sys.exit(rv)
-

@@ -47,8 +47,6 @@ typedef int __kernel_pid_t;
 #define ERRNO INTERNAL_SYSCALL_ERRNO
 #define ERRNO_P INTERNAL_SYSCALL_ERRNO_P
 
-int getrand (void * buffer, size_t size);
-
 struct timespec;
 struct timeval;
 extern struct pal_bsd_state {
@@ -61,7 +59,7 @@ extern struct pal_bsd_state {
     unsigned int    parent_pid;
     /* currently enabled signals */
     _sigset_t       sigset;
-  
+
     unsigned long   memory_quota;
 } bsd_state;
 
@@ -99,7 +97,7 @@ extern struct pal_bsd_state {
 
 static inline int HOST_FLAGS (int alloc_type, int prot)
 {
-    return 
+    return
            ((prot & PAL_PROT_WRITECOPY) ? MAP_PRIVATE : MAP_SHARED);
 }
 
@@ -130,8 +128,8 @@ static inline int HOST_FILE_OPEN (int access_type, int create_type,
         int options)
 {
     return ((access_type)|
-            (create_type & PAL_CREAT_TRY ? O_CREAT : 0) |
-            (create_type & PAL_CREAT_ALWAYS ? O_EXCL : 0) |
+            (create_type & PAL_CREATE_TRY ? O_CREAT : 0) |
+            (create_type & PAL_CREATE_ALWAYS ? O_EXCL : 0) |
             (options));
 }
 
@@ -145,11 +143,11 @@ static inline int HOST_PERM (int share_type)
             0)|
            (share_type & PAL_SHARE_GLOBAL_R ? S_IRUSR | S_IRGRP | S_IROTH :
             0)|
-           (share_type & PAL_SHARE_GROUP_X ? S_IXGRP : 0) | 
-           (share_type & PAL_SHARE_GROUP_W ? S_IWGRP : 0) | 
-           (share_type & PAL_SHARE_GROUP_R ? S_IRGRP : 0) | 
-           (share_type & PAL_SHARE_OWNER_X ? S_IXUSR : 0) | 
-           (share_type & PAL_SHARE_OWNER_W ? S_IWUSR : 0) | 
+           (share_type & PAL_SHARE_GROUP_X ? S_IXGRP : 0) |
+           (share_type & PAL_SHARE_GROUP_W ? S_IWGRP : 0) |
+           (share_type & PAL_SHARE_GROUP_R ? S_IRGRP : 0) |
+           (share_type & PAL_SHARE_OWNER_X ? S_IXUSR : 0) |
+           (share_type & PAL_SHARE_OWNER_W ? S_IWUSR : 0) |
            (share_type & PAL_SHARE_OWNER_R ? S_IRUSR : 0));
 }
 

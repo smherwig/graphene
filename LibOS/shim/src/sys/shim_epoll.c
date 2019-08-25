@@ -61,7 +61,7 @@
 
 struct shim_mount epoll_builtin_fs;
 
-/* shim_epoll_fds are linked as a list (by the list field), 
+/* shim_epoll_fds are linked as a list (by the list field),
  * hanging off of a shim_epoll_handle (by the fds field) */
 struct shim_epoll_fd {
     FDTYPE                      fd;
@@ -401,11 +401,8 @@ retry:
 
     unlock(epoll_hdl->lock);
 
-    if (timeout < 0)
-        timeout = NO_TIMEOUT;
-
     PAL_HANDLE polled = DkObjectsWaitAny(nread ? npals + 1 : npals, pal_handles,
-                                         nread ? timeout : 0);
+                                         nread ? (timeout == -1 ? NO_TIMEOUT : (PAL_NUM) timeout) : 0);
 
     lock(epoll_hdl->lock);
 
@@ -421,7 +418,7 @@ retry:
     }
 
     PAL_STREAM_ATTR attr;
-    if (!DkStreamAttributesQuerybyHandle(polled, &attr))
+    if (!DkStreamAttributesQueryByHandle(polled, &attr))
         goto reply;
 
     listp_for_each_entry(epoll_fd, &epoll->fds, list)
@@ -496,7 +493,7 @@ BEGIN_CP_FUNC(epoll_fd)
     LISTP_TYPE(shim_epoll_fd) * new_list = (LISTP_TYPE(shim_epoll_fd) *) objp;
     struct shim_epoll_fd * epoll_fd;
 
-    debug("checkpoint epoll: %p -> %p (base = %p)\n", old_list, new_list, base);
+    debug("checkpoint epoll: %p -> %p (base = 0x%08lx)\n", old_list, new_list, base);
 
     INIT_LISTP(new_list);
 

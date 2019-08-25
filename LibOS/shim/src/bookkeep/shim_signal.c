@@ -54,7 +54,7 @@ allocate_signal_log (struct shim_thread * thread, int sig)
         tail = (tail == MAX_SIGNAL_LOG - 1) ? 0 : tail + 1;
     } while (atomic_cmpxchg(&log->tail, old_tail, tail) == tail);
 
-    debug("signal_logs[%d]: head=%d, tail=%d (counter = %d)\n", sig - 1,
+    debug("signal_logs[%d]: head=%d, tail=%d (counter = %ld)\n", sig - 1,
           head, tail, thread->has_signal.counter + 1);
 
     atomic_inc(&thread->has_signal);
@@ -117,6 +117,7 @@ void __store_context (shim_tcb_t * tcb, PAL_CONTEXT * pal_context,
 
         if (ct->regs) {
             struct shim_regs * regs = ct->regs;
+            context->uc_mcontext.gregs[REG_EFL] = regs->rflags;
             context->uc_mcontext.gregs[REG_R15] = regs->r15;
             context->uc_mcontext.gregs[REG_R14] = regs->r14;
             context->uc_mcontext.gregs[REG_R13] = regs->r13;
@@ -145,7 +146,7 @@ void __store_context (shim_tcb_t * tcb, PAL_CONTEXT * pal_context,
 
 void deliver_signal (siginfo_t * info, PAL_CONTEXT * context)
 {
-    shim_tcb_t * tcb = SHIM_GET_TLS();
+    shim_tcb_t * tcb = shim_get_tls();
     assert(tcb);
 
     // Signals should not be delivered before the user process starts
@@ -165,34 +166,23 @@ void deliver_signal (siginfo_t * info, PAL_CONTEXT * context)
     __store_context(tcb, context, signal);
     signal->pal_context = context;
 
-    if ((tcb->context.preempt & ~SIGNAL_DELAYED) > 1)
-        goto delay;
-
-    if (__sigismember(&cur_thread->signal_mask, sig))
-        goto delay;
-
-    __handle_signal(tcb, sig, &signal->context);
-    __handle_one_signal(tcb, sig, signal);
-    goto out;
-
-delay:
-    {
-        if (!(signal = malloc_copy(signal,sizeof(struct shim_signal))))
-            goto out;
-
-        struct shim_signal ** signal_log = allocate_signal_log(cur_thread, sig);
-
-        if (!signal_log) {
+    if ((tcb->context.preempt & ~SIGNAL_DELAYED) > 1 ||
+        __sigismember(&cur_thread->signal_mask, sig)) {
+        struct shim_signal ** signal_log = NULL;
+        if ((signal = malloc_copy(signal,sizeof(struct shim_signal))) &&
+            (signal_log = allocate_signal_log(cur_thread, sig))) {
+            *signal_log = signal;
+        }
+        if (signal && !signal_log) {
             sys_printf("signal queue is full (TID = %u, SIG = %d)\n",
                        tcb->tid, sig);
             free(signal);
-            goto out;
         }
-
-        *signal_log = signal;
+    } else {
+        __handle_signal(tcb, sig, &signal->context);
+        __handle_one_signal(tcb, sig, signal);
     }
 
-out:
     __enable_preempt(tcb);
 }
 
@@ -212,45 +202,46 @@ out:
 #define IP eip
 #endif
 
-#define is_internal(context)                                                \
-    ((context) &&                                                           \
-     (void *) (context)->IP >= (void *) &__code_address &&                  \
-     (void *) (context)->IP < (void *) &__code_address_end)
-
-#define internal_fault(errstr, addr, context)                               \
-    do {                                                                    \
-        IDTYPE tid = get_cur_tid();                                         \
-        if (is_internal((context)))                                         \
-            sys_printf(errstr " at %p (IP = +0x%lx, VMID = %u, TID = %u)\n",\
-                       arg,                                                 \
-                       (void *) context->IP - (void *) &__load_address,     \
-                       cur_process.vmid, IS_INTERNAL_TID(tid) ? 0 : tid);   \
-        else                                                                \
-            sys_printf(errstr " at %p (IP = %p, VMID = %u, TID = %u)\n",    \
-                       arg, context ? context->IP : 0,                      \
-                       cur_process.vmid, IS_INTERNAL_TID(tid) ? 0 : tid);   \
-    } while (0)
-
-static void divzero_upcall (PAL_PTR event, PAL_NUM arg, PAL_CONTEXT * context)
+static inline bool context_is_internal(PAL_CONTEXT * context)
 {
-    if (IS_INTERNAL_TID(get_cur_tid()) || is_internal(context)) {
+    return context &&
+        (void *) context->IP >= (void *) &__code_address &&
+        (void *) context->IP < (void *) &__code_address_end;
+}
+
+static inline void internal_fault(const char* errstr,
+                                  PAL_NUM addr, PAL_CONTEXT * context)
+{
+    IDTYPE tid = get_cur_tid();
+    if (context_is_internal(context))
+        sys_printf("%s at 0x%08lx (IP = +0x%lx, VMID = %u, TID = %u)\n", errstr,
+                   addr, (void *) context->IP - (void *) &__load_address,
+                   cur_process.vmid, is_internal_tid(tid) ? 0 : tid);
+    else
+        sys_printf("%s at 0x%08lx (IP = 0x%08lx, VMID = %u, TID = %u)\n", errstr,
+                   addr, context ? context->IP : 0,
+                   cur_process.vmid, is_internal_tid(tid) ? 0 : tid);
+
+    pause();
+}
+
+static void arithmetic_error_upcall (PAL_PTR event, PAL_NUM arg, PAL_CONTEXT * context)
+{
+    if (is_internal_tid(get_cur_tid()) || context_is_internal(context)) {
         internal_fault("Internal arithmetic fault", arg, context);
-        pause();
-        goto ret_exception;
+    } else {
+        if (context)
+            debug("arithmetic fault at 0x%08lx\n", context->IP);
+
+        deliver_signal(ALLOC_SIGINFO(SIGFPE, FPE_INTDIV,
+                                     si_addr, (void *) arg), context);
     }
-
-    if (context)
-        debug("arithmetic fault at %p\n", context->IP);
-
-    deliver_signal(ALLOC_SIGINFO(SIGFPE, FPE_INTDIV, si_addr, (void *) arg), context);
-
-ret_exception:
     DkExceptionReturn(event);
 }
 
 static void memfault_upcall (PAL_PTR event, PAL_NUM arg, PAL_CONTEXT * context)
 {
-    shim_tcb_t * tcb = SHIM_GET_TLS();
+    shim_tcb_t * tcb = shim_get_tls();
     assert(tcb);
 
     if (tcb->test_range.cont_addr && arg
@@ -261,15 +252,13 @@ static void memfault_upcall (PAL_PTR event, PAL_NUM arg, PAL_CONTEXT * context)
         goto ret_exception;
     }
 
-    if (IS_INTERNAL_TID(get_cur_tid()) || is_internal(context)) {
-internal:
+    if (is_internal_tid(get_cur_tid()) || context_is_internal(context)) {
         internal_fault("Internal memory fault", arg, context);
-        pause();
         goto ret_exception;
     }
 
     if (context)
-        debug("memory fault at %p (IP = %p)\n", arg, context->IP);
+        debug("memory fault at 0x%08lx (IP = 0x%08lx)\n", arg, context->IP);
 
     struct shim_vma_val vma;
     int signo = SIGSEGV;
@@ -278,7 +267,8 @@ internal:
         code = SEGV_MAPERR;
     } else if (!lookup_vma((void *) arg, &vma)) {
         if (vma.flags & VMA_INTERNAL) {
-            goto internal;
+            internal_fault("Internal memory fault with VMA", arg, context);
+            goto ret_exception;
         }
         if (vma.file && vma.file->type == TYPE_FILE) {
             /* DEP 3/3/17: If the mapping exceeds end of a file (but is in the VMA)
@@ -325,7 +315,7 @@ bool test_user_memory (void * addr, size_t size, bool write)
     if (!size)
         return false;
 
-    shim_tcb_t * tcb = SHIM_GET_TLS();
+    shim_tcb_t * tcb = shim_get_tls();
     assert(tcb && tcb->tp);
     __disable_preempt(tcb);
 
@@ -369,7 +359,7 @@ ret_fault:
  */
 bool test_user_string (const char * addr)
 {
-    shim_tcb_t * tcb = SHIM_GET_TLS();
+    shim_tcb_t * tcb = shim_get_tls();
     assert(tcb && tcb->tp);
     __disable_preempt(tcb);
 
@@ -406,83 +396,114 @@ ret_fault:
     return has_fault;
 }
 
+void __attribute__((weak)) syscall_wrapper(void)
+{
+    /*
+     * work around for link.
+     * syscalldb.S is excluded for libsysdb_debug.so so it fails to link
+     * due to missing syscall_wrapper.
+     */
+}
+
 static void illegal_upcall (PAL_PTR event, PAL_NUM arg, PAL_CONTEXT * context)
 {
-    if (IS_INTERNAL_TID(get_cur_tid()) || is_internal(context)) {
-internal:
-        internal_fault("Internal illegal fault", arg, context);
-        pause();
-        goto ret_exception;
-    }
-
     struct shim_vma_val vma;
 
-    if (!(lookup_vma((void *) arg, &vma)) &&
+    if (!is_internal_tid(get_cur_tid()) &&
+        !context_is_internal(context) &&
+        !(lookup_vma((void *) arg, &vma)) &&
         !(vma.flags & VMA_INTERNAL)) {
         if (context)
-            debug("illegal instruction at %p\n", context->IP);
+            debug("illegal instruction at 0x%08lx\n", context->IP);
 
-        deliver_signal(ALLOC_SIGINFO(SIGILL, ILL_ILLOPC, si_addr, (void *) arg), context);
+        uint8_t * rip = (uint8_t*)context->IP;
+        /*
+         * Emulate syscall instruction (opcode 0x0f 0x05);
+         * syscall instruction is prohibited in
+         *   Linux-SGX PAL and raises a SIGILL exception and
+         *   Linux PAL with seccomp and raise SIGSYS exception.
+         */
+#if 0
+        if (rip[-2] == 0x0f && rip[-1] == 0x05) {
+            /* TODO: once finished, remove "#if 0" above. */
+            /*
+             * SIGSYS case (can happen with Linux PAL with seccomp)
+             * rip points to the address after syscall instruction
+             * %rcx: syscall instruction must put an
+             *       instruction-after-syscall in rcx
+             */
+            context->rax = siginfo->si_syscall; /* PAL_CONTEXT doesn't
+                                                 * include a member
+                                                 * corresponding to
+                                                 * siginfo_t::si_syscall yet.
+                                                 */
+            context->rcx = (long)rip;
+            context->r11 = context->efl;
+            context->rip = (long)&syscall_wrapper;
+        } else
+#endif
+        if (rip[0] == 0x0f && rip[1] == 0x05) {
+            /*
+             * SIGILL case (can happen in Linux-SGX PAL)
+             * %rcx: syscall instruction must put an instruction-after-syscall
+             *       in rcx. See the syscall_wrapper in syscallas.S
+             * TODO: check SIGILL and ILL_ILLOPN
+             */
+            context->rcx = (long)rip + 2;
+            context->r11 = context->efl;
+            context->rip = (long)&syscall_wrapper;
+        } else {
+            deliver_signal(ALLOC_SIGINFO(SIGILL, ILL_ILLOPC,
+                                         si_addr, (void *) arg), context);
+        }
     } else {
-        goto internal;
+        internal_fault("Internal illegal fault", arg, context);
     }
-
-ret_exception:
     DkExceptionReturn(event);
 }
 
 static void quit_upcall (PAL_PTR event, PAL_NUM arg, PAL_CONTEXT * context)
 {
-    if (IS_INTERNAL_TID(get_cur_tid()))
-        goto ret_exception;
-
-    deliver_signal(ALLOC_SIGINFO(SIGTERM, SI_USER, si_pid, 0), NULL);
-
-ret_exception:
+    if (!is_internal_tid(get_cur_tid())) {
+        deliver_signal(ALLOC_SIGINFO(SIGTERM, SI_USER, si_pid, 0), NULL);
+    }
     DkExceptionReturn(event);
 }
 
 static void suspend_upcall (PAL_PTR event, PAL_NUM arg, PAL_CONTEXT * context)
 {
-    if (IS_INTERNAL_TID(get_cur_tid()))
-        goto ret_exception;
-
-    deliver_signal(ALLOC_SIGINFO(SIGINT, SI_USER, si_pid, 0), NULL);
-
-ret_exception:
+    if (!is_internal_tid(get_cur_tid())) {
+        deliver_signal(ALLOC_SIGINFO(SIGINT, SI_USER, si_pid, 0), NULL);
+    }
     DkExceptionReturn(event);
 }
 
 static void resume_upcall (PAL_PTR event, PAL_NUM arg, PAL_CONTEXT * context)
 {
-    if (IS_INTERNAL_TID(get_cur_tid()))
-        goto ret_exception;
+    shim_tcb_t * tcb = shim_get_tls();
+    if (!tcb || !tcb->tp)
+        return;
 
-    shim_tcb_t * tcb = SHIM_GET_TLS();
-    assert(tcb);
-    __disable_preempt(tcb);
-
-    if ((tcb->context.preempt & ~SIGNAL_DELAYED) > 1) {
-        tcb->context.preempt |= SIGNAL_DELAYED;
+    if (!is_internal_tid(get_cur_tid())) {
+        __disable_preempt(tcb);
+        if ((tcb->context.preempt & ~SIGNAL_DELAYED) > 1) {
+            tcb->context.preempt |= SIGNAL_DELAYED;
+        } else {
+            __handle_signal(tcb, 0, NULL);
+        }
         __enable_preempt(tcb);
-        goto ret_exception;
     }
-
-    __handle_signal(tcb, 0, NULL);
-    __enable_preempt(tcb);
-
-ret_exception:
     DkExceptionReturn(event);
 }
 
 int init_signal (void)
 {
-    DkSetExceptionHandler(&divzero_upcall,     PAL_EVENT_DIVZERO,      0);
-    DkSetExceptionHandler(&memfault_upcall,    PAL_EVENT_MEMFAULT,     0);
-    DkSetExceptionHandler(&illegal_upcall,     PAL_EVENT_ILLEGAL,      0);
-    DkSetExceptionHandler(&quit_upcall,        PAL_EVENT_QUIT,         0);
-    DkSetExceptionHandler(&suspend_upcall,     PAL_EVENT_SUSPEND,      0);
-    DkSetExceptionHandler(&resume_upcall,      PAL_EVENT_RESUME,       0);
+    DkSetExceptionHandler(&arithmetic_error_upcall,     PAL_EVENT_ARITHMETIC_ERROR);
+    DkSetExceptionHandler(&memfault_upcall,    PAL_EVENT_MEMFAULT);
+    DkSetExceptionHandler(&illegal_upcall,     PAL_EVENT_ILLEGAL);
+    DkSetExceptionHandler(&quit_upcall,        PAL_EVENT_QUIT);
+    DkSetExceptionHandler(&suspend_upcall,     PAL_EVENT_SUSPEND);
+    DkSetExceptionHandler(&resume_upcall,      PAL_EVENT_RESUME);
     return 0;
 }
 
@@ -615,7 +636,7 @@ void __handle_signal (shim_tcb_t * tcb, int sig, ucontext_t * uc)
 
 void handle_signal (bool delayed_only)
 {
-    shim_tcb_t * tcb = SHIM_GET_TLS();
+    shim_tcb_t * tcb = shim_get_tls();
     assert(tcb);
 
     struct shim_thread * thread = (struct shim_thread *) tcb->tp;
@@ -627,16 +648,12 @@ void handle_signal (bool delayed_only)
     __disable_preempt(tcb);
 
     if ((tcb->context.preempt & ~SIGNAL_DELAYED) > 1) {
-        debug("signal delayed (%d)\n", tcb->context.preempt & ~SIGNAL_DELAYED);
+        debug("signal delayed (%ld)\n", tcb->context.preempt & ~SIGNAL_DELAYED);
         tcb->context.preempt |= SIGNAL_DELAYED;
-        goto out;
+    } else if (!(delayed_only && !(tcb->context.preempt & SIGNAL_DELAYED))) {
+        __handle_signal(tcb, 0, NULL);
     }
 
-    if (delayed_only && !(tcb->context.preempt & SIGNAL_DELAYED))
-        goto out;
-
-    __handle_signal(tcb, 0, NULL);
-out:
     __enable_preempt(tcb);
     debug("__enable_preempt: %s:%d\n", __FILE__, __LINE__);
 }
@@ -662,6 +679,7 @@ void append_signal (struct shim_thread * thread, int sig, siginfo_t * info,
         *signal_log = signal;
         if (wakeup) {
             debug("resuming thread %u\n", thread->tid);
+            thread_wakeup(thread);
             DkThreadResume(thread->pal_handle);
         }
     } else {

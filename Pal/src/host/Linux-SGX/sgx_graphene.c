@@ -51,7 +51,7 @@ int _DkEventSet (PAL_HANDLE event, int wakeup)
                              NULL, NULL, 0);
     }
 
-    return IS_ERR(ret) ? PAL_ERROR_TRYAGAIN : ret;
+    return IS_ERR(ret) ? -PAL_ERROR_TRYAGAIN : ret;
 }
 
 int _DkEventWait (PAL_HANDLE event)
@@ -94,6 +94,8 @@ struct printbuf {
 static int
 fputch(void * f, int ch, struct printbuf * b)
 {
+    __UNUSED(f);
+
     b->buf[b->idx++] = ch;
     if (b->idx == PRINTBUF_SIZE - 1) {
         INLINE_SYSCALL(write, 3, 2, b->buf, b->idx);

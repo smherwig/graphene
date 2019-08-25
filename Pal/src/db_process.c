@@ -36,11 +36,11 @@
 #include "api.h"
 
 PAL_HANDLE
-DkProcessCreate (PAL_STR uri, PAL_FLG flags, PAL_STR * args)
+DkProcessCreate (PAL_STR uri, PAL_STR * args)
 {
     ENTER_PAL_CALL(DkProcessCreate);
 
-    /* DEP 3/22/17: There seems to be a default semantics that 
+    /* DEP 3/22/17: There seems to be a default semantics that
      * a NULL URI should replicate the parent. I think we may want
      * this to become an error in the future, but keep the behavior
      * for now, and make it consistent across hosts. */
@@ -50,7 +50,7 @@ DkProcessCreate (PAL_STR uri, PAL_FLG flags, PAL_STR * args)
     log_stream(uri);
 
     PAL_HANDLE handle = NULL;
-    int ret = _DkProcessCreate(&handle, uri, flags, args);
+    int ret = _DkProcessCreate(&handle, uri, args);
 
     if (ret < 0) {
         _DkRaiseFailure(-ret);

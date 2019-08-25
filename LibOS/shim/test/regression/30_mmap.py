@@ -1,13 +1,8 @@
-#!/usr/bin/python
-
 import os, sys, mmap
 from regression import Regression
 
 loader = sys.argv[1]
-try:
-    sgx = os.environ['SGX_RUN']
-except KeyError:
-    sgx = False
+sgx = os.environ.get('SGX_RUN') == '1'
 
 # Running Bootstrap
 regression = Regression(loader, "mmap-file", None, 60000)
@@ -29,5 +24,6 @@ if not sgx:
                          check=lambda res: "mmap test 5 passed" in res[0].out and \
                          "mmap test 8 passed" in res[0].out)
 
-                         
-regression.run_checks()
+
+rv = regression.run_checks()
+if rv: sys.exit(rv)

@@ -82,12 +82,18 @@ PAL_NUM _DkGetHostId (void)
 void setup_pal_map (struct link_map * map);
 static struct link_map pal_map;
 
-int init_untrusted_slab_mgr (int pagesize);
+void init_untrusted_slab_mgr ();
 int init_enclave (void);
 int init_enclave_key (void);
 int init_child_process (PAL_HANDLE * parent_handle);
 
-static PAL_HANDLE setup_file_handle (const char * name, int fd)
+/*
+ * Creates a dummy file handle with the given name.
+ *
+ * The handle is not backed by any file. Reads will return EOF and writes will
+ * fail.
+ */
+static PAL_HANDLE setup_dummy_file_handle (const char * name)
 {
     if (!strpartcmp_static(name, "file:"))
         return NULL;
@@ -97,7 +103,7 @@ static PAL_HANDLE setup_file_handle (const char * name, int fd)
     PAL_HANDLE handle = malloc(HANDLE_SIZE(file) + len + 1);
     SET_HANDLE_TYPE(handle, file);
     HANDLE_HDR(handle)->flags |= RFD(0);
-    handle->file.fd = fd;
+    handle->file.fd = PAL_IDX_POISON;
     handle->file.append = 0;
     handle->file.pass = 0;
 
@@ -113,38 +119,182 @@ static PAL_HANDLE setup_file_handle (const char * name, int fd)
 
 static int loader_filter (const char * key, int len)
 {
-    if (key[0] == 'l' && key[1] == 'o' && key[2] == 'a' && key[3] == 'd' &&
+    if (len > 7 && key[0] == 'l' && key[1] == 'o' && key[2] == 'a' && key[3] == 'd' &&
         key[4] == 'e' && key[5] == 'r' && key[6] == '.')
         return 0;
 
-    if (key[0] == 's' && key[1] == 'g' && key[2] == 'x' && key[3] == '.')
+    if (len > 4 && key[0] == 's' && key[1] == 'g' && key[2] == 'x' && key[3] == '.')
         return 0;
 
     return 1;
 }
 
-extern void * enclave_base;
+/*
+ * Takes a pointer+size to an untrusted memory region containing a
+ * NUL-separated list of strings. It builds a argv-style list in trusted memory
+ * with those strings.
+ *
+ * It is responsible for handling the access to untrusted memory safely
+ * (returns NULL on error) and ensures that all strings are properly
+ * terminated. The content of the strings is NOT further sanitized.
+ *
+ * The argv-style list is allocated on the heap and the caller is responsible
+ * to free it (For argv and envp we rely on auto free on termination in
+ * practice).
+ */
+static const char** make_argv_list(void * uptr_src, uint64_t src_size) {
+    const char **argv;
 
-void pal_linux_main(const char ** arguments, const char ** environments,
-                    struct pal_sec * sec_info)
+    if (src_size == 0) {
+        argv = malloc(sizeof(char *));
+        argv[0] = NULL;
+        return argv;
+    }
+
+    char * data = malloc(src_size);
+    if (!data) {
+        return NULL;
+    }
+
+    if (!sgx_copy_to_enclave(data, src_size, uptr_src, src_size)) {
+        goto free_and_err;
+    }
+    data[src_size - 1] = '\0';
+
+    uint64_t argc = 0;
+    for (uint64_t i = 0; i < src_size; i++) {
+        if (data[i] == '\0') {
+            argc++;
+        }
+    }
+
+    size_t argv_size;
+    if (__builtin_mul_overflow(argc + 1, sizeof(char *), &argv_size)) {
+        goto free_and_err;
+    }
+    argv = malloc(argv_size);
+    if (!argv) {
+        goto free_and_err;
+    }
+    argv[argc] = NULL;
+
+    uint64_t data_i = 0;
+    for (uint64_t arg_i = 0; arg_i < argc; arg_i++) {
+        argv[arg_i] = &data[data_i];
+        while (data[data_i] != '\0') {
+            data_i++;
+        }
+        data_i++;
+    }
+
+    return argv;
+
+free_and_err:
+    free(data);
+    return NULL;
+}
+
+extern void * enclave_base;
+extern void * enclave_top;
+
+void pal_linux_main(char * uptr_args, uint64_t args_size,
+                    char * uptr_env, uint64_t env_size,
+                    struct pal_sec * uptr_sec_info)
 {
+    /*
+     * Our arguments are comming directly from the urts. We are responsible to
+     * check them.
+     */
+
     PAL_HANDLE parent = NULL;
     unsigned long start_time = _DkSystemTimeQuery();
     int rv;
 
+    struct pal_sec sec_info;
+    if (!sgx_copy_to_enclave(&sec_info, sizeof(sec_info), uptr_sec_info, sizeof(sec_info))) {
+        return;
+    }
+
+    pal_sec.heap_min = GET_ENCLAVE_TLS(heap_min);
+    pal_sec.heap_max = GET_ENCLAVE_TLS(heap_max);
+    pal_sec.exec_addr = GET_ENCLAVE_TLS(exec_addr);
+    pal_sec.exec_size = GET_ENCLAVE_TLS(exec_size);
+
+    /* Zero the heap. We need to take care to not zero the exec area. */
+
+    void* zero1_start = pal_sec.heap_min;
+    void* zero1_end = pal_sec.heap_max;
+
+    void* zero2_start = pal_sec.heap_max;
+    void* zero2_end = pal_sec.heap_max;
+
+    if (pal_sec.exec_addr != NULL) {
+        zero1_end = MIN(zero1_end, pal_sec.exec_addr);
+        zero2_start = MIN(zero2_start, pal_sec.exec_addr + pal_sec.exec_size);
+    }
+
+    memset(zero1_start, 0, zero1_end - zero1_start);
+    memset(zero2_start, 0, zero2_end - zero2_start);
+
     /* relocate PAL itself */
-    pal_map.l_addr = (ElfW(Addr)) sec_info->enclave_addr;
-    pal_map.l_name = sec_info->enclave_image;
+    pal_map.l_addr = elf_machine_load_address();
+    pal_map.l_name = ENCLAVE_FILENAME;
     elf_get_dynamic_info((void *) pal_map.l_addr + elf_machine_dynamic(),
                          pal_map.l_info, pal_map.l_addr);
 
     ELF_DYNAMIC_RELOCATE(&pal_map);
 
-    memcpy(&pal_sec, sec_info, sizeof(struct pal_sec));
+    /*
+     * We can't verify the following arguments from the urts. So we copy
+     * them directly but need to be careful when we use them.
+     */
+
+    pal_sec.instance_id = sec_info.instance_id;
+
+    COPY_ARRAY(pal_sec.exec_name, sec_info.exec_name);
+    pal_sec.exec_name[sizeof(pal_sec.exec_name) - 1] = '\0';
+
+    COPY_ARRAY(pal_sec.manifest_name, sec_info.manifest_name);
+    pal_sec.manifest_name[sizeof(pal_sec.manifest_name) - 1] = '\0';
+
+    COPY_ARRAY(pal_sec.proc_fds, sec_info.proc_fds);
+    COPY_ARRAY(pal_sec.pipe_prefix, sec_info.pipe_prefix);
+    pal_sec.mcast_port = sec_info.mcast_port;
+    pal_sec.mcast_srv = sec_info.mcast_srv;
+    pal_sec.mcast_cli = sec_info.mcast_cli;
+#ifdef DEBUG
+    pal_sec.in_gdb = sec_info.in_gdb;
+#endif
+#if PRINT_ENCLAVE_STAT == 1
+    pal_sec.start_time = sec_info.start_time;
+#endif
+
+    /* For {p,u,g}ids we can at least do some minimal checking. */
+
+    /* ppid should be positive when interpreted as signed. It's 0 if we don't
+     * have a graphene parent process. */
+    if (sec_info.ppid > INT32_MAX) {
+        return;
+    }
+    pal_sec.ppid = sec_info.ppid;
+
+    /* As ppid but we always have a pid, so 0 is invalid. */
+    if (sec_info.pid > INT32_MAX || sec_info.pid == 0) {
+        return;
+    }
+    pal_sec.pid = sec_info.pid;
+
+    /* -1 is treated as special value for example by chown. */
+    if (sec_info.uid == (PAL_IDX)-1 || sec_info.gid == (PAL_IDX)-1) {
+        return;
+    }
+    pal_sec.uid = sec_info.uid;
+    pal_sec.gid = sec_info.gid;
+
 
     /* set up page allocator and slab manager */
     init_slab_mgr(pagesz);
-    init_untrusted_slab_mgr(pagesz);
+    init_untrusted_slab_mgr();
     init_pages();
     init_enclave_key();
 
@@ -152,7 +302,24 @@ void pal_linux_main(const char ** arguments, const char ** environments,
     setup_pal_map(&pal_map);
 
     /* initialize enclave properties */
-    init_enclave();
+    rv = init_enclave();
+    if (rv) {
+        SGX_DBG(DBG_E, "Failed to initalize enclave properties: %d\n", rv);
+        ocall_exit(rv);
+    }
+
+    if (args_size > MAX_ARGS_SIZE || env_size > MAX_ENV_SIZE) {
+        return;
+    }
+    const char ** arguments = make_argv_list(uptr_args, args_size);
+    if (!arguments) {
+        return;
+    }
+    const char ** environments = make_argv_list(uptr_env, env_size);
+    if (!environments) {
+        return;
+    }
+
     pal_state.start_time = start_time;
 
     /* if there is a parent, create parent handle */
@@ -170,24 +337,32 @@ void pal_linux_main(const char ** arguments, const char ** environments,
     /* now let's mark our enclave as initialized */
     pal_enclave_state.enclave_flags |= PAL_ENCLAVE_INITIALIZED;
 
-    /* create executable handle */
+    SET_ENCLAVE_TLS(ready_for_exceptions, 1UL);
+
+    /*
+     * We create dummy handles for exec and manifest here to make the logic in
+     * pal_main happy and pass the path of them. The handles can't be used to
+     * read anything.
+     */
+
     PAL_HANDLE manifest, exec = NULL;
 
-    /* create manifest handle */
-    manifest =
-        setup_file_handle(pal_sec.manifest_name, pal_sec.manifest_fd);
+    manifest = setup_dummy_file_handle(pal_sec.manifest_name);
 
-    if (pal_sec.exec_fd != PAL_IDX_POISON) {
-        exec = setup_file_handle(pal_sec.exec_name, pal_sec.exec_fd);
+    if (pal_sec.exec_name[0] != '\0') {
+        exec = setup_dummy_file_handle(pal_sec.exec_name);
     } else {
         SGX_DBG(DBG_I, "Run without executable\n");
     }
 
+    uint64_t manifest_size = GET_ENCLAVE_TLS(manifest_size);
+    void* manifest_addr = enclave_top - ALIGN_UP_PTR(manifest_size, pagesz);
+
     /* parse manifest data into config storage */
     struct config_store * root_config =
             malloc(sizeof(struct config_store));
-    root_config->raw_data = pal_sec.manifest_addr;
-    root_config->raw_size = pal_sec.manifest_size;
+    root_config->raw_data = manifest_addr;
+    root_config->raw_size = manifest_size;
     root_config->malloc = malloc;
     root_config->free = free;
 
@@ -198,9 +373,8 @@ void pal_linux_main(const char ** arguments, const char ** environments,
     }
 
     pal_state.root_config = root_config;
-    __pal_control.manifest_preload.start = (PAL_PTR) pal_sec.manifest_addr;
-    __pal_control.manifest_preload.end = (PAL_PTR) pal_sec.manifest_addr +
-                                         pal_sec.manifest_size;
+    __pal_control.manifest_preload.start = (PAL_PTR) manifest_addr;
+    __pal_control.manifest_preload.end = (PAL_PTR) manifest_addr + manifest_size;
 
     init_trusted_files();
     init_trusted_children();
@@ -208,7 +382,7 @@ void pal_linux_main(const char ** arguments, const char ** environments,
 #if PRINT_ENCLAVE_STAT == 1
     printf("                >>>>>>>> "
            "Enclave loading time =      %10ld milliseconds\n",
-           _DkSystemTimeQuery() - sec_info->start_time);
+           _DkSystemTimeQuery() - pal_sec.start_time);
 #endif
 
     /* set up thread handle */
@@ -225,12 +399,6 @@ void pal_linux_main(const char ** arguments, const char ** environments,
 }
 
 /* the following code is borrowed from CPUID */
-
-#define WORD_EAX  0
-#define WORD_EBX  1
-#define WORD_ECX  2
-#define WORD_EDX  3
-#define WORD_NUM  4
 
 static void cpuid (unsigned int leaf, unsigned int subleaf,
                    unsigned int words[])
@@ -290,42 +458,46 @@ static char * cpu_flags[]
 
 void _DkGetCPUInfo (PAL_CPU_INFO * ci)
 {
-    unsigned int words[WORD_NUM];
+    unsigned int words[PAL_CPUID_WORD_NUM];
 
-    char * vendor_id = malloc(12);
+    const size_t VENDOR_ID_SIZE = 13;
+    char* vendor_id = malloc(VENDOR_ID_SIZE);
     cpuid(0, 0, words);
 
-    FOUR_CHARS_VALUE(&vendor_id[0], words[WORD_EBX]);
-    FOUR_CHARS_VALUE(&vendor_id[4], words[WORD_EDX]);
-    FOUR_CHARS_VALUE(&vendor_id[8], words[WORD_ECX]);
+    FOUR_CHARS_VALUE(&vendor_id[0], words[PAL_CPUID_WORD_EBX]);
+    FOUR_CHARS_VALUE(&vendor_id[4], words[PAL_CPUID_WORD_EDX]);
+    FOUR_CHARS_VALUE(&vendor_id[8], words[PAL_CPUID_WORD_ECX]);
+    vendor_id[VENDOR_ID_SIZE - 1] = '\0';
     ci->cpu_vendor = vendor_id;
     // Must be an Intel CPU
     assert(!memcmp(vendor_id, "GenuineIntel", 12));
 
-    char * brand = malloc(48);
+    const size_t BRAND_SIZE = 49;
+    char* brand = malloc(BRAND_SIZE);
     cpuid(0x80000002, 0, words);
-    memcpy(&brand[ 0], words, sizeof(unsigned int) * WORD_NUM);
+    memcpy(&brand[ 0], words, sizeof(unsigned int) * PAL_CPUID_WORD_NUM);
     cpuid(0x80000003, 0, words);
-    memcpy(&brand[16], words, sizeof(unsigned int) * WORD_NUM);
+    memcpy(&brand[16], words, sizeof(unsigned int) * PAL_CPUID_WORD_NUM);
     cpuid(0x80000004, 0, words);
-    memcpy(&brand[32], words, sizeof(unsigned int) * WORD_NUM);
+    memcpy(&brand[32], words, sizeof(unsigned int) * PAL_CPUID_WORD_NUM);
+    brand[BRAND_SIZE - 1] = '\0';
     ci->cpu_brand = brand;
 
-    /* According to SDM: EBX[15:0] is to enumerate processor topology 
+    /* According to SDM: EBX[15:0] is to enumerate processor topology
      * of the system. However this value is intended for display/diagnostic
      * purposes. The actual number of logical processors available to
-     * BIOS/OS/App may be different. We use this leaf for now as it's the 
+     * BIOS/OS/App may be different. We use this leaf for now as it's the
      * best option we have so far to get the cpu number  */
 
     cpuid(0xb, 1, words);
-    ci->cpu_num      = BIT_EXTRACT_LE(words[WORD_EBX], 0, 16);
+    ci->cpu_num      = BIT_EXTRACT_LE(words[PAL_CPUID_WORD_EBX], 0, 16);
 
     cpuid(1, 0, words);
-    ci->cpu_family   = BIT_EXTRACT_LE(words[WORD_EAX],  8, 12) +
-                       BIT_EXTRACT_LE(words[WORD_EAX], 20, 28);
-    ci->cpu_model    = BIT_EXTRACT_LE(words[WORD_EAX],  4,  8) +
-                      (BIT_EXTRACT_LE(words[WORD_EAX], 16, 20) << 4);
-    ci->cpu_stepping = BIT_EXTRACT_LE(words[WORD_EAX],  0,  4);
+    ci->cpu_family   = BIT_EXTRACT_LE(words[PAL_CPUID_WORD_EAX],  8, 12) +
+                       BIT_EXTRACT_LE(words[PAL_CPUID_WORD_EAX], 20, 28);
+    ci->cpu_model    = BIT_EXTRACT_LE(words[PAL_CPUID_WORD_EAX],  4,  8) +
+                      (BIT_EXTRACT_LE(words[PAL_CPUID_WORD_EAX], 16, 20) << 4);
+    ci->cpu_stepping = BIT_EXTRACT_LE(words[PAL_CPUID_WORD_EAX],  0,  4);
 
     int flen = 0, fmax = 80;
     char * flags = malloc(fmax);
@@ -334,7 +506,7 @@ void _DkGetCPUInfo (PAL_CPU_INFO * ci)
         if (!cpu_flags[i])
             continue;
 
-        if (BIT_EXTRACT_LE(words[WORD_EDX], i, i + 1)) {
+        if (BIT_EXTRACT_LE(words[PAL_CPUID_WORD_EDX], i, i + 1)) {
             int len = strlen(cpu_flags[i]);
             if (flen + len + 1 > fmax) {
                 char * new_flags = malloc(fmax * 2);

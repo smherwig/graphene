@@ -711,8 +711,10 @@ rho_ssl_sock_send(struct rho_sock *sock, const void *buf, size_t len)
     int error = 0;
 
     debug("> rho_ssl_sock_send: len=%lu\n", (unsigned long)len);
+    //rho_hexdump(buf, len, "rho_ssl_sock_send app buffer");
 
     n = br_sslio_write(&sc->ioc, buf, len);
+    debug("> br_sslio_write returned %d\n", n);
     if (n == -1) {
         rho_bearssl_warn_last_error(engine, "br_sslio_write");
         goto done;
@@ -759,9 +761,9 @@ rho_ssl_low_read(void *u, unsigned char *data, size_t len)
     struct rho_sock *sock = u;
     ssize_t n = 0;
 
-    debug("> rho_ssl_low_read: len=%lu\n", (long unsigned)len);
     n = DkStreamRead(sock->pal_hdl, 0, len, data, NULL, 0);
-    debug("< rho_ssl_low_read: n=%ld\n", (long)n);
+    if (n == 0)
+        n = -1;
 
     return ((int)n);
 }
@@ -772,10 +774,10 @@ rho_ssl_low_write(void *u, const unsigned char *data, size_t len)
     struct rho_sock *sock = u;
     ssize_t n = 0;
 
-    debug("> rho_ssl_low_write: n=%lu\n", (unsigned long)len);
     /* unconst */
     n = DkStreamWrite(sock->pal_hdl, 0, len, (void *)data, NULL);
-    debug("< rho_ssl_low_write: n=%ld\n", (long)n);
+    if (n == 0)
+        n = -1;
     
     return ((int)n);
 }
@@ -783,15 +785,11 @@ rho_ssl_low_write(void *u, const unsigned char *data, size_t len)
 void
 rho_ssl_wrap(struct rho_sock *sock, struct rho_ssl_ctx *sc)
 {
-    debug("> rho_ssl_wrap\n");
-
     sock->ops = &rho_ssl_sock_ops;
     sock->ssl_ctx = sc;
     br_ssl_client_reset(&sc->cc, NULL, 0);
     br_sslio_init(&sc->ioc, &(sc->cc.eng), rho_ssl_low_read, sock,
             rho_ssl_low_write, sock);
-
-    debug("< rho_ssl_wrap\n");
 }
 
 int 

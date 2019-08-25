@@ -38,7 +38,7 @@ struct config {
     char * buf;
     LIST_TYPE(config) list;
     LISTP_TYPE(config) children;
-    LIST_TYPE(config) siblings; 
+    LIST_TYPE(config) siblings;
 };
 
 static int __add_config (struct config_store * store,
@@ -373,8 +373,7 @@ int free_config (struct config_store * store)
 {
     struct config * e, * n;
     listp_for_each_entry_safe(e, n, &store->entries, list) {
-        if (e->buf)
-            store->free(e->buf);
+        store->free(e->buf);
         store->free(e);
     }
 

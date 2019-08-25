@@ -45,7 +45,16 @@
 
 #define RPC_QUEUE_SIZE 1024         /* max # of requests in RPC queue */
 #define MAX_RPC_THREADS 64          /* max number of RPC threads */
-#define RPC_SPIN_LOCK_TIMEOUT 4096  /* # of iterations to spin before sleeping */
+
+
+/* 
+ * # of iterations to spin before sleeping
+ * 4096 is a responsbile value.  We purposefully set
+ * to an insanely high value so that the futex is never used.
+ * Use (1<<30) to effectively make it so that the futex is never
+ * used.
+ */
+#define RPC_SPIN_LOCK_TIMEOUT 4096
 
 #define SPIN_UNLOCKED           0
 #define SPIN_LOCKED             1

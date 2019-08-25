@@ -28,7 +28,7 @@ int main (int argc, char ** argv)
         DkStreamGetName(srv, addr, 40);
         pal_printf("server bound on %s\n", addr);
 
-        PAL_HANDLE proc = DkProcessCreate("file:Udp", 0, newargs);
+        PAL_HANDLE proc = DkProcessCreate("file:Udp", newargs);
 
         for (i = 0 ; i < NTRIES ; i++) {
             char buffer[20];
@@ -43,7 +43,7 @@ int main (int argc, char ** argv)
         }
 
         unsigned long end = DkSystemTimeQuery();
-        pal_printf("wall time = %d\n", end - start);
+        pal_printf("wall time = %ld\n", end - start);
 
         int retval;
         DkStreamRead(proc, 0, sizeof(int), &retval, NULL, 0);

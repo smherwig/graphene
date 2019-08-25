@@ -15,6 +15,7 @@ int rho_shim_handle_close(struct shim_handle *hdl);
 int rho_shim_handle_read(struct shim_handle *hdl, void *buf, int count);
 int rho_shim_handle_write(struct shim_handle *hdl, const void *buf, int count);
 size_t rho_shim_handle_getfilesize(struct shim_handle *hdl);
+void rho_shim_handle_print(const struct shim_handle *hdl);
 
 RHO_DECLS_END
 

@@ -1,11 +1,9 @@
-#!/usr/bin/python
-
 import os, sys, mmap
 from regression import Regression
 
 loader = os.environ['PAL_LOADER']
 
-regression = Regression(loader, "Process")
+regression = Regression(loader, "Process", timeout=8000)
 
 def check_times(target, lines, times):
     count = 0
@@ -27,9 +25,17 @@ regression.add_check(name="Process Channel Transmission",
                       check_times("Process Write 2 OK",            res[0].log, 3) and
                       check_times("Process Read 2: Hello World 2", res[0].log, 3))
 
+def check_broadcast_result(res):
+    if not check_times("Warning: broadcast stream is not open. "
+                       "Do you have a multicast route configured?",
+                       res[0].log, 0):
+        print("Could not open broadcast stream. Dou you have a multicast route configured?")
+
+    return (check_times("Broadcast Write OK",            res[0].log, 1) and
+            check_times("Broadcast Read: Hello World 1", res[0].log, 3))
+
 regression.add_check(name="Multi-Process Broadcast Channel Transmission",
-    check=lambda res: check_times("Broadcast Write OK",            res[0].log, 1) and
-                      check_times("Broadcast Read: Hello World 1", res[0].log, 3))
+                     check=check_broadcast_result)
 
 rv = regression.run_checks()
 if rv: sys.exit(rv)

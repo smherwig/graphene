@@ -29,6 +29,7 @@
 #include "pal.h"
 #include "pal_internal.h"
 #include "pal_linux.h"
+#include "pal_linux_error.h"
 #include "pal_error.h"
 #include "pal_security.h"
 #include "pal_debug.h"
@@ -74,8 +75,8 @@ static int pipe_listen (PAL_HANDLE * handle, PAL_NUM pipeid, int options)
     ret = ocall_sock_listen(AF_UNIX, pipe_type(options), 0,
                             (struct sockaddr *) &addr, &addrlen,
                             &sock_options);
-    if (ret < 0)
-        return ret;
+    if (IS_ERR(ret))
+        return unix_to_pal_error(ERRNO(ret));
 
     PAL_HANDLE hdl = malloc(HANDLE_SIZE(pipe));
     SET_HANDLE_TYPE(hdl, pipesrv);
@@ -98,8 +99,8 @@ static int pipe_waitforclient (PAL_HANDLE handle, PAL_HANDLE * client)
 
     struct sockopt sock_options;
     int ret = ocall_sock_accept(handle->pipe.fd, NULL, NULL, &sock_options);
-    if (ret < 0)
-        return ret;
+    if (IS_ERR(ret))
+        return unix_to_pal_error(ERRNO(ret));
 
     PAL_HANDLE clnt = malloc(HANDLE_SIZE(pipe));
     SET_HANDLE_TYPE(clnt, pipecli);
@@ -124,8 +125,8 @@ static int pipe_connect (PAL_HANDLE * handle, PAL_NUM pipeid, int options)
     ret = ocall_sock_connect(AF_UNIX, pipe_type(options), 0,
                              (void *) &addr, sizeof(struct sockaddr_un),
                              NULL, NULL, &sock_options);
-    if (ret < 0)
-        return ret;
+    if (IS_ERR(ret))
+        return unix_to_pal_error(ERRNO(ret));
 
     PAL_HANDLE hdl = malloc(HANDLE_SIZE(pipe));
     SET_HANDLE_TYPE(hdl, pipe);
@@ -147,8 +148,8 @@ static int pipe_private (PAL_HANDLE * handle, int options)
         type |= SOCK_NONBLOCK;
 
     ret = ocall_socketpair(AF_UNIX, type, 0, fds);
-    if (ret < 0)
-        return ret;
+    if (IS_ERR(ret))
+        return unix_to_pal_error(ERRNO(ret));
 
     PAL_HANDLE hdl = malloc(HANDLE_SIZE(pipeprv));
     SET_HANDLE_TYPE(hdl, pipeprv);
@@ -168,9 +169,13 @@ static int pipe_private (PAL_HANDLE * handle, int options)
 static int pipe_open (PAL_HANDLE *handle, const char * type, const char * uri,
                       int access, int share, int create, int options)
 {
-    options &= PAL_OPTION_MASK;
+    if (!WITHIN_MASK(access, PAL_ACCESS_MASK) ||
+        !WITHIN_MASK(share, PAL_SHARE_MASK) ||
+        !WITHIN_MASK(create, PAL_CREATE_MASK) ||
+        !WITHIN_MASK(options, PAL_OPTION_MASK))
+        return -PAL_ERROR_INVAL;
 
-    if (strpartcmp_static(type, "pipe:") && !*uri)
+    if (strcmp_static(type, "pipe") && !*uri)
         return pipe_private(handle, options);
 
     char * endptr;
@@ -179,10 +184,10 @@ static int pipe_open (PAL_HANDLE *handle, const char * type, const char * uri,
     if (*endptr)
         return -PAL_ERROR_INVAL;
 
-    if (strpartcmp_static(type, "pipe.srv:"))
+    if (strcmp_static(type, "pipe.srv"))
         return pipe_listen(handle, pipeid, options);
 
-    if (strpartcmp_static(type, "pipe:"))
+    if (strcmp_static(type, "pipe"))
         return pipe_connect(handle, pipeid, options);
 
     return -PAL_ERROR_INVAL;
@@ -192,6 +197,9 @@ static int pipe_open (PAL_HANDLE *handle, const char * type, const char * uri,
 static int64_t pipe_read (PAL_HANDLE handle, uint64_t offset, uint64_t len,
                           void * buffer)
 {
+    if (offset)
+        return -PAL_ERROR_INVAL;
+
     if (!IS_HANDLE_TYPE(handle, pipecli) &&
         !IS_HANDLE_TYPE(handle, pipeprv) &&
         !IS_HANDLE_TYPE(handle, pipe))
@@ -204,8 +212,8 @@ static int64_t pipe_read (PAL_HANDLE handle, uint64_t offset, uint64_t len,
              handle->pipe.fd;
     int bytes = ocall_sock_recv(fd, buffer, len, NULL, NULL);
 
-    if (bytes < 0)
-        return bytes;
+    if (IS_ERR(bytes))
+        return unix_to_pal_error(ERRNO(bytes));
 
     if (!bytes)
         return -PAL_ERROR_ENDOFSTREAM;
@@ -217,6 +225,9 @@ static int64_t pipe_read (PAL_HANDLE handle, uint64_t offset, uint64_t len,
 static int64_t pipe_write (PAL_HANDLE handle, uint64_t offset, uint64_t len,
                            const void * buffer)
 {
+    if (offset)
+        return -PAL_ERROR_INVAL;
+
     if (!IS_HANDLE_TYPE(handle, pipecli) &&
         !IS_HANDLE_TYPE(handle, pipeprv) &&
         !IS_HANDLE_TYPE(handle, pipe))
@@ -232,11 +243,12 @@ static int64_t pipe_write (PAL_HANDLE handle, uint64_t offset, uint64_t len,
     PAL_FLG writeable = IS_HANDLE_TYPE(handle, pipeprv) ? WRITEABLE(1) :
                         WRITEABLE(0);
 
-    if (bytes == -PAL_ERROR_TRYAGAIN)
-        HANDLE_HDR(handle)->flags &= ~writeable;
-
-    if (bytes < 0)
+    if (IS_ERR(bytes)) {
+        bytes = unix_to_pal_error(ERRNO(bytes));
+        if (bytes == -PAL_ERROR_TRYAGAIN)
+            HANDLE_HDR(handle)->flags &= ~writeable;
         return bytes;
+    }
 
     if (bytes == len)
         HANDLE_HDR(handle)->flags |= writeable;
@@ -342,8 +354,8 @@ static int pipe_attrquerybyhdl (PAL_HANDLE handle, PAL_STREAM_ATTR * attr)
 
     if (!IS_HANDLE_TYPE(handle, pipesrv)) {
         int ret = ocall_fionread(read_fd);
-        if (ret < 0)
-            return -ret;
+        if (IS_ERR(ret))
+            return unix_to_pal_error(ERRNO(ret));
 
         attr->pending_size = ret;
         attr->writeable    = flags & (
@@ -356,9 +368,9 @@ static int pipe_attrquerybyhdl (PAL_HANDLE handle, PAL_STREAM_ATTR * attr)
     struct pollfd pfd = { .fd = read_fd, .events = POLLIN, .revents = 0 };
     unsigned long waittime = 0;
     int ret = ocall_poll(&pfd, 1, &waittime);
-    if (ret < 0)
-        return ret;
-    
+    if (IS_ERR(ret))
+        return unix_to_pal_error(ERRNO(ret));
+
     attr->readable = (ret == 1 && pfd.revents == POLLIN);
 
     attr->disconnected = flags & ERROR(0);
@@ -379,8 +391,8 @@ static int pipe_attrsetbyhdl (PAL_HANDLE handle, PAL_STREAM_ATTR * attr)
 
     if (attr->nonblocking != *nonblocking) {
         int ret = ocall_fsetnonblock(handle->generic.fds[0], attr->nonblocking);
-        if (ret < 0)
-            return ret;
+        if (IS_ERR(ret))
+            return unix_to_pal_error(ERRNO(ret));
 
         *nonblocking = attr->nonblocking;
     }

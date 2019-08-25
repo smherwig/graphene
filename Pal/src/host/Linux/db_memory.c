@@ -35,7 +35,7 @@
 #include <asm/mman.h>
 #include <asm/fcntl.h>
 
-bool _DkCheckMemoryMappable (const void * addr, int size)
+bool _DkCheckMemoryMappable (const void * addr, size_t size)
 {
     return (addr < DATA_END && addr + size > TEXT_START);
 }
@@ -48,7 +48,6 @@ int _DkVirtualMemoryAlloc (void ** paddr, uint64_t size, int alloc_type,
     int flags = HOST_FLAGS(alloc_type, prot|PAL_PROT_WRITECOPY);
     prot = HOST_PROT(prot);
 
-    /* The memory should have MAP_PRIVATE and MAP_ANONYMOUS */
     flags |= MAP_ANONYMOUS|(addr ? MAP_FIXED : 0);
     mem = (void *) ARCH_MMAP(addr, size, prot, flags, -1, 0);
 

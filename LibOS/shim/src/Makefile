@@ -9,7 +9,7 @@ LD	= ld
 
 OMIT_FRAME_POINTER = no
 
-CFLAGS	= -Wall -fPIC -std=gnu99 -fgnu89-inline -Winline -Wwrite-strings \
+CFLAGS	= -Wall -fPIC -std=c11 -Winline -Wwrite-strings \
 	  -fmerge-all-constants -Wstrict-prototypes \
 	  -Werror=implicit-function-declaration \
 	  -fno-stack-protector -fno-builtin -Wno-inline \
@@ -34,11 +34,15 @@ LDFLAGS	= -shared -nostdlib --version-script shim.map -T shim.lds \
 LDFLAGS-debug = $(patsubst shim.map,shim-debug.map,$(LDFLAGS))
 ARFLAGS	=
 
+ifeq ($(WERROR),1)
+CFLAGS += -Werror
+endif
+
 files_to_build = libsysdb.a libsysdb.so libsysdb_debug.so
 files_to_install = $(addprefix $(RUNTIME_DIR)/,$(files_to_build))
 
 defs	= -DIN_SHIM
-fs	= chroot str pipe socket proc dev nextfs mdish
+fs	= chroot str pipe socket proc dev nextfs smdish smuf smc
 ipcns	= pid sysv
 objs	= $(addprefix bookkeep/shim_,handle vma thread signal) \
 	  $(patsubst %.c,%,$(wildcard utils/*.c)) \
@@ -47,7 +51,7 @@ objs	= $(addprefix bookkeep/shim_,handle vma thread signal) \
 	  $(addprefix ipc/shim_,ipc ipc_helper ipc_child) \
 	  $(addprefix ipc/shim_ipc_,$(ipcns)) \
 	  elf/shim_rtld \
-	  $(addprefix shim_,init table syscalls checkpoint random malloc \
+	  $(addprefix shim_,init table syscalls checkpoint malloc \
 	  async parser debug) syscallas start \
 	  $(patsubst %.c,%,$(wildcard sys/*.c))
 bearssl_lib = ../../../bearssl-0.6/build/libbearssl.a
@@ -69,25 +73,23 @@ CFLAGS += -DPROFILE
 endif
 
 $(files_to_install): $(RUNTIME_DIR)/%: %
-	cp -f $< $@
+	$(call cmd,ln_sf)
 
 ifeq ($(findstring x86_64,$(SYS))$(findstring linux,$(SYS)),x86_64linux)
 libsysdb.so: $(addsuffix .o,$(objs)) $(filter %.map %.lds,$(LDFLAGS)) \
 	     $(bearssl_lib) $(graphene_lib) $(pal_lib)
 	@echo [ $@ ]
-	$(LD) $(LDFLAGS) -o $@ $(filter-out %.map %.lds,$^) -soname $@ \
-		-e shim_start
+	$(LD) $(LDFLAGS) -o $@ $(filter-out %.map %.lds,$^) -soname $@
 
 libsysdb_debug.so: $(addsuffix .o,$(filter-out syscallas,$(objs))) \
 		   $(filter %.map %.lds,$($LDFLAGS-debug)) \
 		   $(bearssl_lib) $(graphene_lib) $(pal_lib)
 	@echo [ $@ ]
-	$(LD) $(LDFLAGS-debug) -o $@ $(filter-out %.map %.lds,$^) -soname $@ \
-		-e shim_start
+	$(LD) $(LDFLAGS-debug) -o $@ $(filter-out %.map %.lds,$^) -soname $@
 
 .lib/host_endian.h: ../../../Pal/src/host/$(PAL_HOST)/host_endian.h
 	@mkdir -p .lib
-	cp -f $< $@
+	$(call cmd,ln_sf)
 
 .PHONY: $(graphene_lib)
 $(graphene_lib): .lib/host_endian.h
@@ -115,17 +117,25 @@ elf/shim_rtld.o: $(wildcard elf/*.h)
 	@echo [ $@ ]
 	@$(CC) $(CFLAGS) $(defs) -c $< -o $@
 
-%.e: %.c $(headers)
+%.e %.i: %.c $(headers)
 	@echo [ $@ ]
 	@$(CC) $(CFLAGS) $(defs) -E $< -o $@
+
+%.s: %.c $(headers)
+	@echo [ $@ ]
+	@$(CC) $(CFLAGS) $(defs) -S $< -o $@
 
 %.o: %.S $(headers)
 	@echo [ $@ ]
 	@$(AS) $(ASFLAGS) $(defs) -c $< -o $@
 
-%.e: %.S $(headers)
+%.e %.s: %.S $(headers)
 	@echo [ $@ ]
 	@$(AS) $(ASFLAGS) $(defs) -E $< -o $@
 
+syscallas.S: asm-offsets.h
+
+include ../../../Makefile.rules
+
 clean:
-	rm -rf $(addsuffix .o,$(objs)) $(shim_target) .lib
+	rm -rf $(addsuffix .o,$(objs)) $(shim_target) $(files_to_build) .lib $(CLEAN_FILES)

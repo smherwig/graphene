@@ -5,12 +5,14 @@
 #include <shim_types.h>
 #include <shim_utils.h>
 
+#include <pal.h>
+
 #include <rho_rand.h>
 
 void
 rho_rand_bytes(uint8_t *buf, size_t size)
 {
-    getrand(buf, size);
+    DkRandomBitsRead(buf, size);
 }
 
 uint8_t

@@ -1,11 +1,9 @@
-#!/usr/bin/python
-
 import os, sys, mmap
 from regression import Regression
 
 loader = os.environ['PAL_LOADER']
 
-regression = Regression(loader, "Misc", timeout=5000)
+regression = Regression(loader, "Misc")
 
 regression.add_check(name="Query System Time",
     check=lambda res: "Query System Time OK" in res[0].log)

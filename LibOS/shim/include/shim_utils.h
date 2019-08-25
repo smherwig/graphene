@@ -208,16 +208,14 @@ void md5_final (struct shim_md5_ctx * mdContext);
 /* prompt user for confirmation */
 int message_confirm (const char * message, const char * options);
 
-/* get random bytes (not for crypto!) */
-void getrand (void * buffer, size_t size);
-
 /* ELF binary loading */
 int check_elf_object (struct shim_handle * file);
 int load_elf_object (struct shim_handle * file, void * addr, size_t mapped);
 int load_elf_interp (struct shim_handle * exec);
 int free_elf_interp (void);
-int execute_elf_object (struct shim_handle * exec, int argc, const char ** argp,
-                        int nauxv, elf_auxv_t * auxp);
+void execute_elf_object (struct shim_handle * exec,
+                         int * argcp, const char ** argp,
+                         int nauxv, elf_auxv_t * auxp);
 int remove_loaded_libraries (void);
 
 /* gdb debugging support */
@@ -243,7 +241,7 @@ int64_t install_async_event (PAL_HANDLE object, unsigned long time,
                               void (*callback) (IDTYPE caller, void * arg),
                               void * arg);
 int create_async_helper (void);
-int terminate_async_helper (void);
+struct shim_thread * terminate_async_helper (void);
 
 extern struct config_store * root_config;
 

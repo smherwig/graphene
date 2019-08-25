@@ -41,14 +41,16 @@ struct shim_fs {
     struct shim_d_ops * d_ops;
 };
 
-#define NUM_MOUNTABLE_FS    5
+#define NUM_MOUNTABLE_FS    7
 
 struct shim_fs mountable_fs [NUM_MOUNTABLE_FS] = {
         { .name = "chroot", .fs_ops = &chroot_fs_ops, .d_ops = &chroot_d_ops, },
         { .name = "proc",   .fs_ops = &proc_fs_ops,   .d_ops = &proc_d_ops,   },
         { .name = "dev",    .fs_ops = &dev_fs_ops,    .d_ops = &dev_d_ops,    },
         { .name = "nextfs", .fs_ops = &nextfs_fs_ops, .d_ops = &nextfs_d_ops, },
-        { .name = "mdish",  .fs_ops = &mdish_fs_ops,  .d_ops = &mdish_d_ops,  },
+        { .name = "smdish", .fs_ops = &smdish_fs_ops, .d_ops = &smdish_d_ops, },
+        { .name = "smuf",   .fs_ops = &smuf_fs_ops,   .d_ops = &smuf_d_ops,   },
+        { .name = "smc",    .fs_ops = &smc_fs_ops,    .d_ops = &smc_d_ops,    },
     };
 
 #define NUM_BUILTIN_FS      4
@@ -60,7 +62,7 @@ struct shim_mount * builtin_fs [NUM_BUILTIN_FS] = {
                 &epoll_builtin_fs,
         };
 
-static LOCKTYPE mount_mgr_lock;
+static struct shim_lock mount_mgr_lock;
 
 #define system_lock()       lock(mount_mgr_lock)
 #define system_unlock()     unlock(mount_mgr_lock)
@@ -75,7 +77,7 @@ static MEM_MGR mount_mgr = NULL;
 DEFINE_LISTP(shim_mount);
 /* Links to mount->list */
 static LISTP_TYPE(shim_mount) mount_list;
-static LOCKTYPE mount_list_lock;
+static struct shim_lock mount_list_lock;
 
 int init_fs (void)
 {
@@ -177,7 +179,7 @@ static int __mount_one_other (const char * key, int keylen)
     debug("mounting as %s filesystem: from %s to %s\n", t, uri, p);
 
     if ((ret = mount_fs(t, uri, p, NULL, NULL, 1)) < 0) {
-        debug("mounting %s on %s (type=%s) failed (%e)\n", uri, p, t,
+        debug("mounting %s on %s (type=%s) failed (%d)\n", uri, p, t,
               -ret);
         return ret;
     }
@@ -229,7 +231,7 @@ int init_mount_root (void)
 
     int ret;
     struct shim_dentry *root = NULL;
-    
+
     if ((ret = __mount_root(&root)) < 0)
         return ret;
 
@@ -311,14 +313,14 @@ int __mount_fs (struct shim_mount * mount, struct shim_dentry * dent)
      * point is marked as a directory */
     if (mount_root->state & DENTRY_ISDIRECTORY)
         dent->state |= DENTRY_ISDIRECTORY;
-    
+
     /* DEP 6/16/17: In the dcache redesign, we don't use the *REACHABLE flags, but
      * leaving this commented for documentation, in case there is a problem
      * I over-simplified */
     //mount_root->state |= dent->state & (DENTRY_REACHABLE|DENTRY_UNREACHABLE);
 
     /* DEP 6/16/17: In the dcache redesign, I don't believe we need to manually
-     * rehash the path; this should be handled by get_new_dentry, or already be 
+     * rehash the path; this should be handled by get_new_dentry, or already be
      * hashed if mount_root exists.  I'm going to leave this line here for now
      * as documentation in case there is a problem later.
      */
@@ -347,7 +349,7 @@ int __mount_fs (struct shim_mount * mount, struct shim_dentry * dent)
         dent = parent;
     } while (dent);
 
-    
+
     return 0;
 }
 
@@ -380,7 +382,7 @@ out:
 }
 
 /* Parent is optional, but helpful.
- * dentp (optional) memoizes the dentry of the newly-mounted FS, on success. 
+ * dentp (optional) memoizes the dentry of the newly-mounted FS, on success.
  *
  * The make_ancestor flag creates pseudo-dentries for any missing paths (passed to
  * __path_lookupat).  This is only intended for use to connect mounts specified in the manifest
@@ -423,7 +425,7 @@ int mount_fs (const char * type, const char * uri, const char * mount_point,
             }
         }
     }
-    
+
     lock(dcache_lock);
 
     struct shim_mount * mount = alloc_mount();
@@ -457,17 +459,17 @@ int mount_fs (const char * type, const char * uri, const char * mount_point,
             get_dentry(dent);
         }
     }
-    
-    assert(dent == dentry_root || !(dent->state & DENTRY_VALID));    
+
+    assert(dent == dentry_root || !(dent->state & DENTRY_VALID));
 
     // We need to fix up the relative path to this mount, but only for
-    // directories.  
+    // directories.
     qstrsetstr(&dent->rel_path, "", 0);
     mount->path.hash = dent->rel_path.hash;
 
     /*Now go ahead and do a lookup so the dentry is valid */
     if ((ret = __path_lookupat(dentry_root, mount_point, 0, &dent2, 0,
-                               parent ? parent->fs : mount, make_ancestor)) < 0) 
+                               parent ? parent->fs : mount, make_ancestor)) < 0)
         goto out_with_unlock;
 
     assert(dent == dent2);
@@ -480,13 +482,13 @@ int mount_fs (const char * type, const char * uri, const char * mount_point,
     ret = __mount_fs(mount, dent);
 
     // If we made it this far and the dentry is still negative, clear
-    // the negative flag from the denry. 
+    // the negative flag from the denry.
     if (!ret && (dent->state & DENTRY_NEGATIVE))
         dent->state &= ~DENTRY_NEGATIVE;
-    
+
     /* Set the file system at the mount point properly */
     dent->fs = mount;
-    
+
     if (dentp && !ret)
         *dentp = dent;
 
@@ -510,7 +512,7 @@ int walk_mounts (int (*walk) (struct shim_mount * mount, void * arg),
                  void * arg)
 {
     struct shim_mount * mount, * n;
-    int ret;
+    int ret = 0;
     int nsrched = 0;
 
     lock(mount_list_lock);
@@ -653,7 +655,7 @@ BEGIN_CP_FUNC(all_mounts)
     unlock(mount_list_lock);
 
     /* add an empty entry to mark as migrated */
-    ADD_CP_FUNC_ENTRY(0);
+    ADD_CP_FUNC_ENTRY(0UL);
 }
 END_CP_FUNC(all_mounts)
 

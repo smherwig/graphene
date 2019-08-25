@@ -17,7 +17,9 @@
 #include <linux/futex.h>
 #include <math.h>
 #include <asm/errno.h>
-#include <signal.h>
+#include <linux/signal.h>
+
+#include <sigset.h>
 
 #ifndef SOL_IPV6
 # define SOL_IPV6 41
@@ -25,11 +27,43 @@
 
 #define ODEBUG(code, ms) do {} while (0)
 
-static int sgx_ocall_exit(int rv)
+/* Set all signals in SET.  */
+static int
+sigfillset(sigset_t *set)
 {
+    if (set == NULL)
+        return -1;
+
+    memset (set, 0xff, sizeof (sigset_t));
+
+    /* If the implementation uses a cancellation signal don't set the bit.  */
+#ifdef SIGCANCEL
+    __sigdelset (set, SIGCANCEL);
+#endif
+    /* Likewise for the signal to implement setxid.  */
+#ifdef SIGSETXID
+    __sigdelset (set, SIGSETXID);
+#endif
+
+  return 0;
+}
+
+/* Add SIGNO to SET.  */
+static int
+sigdelset(sigset_t *set, int signo)
+{
+    if (set == NULL || signo <= 0 || signo >= NSIG)
+            return -1; 
+
+    return __sigdelset (set, signo);
+}
+
+static int sgx_ocall_exit(void* prv)
+{
+    int64_t rv = (int64_t) prv;
     ODEBUG(OCALL_EXIT, NULL);
-    if (rv != (int) ((uint8_t) rv)) {
-        SGX_DBG(DBG_E, "Saturation error in exit code %d, getting rounded down to %u\n", rv, (uint8_t) rv);
+    if (rv != (int64_t) ((uint8_t) rv)) {
+        SGX_DBG(DBG_E, "Saturation error in exit code %ld, getting rounded down to %u\n", rv, (uint8_t) rv);
         rv = 255;
     }
 
@@ -40,7 +74,7 @@ static int sgx_ocall_exit(int rv)
         return 0;
     }
 
-    INLINE_SYSCALL(exit, 1, rv);
+    INLINE_SYSCALL(exit, 1, (int)rv);
     return 0;
 }
 
@@ -60,7 +94,7 @@ static int sgx_ocall_alloc_untrusted(void * pms)
                                    PROT_READ|PROT_WRITE,
                                    MAP_ANONYMOUS|MAP_PRIVATE, -1, 0);
     if (IS_ERR_P(addr))
-        return -PAL_ERROR_NOMEM;
+        return -ERRNO_P(addr);
 
     ms->ms_mem = addr;
     return 0;
@@ -71,12 +105,21 @@ static int sgx_ocall_map_untrusted(void * pms)
     ms_ocall_map_untrusted_t * ms = (ms_ocall_map_untrusted_t *) pms;
     void * addr;
     ODEBUG(OCALL_MAP_UNTRUSTED, ms);
-    addr = (void *) INLINE_SYSCALL(mmap, 6, NULL, ms->ms_size,
-                                   ms->ms_prot,
-                                   MAP_FILE|MAP_SHARED,
-                                   ms->ms_fd, ms->ms_offset);
+
+    if (ms->ms_fd == -1) {
+        addr = (void *) INLINE_SYSCALL(mmap, 6, NULL, ms->ms_size,
+                                       ms->ms_prot,
+                                       MAP_ANONYMOUS|MAP_SHARED,
+                                       ms->ms_fd, ms->ms_offset);
+    } else {
+        addr = (void *) INLINE_SYSCALL(mmap, 6, NULL, ms->ms_size,
+                                       ms->ms_prot,
+                                       MAP_FILE|MAP_SHARED,
+                                       ms->ms_fd, ms->ms_offset);
+    }
+
     if (IS_ERR_P(addr))
-        return -PAL_ERROR_NOMEM;
+        return -ERRNO_P(addr);
 
     ms->ms_mem = addr;
     return 0;
@@ -96,7 +139,7 @@ static int sgx_ocall_cpuid(void * pms)
 {
     ms_ocall_cpuid_t * ms = (ms_ocall_cpuid_t *) pms;
     ODEBUG(OCALL_CPUID, ms);
-    asm volatile ("cpuid"
+    __asm__ volatile ("cpuid"
                   : "=a"(ms->ms_values[0]),
                     "=b"(ms->ms_values[1]),
                     "=c"(ms->ms_values[2]),
@@ -112,7 +155,7 @@ static int sgx_ocall_open(void * pms)
     ODEBUG(OCALL_OPEN, ms);
     ret = INLINE_SYSCALL(open, 3, ms->ms_pathname, ms->ms_flags|O_CLOEXEC,
                          ms->ms_mode);
-    return IS_ERR(ret) ? unix_to_pal_error(ERRNO(ret)) : ret;
+    return ret;
 }
 
 static int sgx_ocall_close(void * pms)
@@ -129,7 +172,7 @@ static int sgx_ocall_read(void * pms)
     int ret;
     ODEBUG(OCALL_READ, ms);
     ret = INLINE_SYSCALL(read, 3, ms->ms_fd, ms->ms_buf, ms->ms_count);
-    return IS_ERR(ret) ? unix_to_pal_error(ERRNO(ret)) : ret;
+    return ret;
 }
 
 static int sgx_ocall_write(void * pms)
@@ -138,7 +181,7 @@ static int sgx_ocall_write(void * pms)
     int ret;
     ODEBUG(OCALL_WRITE, ms);
     ret = INLINE_SYSCALL(write, 3, ms->ms_fd, ms->ms_buf, ms->ms_count);
-    return IS_ERR(ret) ? unix_to_pal_error(ERRNO(ret)) : ret;
+    return ret;
 }
 
 static int sgx_ocall_fstat(void * pms)
@@ -147,7 +190,7 @@ static int sgx_ocall_fstat(void * pms)
     int ret;
     ODEBUG(OCALL_FSTAT, ms);
     ret = INLINE_SYSCALL(fstat, 2, ms->ms_fd, &ms->ms_stat);
-    return IS_ERR(ret) ? unix_to_pal_error(ERRNO(ret)) : ret;
+    return ret;
 }
 
 static int sgx_ocall_fionread(void * pms)
@@ -156,7 +199,7 @@ static int sgx_ocall_fionread(void * pms)
     int ret, val;
     ODEBUG(OCALL_FIONREAD, ms);
     ret = INLINE_SYSCALL(ioctl, 3, ms->ms_fd, FIONREAD, &val);
-    return IS_ERR(ret) ? unix_to_pal_error(ERRNO(ret)) : val;
+    return IS_ERR(ret) ? ret : val;
 }
 
 static int sgx_ocall_fsetnonblock(void * pms)
@@ -167,7 +210,7 @@ static int sgx_ocall_fsetnonblock(void * pms)
 
     ret = INLINE_SYSCALL(fcntl, 2, ms->ms_fd, F_GETFL);
     if (IS_ERR(ret))
-        return -ERRNO(ret);
+        return ret;
 
     flags = ret;
     if (ms->ms_nonblocking) {
@@ -180,7 +223,7 @@ static int sgx_ocall_fsetnonblock(void * pms)
                                  flags & ~O_NONBLOCK);
     }
 
-    return IS_ERR(ret) ? unix_to_pal_error(ERRNO(ret)) : 0;
+    return ret;
 }
 
 static int sgx_ocall_fchmod(void * pms)
@@ -189,7 +232,7 @@ static int sgx_ocall_fchmod(void * pms)
     int ret;
     ODEBUG(OCALL_FCHMOD, ms);
     ret = INLINE_SYSCALL(fchmod, 2, ms->ms_fd, ms->ms_mode);
-    return IS_ERR(ret) ? unix_to_pal_error(ERRNO(ret)) : ret;
+    return ret;
 }
 
 static int sgx_ocall_fsync(void * pms)
@@ -206,7 +249,7 @@ static int sgx_ocall_ftruncate(void * pms)
     int ret;
     ODEBUG(OCALL_FTRUNCATE, ms);
     ret = INLINE_SYSCALL(ftruncate, 2, ms->ms_fd, ms->ms_length);
-    return IS_ERR(ret) ? unix_to_pal_error(ERRNO(ret)) : ret;
+    return ret;
 }
 
 static int sgx_ocall_mkdir(void * pms)
@@ -215,7 +258,7 @@ static int sgx_ocall_mkdir(void * pms)
     int ret;
     ODEBUG(OCALL_MKDIR, ms);
     ret = INLINE_SYSCALL(mkdir, 2, ms->ms_pathname, ms->ms_mode);
-    return IS_ERR(ret) ? unix_to_pal_error(ERRNO(ret)) : ret;
+    return ret;
 }
 
 static int sgx_ocall_getdents(void * pms)
@@ -224,7 +267,7 @@ static int sgx_ocall_getdents(void * pms)
     int ret;
     ODEBUG(OCALL_GETDENTS, ms);
     ret = INLINE_SYSCALL(getdents64, 3, ms->ms_fd, ms->ms_dirp, ms->ms_size);
-    return IS_ERR(ret) ? unix_to_pal_error(ERRNO(ret)) : ret;
+    return ret;
 }
 
 static int sgx_ocall_wake_thread(void * pms)
@@ -243,7 +286,7 @@ static int sgx_ocall_create_process(void * pms)
     ODEBUG(OCALL_CREATE_PROCESS, ms);
     int ret = sgx_create_process(ms->ms_uri, ms->ms_nargs, ms->ms_args,
                                  ms->ms_proc_fds);
-    if (ret < 0)
+    if (IS_ERR(ret))
         return ret;
     ms->ms_pid = ret;
     return 0;
@@ -260,9 +303,11 @@ static int sgx_ocall_futex(void * pms)
         ts->tv_sec = ms->ms_timeout / 1000000;
         ts->tv_nsec = (ms->ms_timeout - ts->tv_sec * 1000000) * 1000;
     }
+    /* SMHERWIG */
+    //SGX_DBG(DBG_E, "futex called\n");
     ret = INLINE_SYSCALL(futex, 6, ms->ms_futex, ms->ms_op, ms->ms_val,
                          ts, NULL, 0);
-    return IS_ERR(ret) ? unix_to_pal_error(ERRNO(ret)) : ret;
+    return ret;
 }
 
 static int sgx_ocall_socketpair(void * pms)
@@ -273,11 +318,17 @@ static int sgx_ocall_socketpair(void * pms)
     ret = INLINE_SYSCALL(socketpair, 4, ms->ms_domain,
                          ms->ms_type|SOCK_CLOEXEC,
                          ms->ms_protocol, &ms->ms_sockfds);
-    return IS_ERR(ret) ? unix_to_pal_error(ERRNO(ret)) : ret;
+    return ret;
 }
 
 static int sock_getopt(int fd, struct sockopt * opt)
 {
+
+    SGX_DBG(DBG_M, "sock_getopt (fd = %d, sockopt addr = %p) is not implemented \
+            always returns 0\n", fd, opt);
+    /* initalize *opt with constant */
+    memset(opt, 0x00, sizeof(struct sockopt));
+    opt->reuseaddr = 1;
     return 0;
 }
 
@@ -290,10 +341,8 @@ static int sgx_ocall_sock_listen(void * pms)
     ret = INLINE_SYSCALL(socket, 3, ms->ms_domain,
                          ms->ms_type|SOCK_CLOEXEC,
                          ms->ms_protocol);
-    if (IS_ERR(ret)) {
-        ret = -PAL_ERROR_DENIED;
+    if (IS_ERR(ret))
         goto err;
-    }
 
     fd = ret;
     if (ms->ms_addr->sa_family == AF_INET6) {
@@ -307,31 +356,25 @@ static int sgx_ocall_sock_listen(void * pms)
                    sizeof(int));
 
     ret = INLINE_SYSCALL(bind, 3, fd, ms->ms_addr, ms->ms_addrlen);
-    if (IS_ERR(ret)) {
-        ret = unix_to_pal_error(ERRNO(ret));
+    if (IS_ERR(ret))
         goto err_fd;
-    }
 
     if (ms->ms_addr) {
         socklen_t addrlen;
         ret = INLINE_SYSCALL(getsockname, 3, fd, ms->ms_addr, &addrlen);
-        if (IS_ERR(ret)) {
-            ret = -PAL_ERROR_DENIED;
+        if (IS_ERR(ret))
             goto err_fd;
-        }
         ms->ms_addrlen = addrlen;
     }
 
     if (ms->ms_type & SOCK_STREAM) {
         ret = INLINE_SYSCALL(listen, 2, fd, DEFAULT_BACKLOG);
-        if (IS_ERR(ret)) {
-            ret = -PAL_ERROR_DENIED;
+        if (IS_ERR(ret))
             goto err_fd;
-        }
     }
 
     ret = sock_getopt(fd, &ms->ms_sockopt);
-    if (ret < 0)
+    if (IS_ERR(ret))
         goto err_fd;
 
     return fd;
@@ -351,14 +394,12 @@ static int sgx_ocall_sock_accept(void * pms)
 
     ret = INLINE_SYSCALL(accept4, 4, ms->ms_sockfd, ms->ms_addr,
                          &addrlen, O_CLOEXEC);
-    if (IS_ERR(ret)) {
-        ret = unix_to_pal_error(ERRNO(ret));
+    if (IS_ERR(ret))
         goto err;
-    }
 
     fd = ret;
     ret = sock_getopt(fd, &ms->ms_sockopt);
-    if (ret < 0)
+    if (IS_ERR(ret))
         goto err_fd;
 
     ms->ms_addrlen = addrlen;
@@ -379,13 +420,11 @@ static int sgx_ocall_sock_connect(void * pms)
     ret = INLINE_SYSCALL(socket, 3, ms->ms_domain,
                          ms->ms_type|SOCK_CLOEXEC,
                          ms->ms_protocol);
-    if (IS_ERR(ret)) {
-        ret = -PAL_ERROR_DENIED;
+    if (IS_ERR(ret))
         goto err;
-    }
 
     fd = ret;
-    if (ms->ms_addr->sa_family == AF_INET6) {
+    if (ms->ms_addr && ms->ms_addr->sa_family == AF_INET6) {
         int ipv6only = 1;
         INLINE_SYSCALL(setsockopt, 5, fd, SOL_IPV6, IPV6_V6ONLY, &ipv6only,
                        sizeof(int));
@@ -394,40 +433,36 @@ static int sgx_ocall_sock_connect(void * pms)
     if (ms->ms_bind_addr && ms->ms_bind_addr->sa_family) {
         ret = INLINE_SYSCALL(bind, 3, fd, ms->ms_bind_addr,
                              ms->ms_bind_addrlen);
-        if (IS_ERR(ret)) {
-            ret = unix_to_pal_error(ERRNO(ret));
+        if (IS_ERR(ret))
             goto err_fd;
+    }
+
+    if (ms->ms_addr) {
+        ret = INLINE_SYSCALL(connect, 3, fd, ms->ms_addr, ms->ms_addrlen);
+
+        if (IS_ERR(ret) && ERRNO(ret) == EINPROGRESS) {
+            do {
+                struct pollfd pfd = { .fd = fd, .events = POLLOUT, .revents = 0, };
+                ret = INLINE_SYSCALL(ppoll, 4, &pfd, 1, NULL, NULL);
+            } while (IS_ERR(ret) &&
+                    ERRNO(ret) == -EWOULDBLOCK);
         }
-    }
 
-    ret = INLINE_SYSCALL(connect, 3, fd, ms->ms_addr, ms->ms_addrlen);
-
-    if (IS_ERR(ret) && ERRNO(ret) == EINPROGRESS) {
-        do {
-            struct pollfd pfd = { .fd = fd, .events = POLLOUT, .revents = 0, };
-            ret = INLINE_SYSCALL(ppoll, 4, &pfd, 1, NULL, NULL);
-        } while (IS_ERR(ret) &&
-                 ERRNO(ret) == -EWOULDBLOCK);
-    }
-
-    if (IS_ERR(ret)) {
-        ret = unix_to_pal_error(ERRNO(ret));
-        goto err_fd;
+        if (IS_ERR(ret))
+            goto err_fd;
     }
 
     if (ms->ms_bind_addr && !ms->ms_bind_addr->sa_family) {
         socklen_t addrlen;
         ret = INLINE_SYSCALL(getsockname, 3, fd, ms->ms_bind_addr,
                              &addrlen);
-        if (IS_ERR(ret)) {
-            ret = -PAL_ERROR_DENIED;
+        if (IS_ERR(ret))
             goto err_fd;
-        }
         ms->ms_bind_addrlen = addrlen;
     }
 
     ret = sock_getopt(fd, &ms->ms_sockopt);
-    if (ret < 0)
+    if (IS_ERR(ret))
         goto err_fd;
 
     return fd;
@@ -456,7 +491,7 @@ static int sgx_ocall_sock_recv(void * pms)
     if (!IS_ERR(ret) && addr)
         ms->ms_addrlen = addrlen;
 
-    return IS_ERR(ret) ? unix_to_pal_error(ERRNO(ret)) : ret;
+    return ret;
 }
 
 static int sgx_ocall_sock_send(void * pms)
@@ -466,13 +501,13 @@ static int sgx_ocall_sock_send(void * pms)
     ODEBUG(OCALL_SOCK_SEND, ms);
     const struct sockaddr * addr = ms->ms_addr;
     socklen_t addrlen = ms->ms_addr ? ms->ms_addrlen : 0;
+    struct sockaddr_in mcast_addr;
 
     if (ms->ms_sockfd == PAL_SEC()->mcast_srv) {
-        struct sockaddr_in * mcast_addr = __alloca(sizeof(struct sockaddr_in));
-        mcast_addr->sin_family = AF_INET;
-        inet_pton4(MCAST_GROUP, sizeof(MCAST_GROUP),  &mcast_addr->sin_addr.s_addr);
-        mcast_addr->sin_port = htons(PAL_SEC()->mcast_port);
-        addr = (struct sockaddr *) mcast_addr;
+        mcast_addr.sin_family = AF_INET;
+        inet_pton4(MCAST_GROUP, sizeof(MCAST_GROUP),  &mcast_addr.sin_addr.s_addr);
+        mcast_addr.sin_port = htons(PAL_SEC()->mcast_port);
+        addr = (struct sockaddr *) &mcast_addr;
         addrlen = sizeof(struct sockaddr_in);
     }
 
@@ -480,7 +515,7 @@ static int sgx_ocall_sock_send(void * pms)
                          ms->ms_sockfd, ms->ms_buf, ms->ms_count, MSG_NOSIGNAL,
                          addr, addrlen);
 
-    return IS_ERR(ret) ? unix_to_pal_error(ERRNO(ret)) : ret;
+    return ret;
 }
 
 static int sgx_ocall_sock_recv_fd(void * pms)
@@ -521,11 +556,9 @@ static int sgx_ocall_sock_recv_fd(void * pms)
         } else {
             ms->ms_nfds = 0;
         }
-
-        return ret;
     }
 
-    return unix_to_pal_error(ERRNO(ret));
+    return ret;
 }
 
 static int sgx_ocall_sock_send_fd(void * pms)
@@ -579,7 +612,7 @@ static int sgx_ocall_sock_send_fd(void * pms)
 
     ret = INLINE_SYSCALL(sendmsg, 3, ms->ms_sockfd, &hdr, MSG_NOSIGNAL);
 
-    return IS_ERR(ret) ? unix_to_pal_error(ERRNO(ret)) : ret;
+    return ret;
 }
 
 static int sgx_ocall_sock_setopt(void * pms)
@@ -590,7 +623,7 @@ static int sgx_ocall_sock_setopt(void * pms)
     ret = INLINE_SYSCALL(setsockopt, 5,
                          ms->ms_sockfd, ms->ms_level, ms->ms_optname,
                          ms->ms_optval, ms->ms_optlen);
-    return IS_ERR(ret) ? unix_to_pal_error(ERRNO(ret)) : ret;
+    return ret;
 }
 
 static int sgx_ocall_sock_shutdown(void * pms)
@@ -621,12 +654,21 @@ static int sgx_ocall_sleep(void * pms)
         return 0;
     }
     struct timespec req, rem;
-    req.tv_sec  = ms->ms_microsec / 1000000;
-    req.tv_nsec = (ms->ms_microsec - req.tv_sec * 1000000) * 1000;
+    unsigned long microsec = ms->ms_microsec;
+#define VERY_LONG_TIME_IN_US    (1000000L * 60 * 60 * 24 * 365 * 128)
+    if (ms->ms_microsec > VERY_LONG_TIME_IN_US) {
+        /* avoid overflow with time_t */
+        req.tv_sec  = VERY_LONG_TIME_IN_US / 1000000;
+        req.tv_nsec = 0;
+    } else {
+        req.tv_sec = ms->ms_microsec / 1000000;
+        req.tv_nsec = (microsec - req.tv_sec * 1000000) * 1000;
+    }
+
     ret = INLINE_SYSCALL(nanosleep, 2, &req, &rem);
     if (IS_ERR(ret) && ERRNO(ret) == EINTR)
-        ms->ms_microsec = rem.tv_sec * 1000000 + rem.tv_nsec / 1000;
-    return IS_ERR(ret) ? unix_to_pal_error(ERRNO(ret)) : ret;
+        ms->ms_microsec = rem.tv_sec * 1000000UL + rem.tv_nsec / 1000UL;
+    return ret;
 }
 
 static int sgx_ocall_poll(void * pms)
@@ -641,7 +683,7 @@ static int sgx_ocall_poll(void * pms)
         ts->tv_nsec = (ms->ms_timeout - ts->tv_sec * 1000000) * 1000;
     }
     ret = INLINE_SYSCALL(ppoll, 4, ms->ms_fds, ms->ms_nfds, ts, NULL);
-    return IS_ERR(ret) ? unix_to_pal_error(ERRNO(ret)) : ret;
+    return ret;
 }
 
 static int sgx_ocall_rename(void * pms)
@@ -650,7 +692,7 @@ static int sgx_ocall_rename(void * pms)
     int ret;
     ODEBUG(OCALL_RENAME, ms);
     ret = INLINE_SYSCALL(rename, 2, ms->ms_oldpath, ms->ms_newpath);
-    return IS_ERR(ret) ? unix_to_pal_error(ERRNO(ret)) : ret;
+    return ret;
 }
 
 static int sgx_ocall_delete(void * pms)
@@ -664,7 +706,7 @@ static int sgx_ocall_delete(void * pms)
     if (IS_ERR(ret) && ERRNO(ret) == EISDIR)
         ret = INLINE_SYSCALL(rmdir, 1, ms->ms_pathname);
 
-    return IS_ERR(ret) ? unix_to_pal_error(ERRNO(ret)) : ret;
+    return ret;
 }
 
 void load_gdb_command (const char * command);
@@ -677,44 +719,44 @@ static int sgx_ocall_load_debug(void * pms)
     return 0;
 }
 
-void * ocall_table[OCALL_NR] = {
-        [OCALL_EXIT]            = (void *) sgx_ocall_exit,
-        [OCALL_PRINT_STRING]    = (void *) sgx_ocall_print_string,
-        [OCALL_ALLOC_UNTRUSTED] = (void *) sgx_ocall_alloc_untrusted,
-        [OCALL_MAP_UNTRUSTED]   = (void *) sgx_ocall_map_untrusted,
-        [OCALL_UNMAP_UNTRUSTED] = (void *) sgx_ocall_unmap_untrusted,
-        [OCALL_CPUID]           = (void *) sgx_ocall_cpuid,
-        [OCALL_OPEN]            = (void *) sgx_ocall_open,
-        [OCALL_CLOSE]           = (void *) sgx_ocall_close,
-        [OCALL_READ]            = (void *) sgx_ocall_read,
-        [OCALL_WRITE]           = (void *) sgx_ocall_write,
-        [OCALL_FSTAT]           = (void *) sgx_ocall_fstat,
-        [OCALL_FIONREAD]        = (void *) sgx_ocall_fionread,
-        [OCALL_FSETNONBLOCK]    = (void *) sgx_ocall_fsetnonblock,
-        [OCALL_FCHMOD]          = (void *) sgx_ocall_fchmod,
-        [OCALL_FSYNC]           = (void *) sgx_ocall_fsync,
-        [OCALL_FTRUNCATE]       = (void *) sgx_ocall_ftruncate,
-        [OCALL_MKDIR]           = (void *) sgx_ocall_mkdir,
-        [OCALL_GETDENTS]        = (void *) sgx_ocall_getdents,
-        [OCALL_WAKE_THREAD]     = (void *) sgx_ocall_wake_thread,
-        [OCALL_CREATE_PROCESS]  = (void *) sgx_ocall_create_process,
-        [OCALL_FUTEX]           = (void *) sgx_ocall_futex,
-        [OCALL_SOCKETPAIR]      = (void *) sgx_ocall_socketpair,
-        [OCALL_SOCK_LISTEN]     = (void *) sgx_ocall_sock_listen,
-        [OCALL_SOCK_ACCEPT]     = (void *) sgx_ocall_sock_accept,
-        [OCALL_SOCK_CONNECT]    = (void *) sgx_ocall_sock_connect,
-        [OCALL_SOCK_RECV]       = (void *) sgx_ocall_sock_recv,
-        [OCALL_SOCK_SEND]       = (void *) sgx_ocall_sock_send,
-        [OCALL_SOCK_RECV_FD]    = (void *) sgx_ocall_sock_recv_fd,
-        [OCALL_SOCK_SEND_FD]    = (void *) sgx_ocall_sock_send_fd,
-        [OCALL_SOCK_SETOPT]     = (void *) sgx_ocall_sock_setopt,
-        [OCALL_SOCK_SHUTDOWN]   = (void *) sgx_ocall_sock_shutdown,
-        [OCALL_GETTIME]         = (void *) sgx_ocall_gettime,
-        [OCALL_SLEEP]           = (void *) sgx_ocall_sleep,
-        [OCALL_POLL]            = (void *) sgx_ocall_poll,
-        [OCALL_RENAME]          = (void *) sgx_ocall_rename,
-        [OCALL_DELETE]          = (void *) sgx_ocall_delete,
-        [OCALL_LOAD_DEBUG]      = (void *) sgx_ocall_load_debug,
+sgx_ocall_fn_t ocall_table[OCALL_NR] = {
+        [OCALL_EXIT]            = sgx_ocall_exit,
+        [OCALL_PRINT_STRING]    = sgx_ocall_print_string,
+        [OCALL_ALLOC_UNTRUSTED] = sgx_ocall_alloc_untrusted,
+        [OCALL_MAP_UNTRUSTED]   = sgx_ocall_map_untrusted,
+        [OCALL_UNMAP_UNTRUSTED] = sgx_ocall_unmap_untrusted,
+        [OCALL_CPUID]           = sgx_ocall_cpuid,
+        [OCALL_OPEN]            = sgx_ocall_open,
+        [OCALL_CLOSE]           = sgx_ocall_close,
+        [OCALL_READ]            = sgx_ocall_read,
+        [OCALL_WRITE]           = sgx_ocall_write,
+        [OCALL_FSTAT]           = sgx_ocall_fstat,
+        [OCALL_FIONREAD]        = sgx_ocall_fionread,
+        [OCALL_FSETNONBLOCK]    = sgx_ocall_fsetnonblock,
+        [OCALL_FCHMOD]          = sgx_ocall_fchmod,
+        [OCALL_FSYNC]           = sgx_ocall_fsync,
+        [OCALL_FTRUNCATE]       = sgx_ocall_ftruncate,
+        [OCALL_MKDIR]           = sgx_ocall_mkdir,
+        [OCALL_GETDENTS]        = sgx_ocall_getdents,
+        [OCALL_WAKE_THREAD]     = sgx_ocall_wake_thread,
+        [OCALL_CREATE_PROCESS]  = sgx_ocall_create_process,
+        [OCALL_FUTEX]           = sgx_ocall_futex,
+        [OCALL_SOCKETPAIR]      = sgx_ocall_socketpair,
+        [OCALL_SOCK_LISTEN]     = sgx_ocall_sock_listen,
+        [OCALL_SOCK_ACCEPT]     = sgx_ocall_sock_accept,
+        [OCALL_SOCK_CONNECT]    = sgx_ocall_sock_connect,
+        [OCALL_SOCK_RECV]       = sgx_ocall_sock_recv,
+        [OCALL_SOCK_SEND]       = sgx_ocall_sock_send,
+        [OCALL_SOCK_RECV_FD]    = sgx_ocall_sock_recv_fd,
+        [OCALL_SOCK_SEND_FD]    = sgx_ocall_sock_send_fd,
+        [OCALL_SOCK_SETOPT]     = sgx_ocall_sock_setopt,
+        [OCALL_SOCK_SHUTDOWN]   = sgx_ocall_sock_shutdown,
+        [OCALL_GETTIME]         = sgx_ocall_gettime,
+        [OCALL_SLEEP]           = sgx_ocall_sleep,
+        [OCALL_POLL]            = sgx_ocall_poll,
+        [OCALL_RENAME]          = sgx_ocall_rename,
+        [OCALL_DELETE]          = sgx_ocall_delete,
+        [OCALL_LOAD_DEBUG]      = sgx_ocall_load_debug,
     };
 
 #define EDEBUG(code, ms) do {} while (0)
@@ -779,7 +821,7 @@ static void start_rpc(size_t num_of_threads) {
     }
 }
 
-int ecall_enclave_start (const char ** arguments, const char ** environments)
+int ecall_enclave_start (char * args, uint64_t args_size, char * env, uint64_t env_size)
 {
     g_rpc_queue = NULL;
 
@@ -787,8 +829,10 @@ int ecall_enclave_start (const char ** arguments, const char ** environments)
         start_rpc(current_enclave->rpc_thread_num);
 
     ms_ecall_enclave_start_t ms;
-    ms.ms_arguments = arguments;
-    ms.ms_environments = environments;
+    ms.ms_args = args;
+    ms.ms_args_size = args_size;
+    ms.ms_env = env;
+    ms.ms_env_size = env_size;
     ms.ms_sec_info = PAL_SEC();
     ms.rpc_queue = g_rpc_queue;
     EDEBUG(ECALL_ENCLAVE_START, &ms);

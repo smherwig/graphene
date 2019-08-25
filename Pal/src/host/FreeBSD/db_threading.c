@@ -46,7 +46,7 @@
    inside the current process. The arguments callback and param
    specify the starting function and parameters */
 int _DkThreadCreate (PAL_HANDLE * handle, int (*callback) (void *),
-                     const void * param, int flags)
+                     const void * param)
 {
    void * child_stack = NULL;
 
@@ -54,11 +54,11 @@ int _DkThreadCreate (PAL_HANDLE * handle, int (*callback) (void *),
                               PAL_PROT_READ|PAL_PROT_WRITE) < 0)
         return -PAL_ERROR_NOMEM;
 
-    // move child_stack to the top of stack. 
+    // move child_stack to the top of stack.
     child_stack += THREAD_STACK_SIZE;
 
-    // align child_stack to 16 
-    child_stack = (void *) ((uintptr_t) child_stack & ~16);
+    // align child_stack to 16
+    child_stack = ALIGN_DOWN_PTR(child_stack, 16);
 
     flags &= PAL_THREAD_MASK;
 
@@ -85,11 +85,15 @@ int _DkThreadDelayExecution (unsigned long * duration)
     struct timespec sleeptime;
     struct timespec remainingtime;
 
-    long sec = (unsigned long) *duration / 1000000;
-    long microsec = (unsigned long) *duration - (sec * 1000000);
-
-    sleeptime.tv_sec = sec;
-    sleeptime.tv_nsec = microsec * 1000;
+#define VERY_LONG_TIME_IN_US    (1000000L * 60 * 60 * 24 * 365 * 128)
+    if (*duration > VERY_LONG_TIME_IN_US) {
+        /* avoid overflow with time_t */
+        sleeptime.tv_sec  = VERY_LONG_TIME_IN_US / 1000000;
+        sleeptime.tv_nsec = 0;
+    } else {
+        sleeptime.tv_sec = *duration / 1000000;
+        sleeptime.tv_nsec = (*duration - sleeptime.tv_sec * 1000000) * 1000;
+    }
 
     int ret = INLINE_SYSCALL(nanosleep, 2, &sleeptime, &remainingtime);
 

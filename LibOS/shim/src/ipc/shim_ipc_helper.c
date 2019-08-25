@@ -57,8 +57,8 @@ static LISTP_TYPE(shim_ipc_port) ipc_port_pool [PID_HASH_NUM];
 
 /* This variable can be read without the ipc_helper_lock held, but
  * should be modified with the ipc_helper_lock held (and in some cases,
- * the value should be re-checked after acquiring the lock. 
- * For reads in a loop without the lock, some caution should be taken to 
+ * the value should be re-checked after acquiring the lock.
+ * For reads in a loop without the lock, some caution should be taken to
  * use compiler barriers to ensure that a stale value isn't cached.
  */
 static enum {
@@ -73,7 +73,7 @@ static AEVENTTYPE            ipc_helper_event;
 #define IN_HELPER() \
     (ipc_helper_thread && ipc_helper_thread == get_cur_thread())
 
-static LOCKTYPE ipc_helper_lock;
+static struct shim_lock ipc_helper_lock;
 
 static struct shim_ipc_port * broadcast_port;
 
@@ -913,7 +913,7 @@ update_status:
         }
 
         PAL_STREAM_ATTR attr;
-        if (!DkStreamAttributesQuerybyHandle(polled, &attr)) {
+        if (!DkStreamAttributesQueryByHandle(polled, &attr)) {
             debug("port %p (handle %p) is removed at querying\n",
                   pobj, polled);
             del_ipc_port_fini(pobj, -PAL_ERRNO);
@@ -1028,13 +1028,13 @@ end:
         put_handle_map(self->handle_map);
 
     /* shim_clean ultimately calls del_all_ipc_ports(), which reacquires the
-     * helper lock.  Err on the side of caution by adding a barrier to ensure 
-     * reading the latest ipc helper state.       
+     * helper lock.  Err on the side of caution by adding a barrier to ensure
+     * reading the latest ipc helper state.
      */
     barrier();
     if (ipc_helper_state == HELPER_HANDEDOVER) {
         debug("ipc helper thread is the last thread, process exiting\n");
-        shim_terminate(); // Same as shim_clean(), but this is the official termination function
+        shim_terminate(0); // Same as shim_clean(), but this is the official termination function
     }
 
     lock(ipc_helper_lock);
@@ -1052,7 +1052,7 @@ static int create_ipc_helper (void)
 {
     int ret = 0;
 
-    /* If we are holding the lock, no barrier is needed here, as 
+    /* If we are holding the lock, no barrier is needed here, as
      * the lock (and new function) form an implicit barrier, and
      * any "recent" changes should have come from this thread */
     if (ipc_helper_state == HELPER_ALIVE)
@@ -1079,8 +1079,19 @@ static int create_ipc_helper (void)
     return 0;
 }
 
-int exit_with_ipc_helper (bool handover)
+/*
+ * on success, the reference to the helper thread is returned with
+ * reference count incremented.
+ * The caller is responsible to wait for the IPC helper thread to exit
+ * and release the final reference to free related resources.
+ * It's problematic for the thread itself to release its resources which it's
+ * using. For example stack.
+ * So defer releasing it after its exit and make the releasing the caller
+ * responsibility.
+ */
+int exit_with_ipc_helper (bool handover, struct shim_thread ** ret)
 {
+    *ret = NULL;
     if (IN_HELPER() || ipc_helper_state != HELPER_ALIVE)
         return 0;
 
@@ -1104,6 +1115,10 @@ int exit_with_ipc_helper (bool handover)
     }
 
     ipc_helper_state = new_state;
+    if (ipc_helper_thread != NULL) {
+        get_thread(ipc_helper_thread);
+        *ret = ipc_helper_thread;
+    }
     unlock(ipc_helper_lock);
 
     set_event(&ipc_helper_event, 1);

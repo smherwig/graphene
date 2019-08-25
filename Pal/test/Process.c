@@ -27,7 +27,7 @@ int main (int argc, char ** argv)
 
         const char * newargs[4] = { "Process", "0", time_arg, NULL };
 
-        PAL_HANDLE proc = DkProcessCreate ("file:Process", 0, newargs);
+        PAL_HANDLE proc = DkProcessCreate ("file:Process", newargs);
 
         if (!proc)
             pal_printf("Can't create process\n");
@@ -44,7 +44,7 @@ int main (int argc, char ** argv)
             snprintf(count_arg, 8, "%d", count);
             const char * newargs[4] = { "Process", count_arg, argv[2], NULL };
 
-            PAL_HANDLE proc = DkProcessCreate ("file:Process", 0, newargs);
+            PAL_HANDLE proc = DkProcessCreate ("file:Process", newargs);
 
             if (!proc)
                 pal_printf("Can't creste process\n");
@@ -53,7 +53,7 @@ int main (int argc, char ** argv)
         } else {
             unsigned long end = DkSystemTimeQuery ();
             unsigned long start = atol (argv[2]);
-            pal_printf ("wall time = %d\n", end - start);
+            pal_printf ("wall time = %ld\n", end - start);
         }
     }
 

@@ -54,7 +54,9 @@ enum shim_handle_type {
     TYPE_STR,
     TYPE_EPOLL,
     TYPE_NEXTFS,
-    TYPE_MDISH,
+    TYPE_SMDISH,
+    TYPE_SMUF,
+    TYPE_SMC,
 };
 
 struct shim_handle;
@@ -70,7 +72,7 @@ enum shim_file_type {
 };
 
 struct shim_file_data {
-    LOCKTYPE            lock;
+    struct shim_lock    lock;
     struct atomic_int   version;
     bool                queried;
     enum shim_file_type type;
@@ -285,7 +287,7 @@ DEFINE_LIST(futex_waiter);
 DEFINE_LISTP(futex_waiter);
 DEFINE_LIST(shim_futex_handle);
 struct shim_futex_handle {
-    unsigned int *      uaddr;
+    int *   uaddr;
     LISTP_TYPE(futex_waiter) waiters;
     struct shim_vma *   vma;
     LIST_TYPE(shim_futex_handle) list;
@@ -324,20 +326,27 @@ struct shim_epoll_handle {
 };
 
 struct shim_nextfs_handle {
+    /* remote fd */
     uint32_t    fd;
 };
 
-struct shim_mdish_handle {
-    uint32_t    fd;
-    void        *shm;
-    size_t      shmsize;
+struct shim_smdish_handle {
+    int mf_idx;
+};
+
+struct shim_smuf_handle {
+    int mf_idx;
+};
+
+struct shim_smc_handle {
+    int mf_idx;
 };
 
 struct shim_mount;
 struct shim_qstr;
 struct shim_dentry;
 
-/* The epolls list links to the back field of the shim_epoll_fd structure 
+/* The epolls list links to the back field of the shim_epoll_fd structure
  */
 struct shim_handle {
     enum shim_handle_type   type;
@@ -371,14 +380,16 @@ struct shim_handle {
         struct shim_str_handle    str;
         struct shim_epoll_handle  epoll;
         struct shim_nextfs_handle nextfs;
-        struct shim_mdish_handle  mdish;
+        struct shim_smdish_handle smdish;
+        struct shim_smuf_handle   smuf;
+        struct shim_smc_handle    smc;
     } info;
 
     int                 flags;
     int                 acc_mode;
     IDTYPE              owner;
     REFTYPE             opened;
-    LOCKTYPE            lock;
+    struct shim_lock    lock;
 };
 
 /* allocating / manage handle */
@@ -407,8 +418,8 @@ struct shim_handle_map {
     FDTYPE      fd_top;
 
     /* refrence count and lock */
-    REFTYPE     ref_count;
-    LOCKTYPE    lock;
+    REFTYPE          ref_count;
+    struct shim_lock lock;
 
     /* An array of file descriptor belong to this mapping */
     struct shim_fd_handle ** map;

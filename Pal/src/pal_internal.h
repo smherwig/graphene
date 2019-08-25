@@ -28,6 +28,7 @@
 #define PAL_INTERNAL_H
 
 #include "pal_defs.h"
+#include "pal_error.h"
 #include "pal.h"
 
 #ifndef IN_PAL
@@ -50,7 +51,10 @@ struct handle_ops {
 
     /* 'open' is used by DkStreamOpen. 'handle' is a preallocated handle,
        'type' will be a normalized prefix, 'uri' is the remaining string
-       of uri */
+       of uri.
+       access, share, create, and options follow the same flags defined
+       for DkStreamOpen in pal.h.
+    */
     int (*open) (PAL_HANDLE * handle, const char * type, const char * uri,
                  int access, int share, int create, int options);
 
@@ -77,8 +81,8 @@ struct handle_ops {
     /* 'map' and 'unmap' will map or unmap the handle into memory space,
      * it's not necessary mapped by mmap, so unmap also needs 'handle'
      * to deal with special cases.
-     * 
-     * Common PAL code will ensure that *address, offset, and size are 
+     *
+     * Common PAL code will ensure that *address, offset, and size are
      * page-aligned. 'address' should not be NULL.
      */
     int (*map) (PAL_HANDLE handle, void ** address, int prot, uint64_t offset,
@@ -100,11 +104,11 @@ struct handle_ops {
     int (*attrquery) (const char * type, const char * uri,
                       PAL_STREAM_ATTR * attr);
 
-    /* 'attrquerybyhdl' is used by DkStreamAttributesQuerybyHandle. It queries
+    /* 'attrquerybyhdl' is used by DkStreamAttributesQueryByHandle. It queries
        the attributes of a stream handle */
     int (*attrquerybyhdl) (PAL_HANDLE handle, PAL_STREAM_ATTR * attr);
 
-    /* 'attrsetbyhdl' is used by DkStreamAttributesSetbyHandle. It queries
+    /* 'attrsetbyhdl' is used by DkStreamAttributesSetByHandle. It queries
        the attributes of a stream handle */
     int (*attrsetbyhdl) (PAL_HANDLE handle, PAL_STREAM_ATTR * attr);
 
@@ -231,7 +235,7 @@ extern struct pal_internal_state {
 #ifdef __GNUC__
 #define BREAK()                         \
     do {                                \
-        asm volatile ("int $3");        \
+        __asm__ volatile ("int $3");    \
     } while (0)
 #else
 #define BREAK()
@@ -263,7 +267,7 @@ void pal_main (
 unsigned long _DkGetPagesize (void);
 unsigned long _DkGetAllocationAlignment (void);
 void _DkGetAvailableUserAddressRange (PAL_PTR * start, PAL_PTR * end);
-bool _DkCheckMemoryMappable (const void * addr, int size);
+bool _DkCheckMemoryMappable (const void * addr, size_t size);
 PAL_NUM _DkGetProcessId (void);
 PAL_NUM _DkGetHostId (void);
 unsigned long _DkMemoryQuota (void);
@@ -280,7 +284,7 @@ int64_t _DkStreamRead (PAL_HANDLE handle, uint64_t offset, uint64_t count,
 int64_t _DkStreamWrite (PAL_HANDLE handle, uint64_t offset, uint64_t count,
                         const void * buf, const char * addr, int addrlen);
 int _DkStreamAttributesQuery (const char * uri, PAL_STREAM_ATTR * attr);
-int _DkStreamAttributesQuerybyHandle (PAL_HANDLE hdl, PAL_STREAM_ATTR * attr);
+int _DkStreamAttributesQueryByHandle (PAL_HANDLE hdl, PAL_STREAM_ATTR * attr);
 int _DkStreamMap (PAL_HANDLE handle, void ** addr, int prot, uint64_t offset,
                   uint64_t size);
 int _DkStreamUnmap (void * addr, uint64_t size);
@@ -294,13 +298,13 @@ PAL_HANDLE _DkBroadcastStreamOpen (void);
 
 /* DkProcess and DkThread calls */
 int _DkThreadCreate (PAL_HANDLE * handle, int (*callback) (void *),
-                     const void * parem, int flags);
+                     const void * param);
 void _DkThreadExit (void);
 int _DkThreadDelayExecution (unsigned long * duration);
 void _DkThreadYieldExecution (void);
 int _DkThreadResume (PAL_HANDLE threadHandle);
 int _DkProcessCreate (PAL_HANDLE * handle, const char * uri,
-                      int flags, const char ** args);
+                      const char ** args);
 void _DkProcessExit (int exitCode);
 int _DkProcessSandboxCreate (const char * manifest, int flags);
 
@@ -340,13 +344,19 @@ int _DkInternalLock (PAL_LOCK * mut);
 int _DkInternalUnlock (PAL_LOCK * mut);
 unsigned long _DkSystemTimeQuery (void);
 int _DkFastRandomBitsRead (void * buffer, int size);
+
+/*
+ * Cryptographically secure random.
+ * 0 on success, negative on failure.
+ */
 int _DkRandomBitsRead (void * buffer, int size);
+
 int _DkSegmentRegisterSet (int reg, const void * addr);
 int _DkSegmentRegisterGet (int reg, void ** addr);
 int _DkInstructionCacheFlush (const void * addr, int size);
 int _DkCreatePhysicalMemoryChannel (PAL_HANDLE * handle, uint64_t * key);
 int _DkPhysicalMemoryCommit (PAL_HANDLE channel, int entries,
-                             PAL_PTR * addrs, PAL_NUM * sizes, int flags);
+                             PAL_PTR * addrs, PAL_NUM * sizes);
 int _DkPhysicalMemoryMap (PAL_HANDLE channel, int entries,
                           PAL_PTR * addrs, PAL_NUM * sizes, PAL_FLG * prots);
 int _DkCpuIdRetrieve (unsigned int leaf, unsigned int subleaf, unsigned int values[4]);
@@ -397,9 +407,9 @@ void free (void * mem);
 #endif
 
 void _DkPrintConsole (const void * buf, int size);
-int printf  (const char  *fmt, ...);
+int printf  (const char  *fmt, ...) __attribute__((format (printf, 1, 2)));
 #include <stdarg.h>
-int vprintf(const char * fmt, va_list *ap);
+int vprintf(const char * fmt, va_list *ap) __attribute__((format (printf, 1, 0)));
 void write_log (int nstrs, ...);
 
 static inline void log_stream (const char * uri)
@@ -427,6 +437,12 @@ static inline void log_stream (const char * uri)
 
     if (logging)
         write_log(2, uri, "\n");
+}
+
+/* errval is negative value. see PAL_STRERROR */
+static inline void print_error(const char * errstring, int errval)
+{
+    printf("%s (%s)\n", errstring, PAL_STRERROR(errval));
 }
 
 #endif

@@ -214,7 +214,7 @@ nextfs_hdl_get_client(struct shim_handle *hdl)
     client = mdata->client;
     RHO_ASSERT(client != NULL);
 
-    debug("nextfs_mdata debug_cookie=%lu\n", mdata->debug_cookie);
+    debug("nextfs_mdata debug_cookie=%u\n", mdata->debug_cookie);
     return (client);
 }
 
@@ -234,7 +234,7 @@ nextfs_dentry_get_client(struct shim_dentry *dentry)
     client = mdata->client;
     RHO_ASSERT(client != NULL);
 
-    debug("nextfs_mdata debug_cookie=%lu\n", mdata->debug_cookie);
+    debug("nextfs_mdata debug_cookie=%u\n", mdata->debug_cookie);
     return (client);
 }
 
@@ -285,8 +285,10 @@ nextfs_marshal_str(struct rho_buf *buf, const char *s)
 static void
 nextfs_pmarshal_hdr(struct rho_buf *buf, uint32_t op, uint32_t bodylen)
 {
+    RHO_TRACE_ENTER("op=%u, bodylen=%u", op, bodylen);
     rho_buf_pwriteu32be_at(buf, op, 0);
     rho_buf_pwriteu32be_at(buf, bodylen, 4);
+    RHO_TRACE_EXIT();
 }
 
 static void
@@ -356,7 +358,7 @@ nextfs_client_request(struct nextfs_client *client,
     struct rho_sock *sock = client->sock;
     struct rho_buf *buf = client->buf;
 
-    debug("> nextfs_client_request\n");
+    RHO_TRACE_ENTER("buffer length: %lu\n", rho_buf_length(client->buf));
 
     n = rho_sock_sendn_buf(sock, buf, rho_buf_length(buf));
     if (n == -1) {
@@ -364,7 +366,7 @@ nextfs_client_request(struct nextfs_client *client,
         goto done;
     }
 
-    debug("receiving nextfs header\n");
+    //debug("receiving nextfs header\n");
 
     rho_buf_clear(buf);
     n = rho_sock_precvn_buf(sock, buf, 8);
@@ -373,13 +375,13 @@ nextfs_client_request(struct nextfs_client *client,
         goto done;
     }
 
-    debug("demarshaling nextfs header (n=%ld)\n", n);
+    //debug("demarshaling nextfs header (n=%ld)\n", n);
 
     nextfs_demarshal_hdr(buf, status, bodylen);
     if (*bodylen > 0) {
         rho_buf_clear(buf);
-        debug("response status=%u, len=%u\n", *status, *bodylen);
-        debug("receiving nextfs body\n");
+        //debug("response status=%u, len=%u\n", *status, *bodylen);
+        //debug("receiving nextfs body\n");
         n = rho_sock_precvn_buf(sock, buf, *bodylen);
         if (n == -1) {
             error = -1;
@@ -388,7 +390,7 @@ nextfs_client_request(struct nextfs_client *client,
     }
 
 done:
-    debug("< nextfs_client_request\n");
+    RHO_TRACE_EXIT();
     return (error);
 }
 
@@ -1290,7 +1292,7 @@ nextfs_mode(struct shim_dentry *dent, mode_t *mode, bool force)
     
 done:
     rho_buf_clear(buf);
-    debug("< nextfs_mode (error=%d, mode=%08x)\n", error, mode);
+    debug("< nextfs_mode (error=%d, mode=%08x)\n", error, *mode);
     return (error);
 }
 

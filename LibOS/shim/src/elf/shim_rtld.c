@@ -274,12 +274,12 @@ struct link_map * new_elf_object (const char * realname, int type)
 }
 
 #include <endian.h>
-#if BYTE_ORDER == BIG_ENDIAN
+#if __BYTE_ORDER == __BIG_ENDIAN
 # define byteorder ELFDATA2MSB
-#elif BYTE_ORDER == LITTLE_ENDIAN
+#elif __BYTE_ORDER == __LITTLE_ENDIAN
 # define byteorder ELFDATA2LSB
 #else
-# error "Unknown BYTE_ORDER " BYTE_ORDER
+# error "Unknown __BYTE_ORDER " __BYTE_ORDER
 # define byteorder ELFDATANONE
 #endif
 
@@ -366,21 +366,20 @@ __map_elf_object (struct shim_handle * file,
     if (file && (!read || !mmap || !seek))
         return NULL;
 
-    struct link_map * l = remap ? :
+    struct link_map * l = remap ? remap :
                           new_elf_object(file ? (!qstrempty(&file->path) ?
                                          qstrgetstr(&file->path) :
                                          qstrgetstr(&file->uri)) : "", type);
 
+    if (!l)
+        return NULL;
+
     const char * errstring __attribute__((unused)) = NULL;
-    int errval = 0;
     int ret;
 
     if (type != OBJECT_INTERNAL && !file) {
         errstring = "shared object has to be backed by file";
-        errval = -EINVAL;
-call_lose:
-        debug("loading %s: %s\n", l->l_name, errstring);
-        return NULL;
+        goto call_lose;
     }
 
     /* Scan the program header table, collecting its load commands.  */
@@ -404,10 +403,14 @@ call_lose:
     if (type == OBJECT_LOAD &&
         header->e_phoff + maplength <= (size_t) fbp_len) {
         ElfW(Phdr) * new_phdr = (ElfW(Phdr) *) malloc (maplength);
+        if (!new_phdr) {
+            errstring = "new_phdr malloc failure";
+            goto call_lose;
+        }
         if ((ret = (*seek) (file, header->e_phoff, SEEK_SET)) < 0 ||
             (ret = (*read) (file, new_phdr, maplength)) < 0) {
             errstring = "cannot read file data";
-            errval = ret;
+            free(new_phdr);
             goto call_lose;
         }
         phdr = new_phdr;
@@ -440,7 +443,6 @@ call_lose:
                    We record the load commands and process them all later.  */
                 if (__builtin_expect (!ALIGNED(ph->p_align), 0)) {
                     errstring = "ELF load command alignment not page-aligned";
-                    errval = ENOMEM;
                     goto call_lose;
                 }
 
@@ -448,13 +450,11 @@ call_lose:
                                        & (ph->p_align - 1)) != 0, 0)) {
                     errstring = "\
                         ELF load command address/offset not properly aligned";
-                    errval = ENOMEM;
                     goto call_lose;
                 }
 
                 if (l->nloadcmds >= MAX_LOADCMDS) {
                     errstring = "too many load commamds";
-                    errval = -EINVAL;
                     goto call_lose;
                 }
 
@@ -529,10 +529,10 @@ call_lose:
                                         file, c->mapoff, NULL);
 
             /* Remember which part of the address space this object uses.  */
-            errval = (*mmap) (file, (void **) &mappref, ALIGN_UP(maplength),
+            ret = (*mmap) (file, (void **) &mappref, ALIGN_UP(maplength),
                               c->prot, c->flags|MAP_PRIVATE, c->mapoff);
 
-            if (__builtin_expect (errval < 0, 0)) {
+            if (__builtin_expect (ret < 0, 0)) {
 map_error:
                 errstring = "failed to map segment from shared object";
                 goto call_lose;
@@ -723,6 +723,14 @@ postmap:
     setup_elf_hash(l);
 
     return l;
+
+call_lose:
+    debug("loading %s: %s\n", l->l_name, errstring);
+    if (l != remap) {
+        /* l was allocated via new_elf_object() */
+        free(l);
+    }
+    return NULL;
 }
 
 static inline
@@ -790,7 +798,7 @@ static int __remove_elf_object (struct link_map * l)
 
 static int __free_elf_object (struct link_map * l)
 {
-    debug("removing %s as runtime object loaded at %p\n", l->l_name,
+    debug("removing %s as runtime object loaded at 0x%08lx\n", l->l_name,
           l->l_map_start);
 
     struct loadcmd *c = l->loadcmds;
@@ -875,7 +883,7 @@ static int __check_elf_header (void * fbp, int len)
 
     /* Check whether the ELF header use the right endian */
     if (ehdr->e_ident[EI_DATA] != byteorder) {
-        if (BYTE_ORDER == BIG_ENDIAN) {
+        if (__BYTE_ORDER == __BIG_ENDIAN) {
             errstring = "ELF file data encoding not big-endian";
             goto verify_failed;
         } else {
@@ -1035,7 +1043,7 @@ static int __load_elf_object (struct shim_handle * file, void * addr,
                               int type, struct link_map * remap)
 {
     char * hdr = addr;
-    int len, ret = 0;
+    int len = 0, ret = 0;
 
     if (type == OBJECT_LOAD || type == OBJECT_REMAP) {
         hdr = __alloca(FILEBUF_SIZE);
@@ -1096,7 +1104,7 @@ int reload_elf_object (struct shim_handle * file)
     if (!map)
         return -ENOENT;
 
-    debug("reloading %s as runtime object loaded at %p-%p\n",
+    debug("reloading %s as runtime object loaded at 0x%08lx-0x%08lx\n",
           qstrgetstr(&file->uri), map->l_map_start, map->l_map_end);
 
     return __load_elf_object(file, NULL, OBJECT_REMAP, map);
@@ -1264,7 +1272,7 @@ static int do_lookup (const char * undef_name, ElfW(Sym) * ref,
     sym = do_lookup_map(ref, undef_name, fast_hash, hash, internal_map);
 
     if (!sym)
-        return 0;;
+        return 0;
 
     switch (__builtin_expect (ELFW(ST_BIND) (sym->st_info), STB_GLOBAL)) {
         case STB_WEAK:
@@ -1534,7 +1542,7 @@ int init_brk_from_executable (struct shim_handle * exec)
 
 int register_library (const char * name, unsigned long load_address)
 {
-    debug("glibc register library %s loaded at %p\n",
+    debug("glibc register library %s loaded at 0x%08lx\n",
           name, load_address);
 
     struct shim_handle * hdl = get_new_handle();
@@ -1553,11 +1561,14 @@ int register_library (const char * name, unsigned long load_address)
     return 0;
 }
 
-int execute_elf_object (struct shim_handle * exec, int argc, const char ** argp,
-                        int nauxv, ElfW(auxv_t) * auxp)
+void execute_elf_object (struct shim_handle * exec,
+                         int * argcp, const char ** argp,
+                         int nauxv, ElfW(auxv_t) * auxp)
 {
     struct link_map * exec_map = __search_map_by_handle(exec);
     assert(exec_map);
+    assert((uintptr_t)argcp % 16 == 0);  // Stack should be aligned to 16 on entry point.
+    assert((void*)argcp + sizeof(long) == argp || argp == NULL);
 
     auxp[0].a_type = AT_PHDR;
     auxp[0].a_un.a_val = (__typeof(auxp[0].a_un.a_val)) exec_map->l_phdr;
@@ -1574,26 +1585,22 @@ int execute_elf_object (struct shim_handle * exec, int argc, const char ** argp,
     ElfW(Addr) entry = interp_map ? interp_map->l_entry : exec_map->l_entry;
 
     /* Ready to start execution, re-enable preemption. */
-    shim_tcb_t * tcb = SHIM_GET_TLS();
+    shim_tcb_t * tcb = shim_get_tls();
     __enable_preempt(tcb);
 
 #if defined(__x86_64__)
-    asm volatile (
-                    "movq %%rbx, %%rsp\r\n"
-                    "pushq %%rdi\r\n"
-                    "jmp *%%rax\r\n"
-
-                    :
-                    : "a"(entry),
-                    "b"(argp),
-                    "D"(argc)
-
-                    : "memory");
+    __asm__ volatile ("pushq $0\r\n"
+                      "popfq\r\n"
+                      "movq %%rbx, %%rsp\r\n"
+                      "jmp *%%rax\r\n"
+                      :
+                      : "a"(entry),
+                        "b"(argcp),
+                        "d"(0)
+                      : "memory", "cc");
 #else
 # error "architecture not supported"
 #endif
-    shim_do_exit(0);
-    return 0;
 }
 
 BEGIN_CP_FUNC(library)
@@ -1620,7 +1627,7 @@ BEGIN_CP_FUNC(library)
             DO_CP_MEMBER(handle, map, new_map, l_file);
 
         if (map->l_ld) {
-            int size = sizeof(ElfW(Dyn)) * map->l_ldnum;
+            size_t size = sizeof(ElfW(Dyn)) * map->l_ldnum;
             ElfW(Dyn) * ld = (void *) (base + ADD_CP_OFFSET(size));
             memcpy(ld, map->l_ld, size);
             new_map->l_ld = ld;
@@ -1634,14 +1641,14 @@ BEGIN_CP_FUNC(library)
         }
 
         if (map->l_name) {
-            int namelen = strlen(map->l_name);
+            size_t namelen = strlen(map->l_name);
             char * name = (char *) (base + ADD_CP_OFFSET(namelen + 1));
             memcpy(name, map->l_name, namelen + 1);
             new_map->l_name = name;
         }
 
         if (map->l_soname) {
-            int sonamelen = strlen(map->l_soname);
+            size_t sonamelen = strlen(map->l_soname);
             char * soname = (char *) (base + ADD_CP_OFFSET(sonamelen + 1));
             memcpy(soname, map->l_soname, sonamelen + 1);
             new_map->l_soname = soname;
@@ -1698,7 +1705,7 @@ BEGIN_RS_FUNC(library)
 
     SAVE_PROFILE_INTERVAL(add_or_replace_library);
 
-    DEBUG_RS("base=%p,name=%s", map->l_addr, map->l_name);
+    DEBUG_RS("base=0x%08lx,name=%s", map->l_addr, map->l_name);
 }
 END_RS_FUNC(library)
 
@@ -1717,7 +1724,7 @@ BEGIN_CP_FUNC(loaded_libraries)
         map = map->l_next;
     }
 
-    ADD_CP_FUNC_ENTRY(new_interp_map);
+    ADD_CP_FUNC_ENTRY((ptr_t)new_interp_map);
 }
 END_CP_FUNC(loaded_libraries)
 

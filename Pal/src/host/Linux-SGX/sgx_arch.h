@@ -30,7 +30,7 @@ typedef uint8_t sgx_arch_key_t [384];
 typedef uint8_t sgx_arch_hash_t[32];
 typedef uint8_t sgx_arch_mac_t [16];
 // This if for passing a mac to hex2str
-#define MACBUF_SIZE ((sizeof(sgx_arch_mac_t)*2)+1) 
+#define MACBUF_SIZE ((sizeof(sgx_arch_mac_t)*2)+1)
 
 typedef struct {
     uint64_t flags, xfrm;
@@ -101,10 +101,8 @@ typedef struct {
     uint64_t urbp;
     uint32_t exitinfo;
     uint32_t reserved;
-#if SGX_HAS_FSGSBASE == 1
     uint64_t fsbase;
     uint64_t gsbase;
-#endif
 } sgx_arch_gpr_t;
 
 typedef struct {
@@ -127,6 +125,13 @@ typedef struct {
     uint64_t rflags;
     uint64_t rip;
 } sgx_context_t;
+
+// Required by _restore_sgx_context, see enclave_entry.S.
+_Static_assert(offsetof(sgx_context_t, rip) - offsetof(sgx_context_t, rflags) ==
+               sizeof(((sgx_context_t) {0}).rflags),
+               "rip must be directly after rflags in sgx_context_t");
+_Static_assert(offsetof(sgx_context_t, rflags) - offsetof(sgx_context_t, rdi) <= RED_ZONE_SIZE,
+               "rdi needs to be within red zone distance from rflags");
 
 typedef struct {
     uint32_t vector:8;
@@ -274,33 +279,11 @@ typedef uint8_t sgx_arch_key128_t[16] __attribute__((aligned(16)));
 #define KEYPOLICY_MRENCLAVE     1
 #define KEYPOLICY_MRSIGNER      2
 
-#define SGX_GPR_RAX             0x00
-#define SGX_GPR_RCX             0x08
-#define SGX_GPR_RDX             0x10
-#define SGX_GPR_RBX             0x18
-#define SGX_GPR_RSP             0x20
-#define SGX_GPR_RBP             0x28
-#define SGX_GPR_RSI             0x30
-#define SGX_GPR_RDI             0x38
-#define SGX_GPR_R8              0x40
-#define SGX_GPR_R9              0x48
-#define SGX_GPR_R10             0x50
-#define SGX_GPR_R11             0x58
-#define SGX_GPR_R12             0x60
-#define SGX_GPR_R13             0x68
-#define SGX_GPR_R14             0x70
-#define SGX_GPR_R15             0x78
-#define SGX_GPR_RFLAGS          0x80
-#define SGX_GPR_RIP             0x88
-#define SGX_GPR_EXITINFO        0xa0
-
-#define TCS_SIZE    4096
-#define TCS_SHIFT   12
-
 #define XSAVE_SIZE  512
 
 #define STACK_ALIGN 0xfffffffffffffff0
 #define XSAVE_ALIGN 0xffffffffffffffc0
+#define XSAVE_NON_FX_MASK 0xfffffffffffffffc
 
 #define RETURN_FROM_OCALL 0xffffffffffffffff
 

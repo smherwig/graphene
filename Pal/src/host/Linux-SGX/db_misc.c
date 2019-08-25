@@ -46,36 +46,19 @@ unsigned long _DkSystemTimeQuery (void)
 
 int _DkRandomBitsRead (void * buffer, int size)
 {
-    int i = 0;
-
-    for ( ; i < size ; i += 4) {
-        uint32_t rand = rdrand();
-
-        if (i + 4 <= size) {
-            *(uint32_t *)(buffer + i) = rand;
-        } else {
-            switch (size - i) {
-                case 3:
-                    *(uint16_t *)(buffer + i) = rand & 0xffff;
-                    i += 2;
-                    rand >>= 16;
-                case 1:
-                    *(uint8_t *)(buffer + i) = rand & 0xff;
-                    i++;
-                    break;
-                case 2:
-                    *(uint16_t *)(buffer + i) = rand & 0xffff;
-                    i += 2;
-                    break;
-            }
-            break;
-        }
+    uint32_t rand;
+    for (int i = 0; i < size; i += sizeof(rand)) {
+        rand = rdrand();
+        memcpy(buffer + i, &rand, MIN(sizeof(rand), size - i));
     }
-    return i;
+    return 0;
 }
 
 int _DkInstructionCacheFlush (const void * addr, int size)
 {
+    __UNUSED(addr);
+    __UNUSED(size);
+
     return -PAL_ERROR_NOTIMPLEMENTED;
 }
 
@@ -194,7 +177,7 @@ int _DkCpuIdRetrieve (unsigned int leaf, unsigned int subleaf,
     if (!get_cpuid_from_cache(leaf, subleaf, values))
         return 0;
 
-    if (ocall_cpuid(leaf, subleaf, values) < 0)
+    if (IS_ERR(ocall_cpuid(leaf, subleaf, values)))
         return -PAL_ERROR_DENIED;
 
     add_cpuid_to_cache(leaf, subleaf, values);

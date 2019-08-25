@@ -28,6 +28,7 @@
 #include "pal.h"
 #include "pal_internal.h"
 #include "pal_linux.h"
+#include "pal_linux_error.h"
 #include "pal_error.h"
 #include "pal_debug.h"
 #include "api.h"
@@ -76,14 +77,16 @@ void pal_start_thread (void)
     free(thread_param);
     new_thread->param = NULL;
     SET_ENCLAVE_TLS(thread, new_thread);
+    SET_ENCLAVE_TLS(ready_for_exceptions, 1UL);
     callback((void *) param);
+    _DkThreadExit();
 }
 
 /* _DkThreadCreate for internal use. Create an internal thread
    inside the current process. The arguments callback and param
    specify the starting function and parameters */
 int _DkThreadCreate (PAL_HANDLE * handle, int (*callback) (void *),
-                     const void * param, int flags)
+                     const void * param)
 {
     PAL_HANDLE new_thread = malloc(HANDLE_SIZE(thread));
     SET_HANDLE_TYPE(new_thread, thread);
@@ -99,8 +102,8 @@ int _DkThreadCreate (PAL_HANDLE * handle, int (*callback) (void *),
     _DkInternalUnlock(&thread_list_lock);
 
     int ret = ocall_wake_thread(NULL);
-    if (ret < 0)
-        return ret;
+    if (IS_ERR(ret))
+        return unix_to_pal_error(ERRNO(ret));
 
     *handle = new_thread;
     return 0;
@@ -108,7 +111,8 @@ int _DkThreadCreate (PAL_HANDLE * handle, int (*callback) (void *),
 
 int _DkThreadDelayExecution (unsigned long * duration)
 {
-    return ocall_sleep(duration);
+    int ret = ocall_sleep(duration);
+    return IS_ERR(ret) ? unix_to_pal_error(ERRNO(ret)) : ret;
 }
 
 /* PAL call DkThreadYieldExecution. Yield the execution
@@ -126,7 +130,8 @@ void _DkThreadExit (void)
 
 int _DkThreadResume (PAL_HANDLE threadHandle)
 {
-    return ocall_wake_thread(threadHandle->thread.tcs);
+    int ret = ocall_wake_thread(threadHandle->thread.tcs);
+    return IS_ERR(ret) ? unix_to_pal_error(ERRNO(ret)) : ret;
 }
 
 int _DkThreadGetCurrent (PAL_HANDLE * threadHandle)

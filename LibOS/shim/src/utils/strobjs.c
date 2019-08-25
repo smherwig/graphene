@@ -26,7 +26,7 @@
 #include <shim_internal.h>
 #include <shim_utils.h>
 
-static LOCKTYPE str_mgr_lock;
+static struct shim_lock str_mgr_lock;
 
 #define system_lock()       lock(str_mgr_lock)
 #define system_unlock()     unlock(str_mgr_lock)
@@ -57,7 +57,7 @@ int free_str_obj (struct shim_str * str)
     if (str == NULL)
         return 0;
 
-    if (MEMORY_MIGRATED(str)) {
+    if (memory_migrated(str)) {
         memset(str, 0, sizeof(struct shim_str));
         return 0;
     }

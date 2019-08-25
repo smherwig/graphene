@@ -68,7 +68,7 @@ int thread_exit(struct shim_thread * self, bool send_ipc)
     int exit_code = self->exit_code;
     self->is_alive = false;
 
-    if (IS_INTERNAL(self))
+    if (is_internal(self))
         goto out;
 
     struct shim_handle_map * handle_map = self->handle_map;
@@ -142,10 +142,24 @@ int try_process_exit (int error_code, int term_signal)
     if (check_last_thread(cur_thread))
         return 0;
 
-    terminate_async_helper();
+    struct shim_thread * async_thread = terminate_async_helper();
+    if (async_thread)
+        /* TODO: wait for the thread to exit in host.
+         * This is tracked by the following issue.
+         * https://github.com/oscarlab/graphene/issues/440
+         */
+        put_thread(async_thread); /* free resources of the thread */
 
-    if (!exit_with_ipc_helper(true))
-        shim_clean();
+    struct shim_thread * ipc_thread;
+    int ret = exit_with_ipc_helper(true, &ipc_thread);
+    if (ipc_thread)
+        /* TODO: wait for the thread to exit in host.
+         * This is tracked by the following issue.
+         * https://github.com/oscarlab/graphene/issues/440
+         */
+        put_thread(ipc_thread); /* free resources of the thread */
+    if (!ret)
+        shim_clean(ret);
     else
         DkThreadExit();
 
@@ -156,7 +170,7 @@ int shim_do_exit_group (int error_code)
 {
     INC_PROFILE_OCCURENCE(syscall_use_ipc);
     struct shim_thread * cur_thread = get_cur_thread();
-    assert(!IS_INTERNAL(cur_thread));
+    assert(!is_internal(cur_thread));
 
     if (debug_handle)
         sysparser_printf("---- shim_exit_group (returning %d)\n", error_code);
@@ -182,11 +196,11 @@ int shim_do_exit_group (int error_code)
     return 0;
 }
 
-int shim_do_exit (int error_code)
+__attribute__((noreturn)) int shim_do_exit (int error_code)
 {
     INC_PROFILE_OCCURENCE(syscall_use_ipc);
     struct shim_thread * cur_thread = get_cur_thread();
-    assert(!IS_INTERNAL(cur_thread));
+    assert(!is_internal(cur_thread));
 
     if (debug_handle)
         sysparser_printf("---- shim_exit (returning %d)\n", error_code);
@@ -205,5 +219,4 @@ int shim_do_exit (int error_code)
 #endif
 
     DkThreadExit();
-    return 0;
 }

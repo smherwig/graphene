@@ -27,15 +27,14 @@
 #include "inner.h"
 
 #if BR_GRAPHENE
-/* from shim_utils.h */
-void getrand(void *buffer, size_t size);
+uint64_t DkRandomBitsRead(void * buffer, uint64_t size);
 
 static int
 seeder_graphene(const br_prng_class **ctx)
 {
 	unsigned char tmp[32];
 
-    getrand(tmp, sizeof(tmp));
+    DkRandomBitsRead(tmp, sizeof(tmp));
 		
     (*ctx)->update(ctx, tmp, sizeof(tmp));
 	return 1;

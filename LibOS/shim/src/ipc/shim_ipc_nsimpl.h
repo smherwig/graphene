@@ -31,6 +31,15 @@
 
 #include <errno.h>
 
+#ifndef INCLUDE_IPC_NSIMPL
+# warning "Be sure before including \"shim_ipc_nsimpl.h\"."
+#endif
+
+#ifdef __SHIM_IPC_NSIMPL__
+# error "Include \"shim_ipc_nsimpl.h\" only once."
+#endif
+#define __SHIM_IPC_NSIMPL__
+
 #if !defined(NS) || !defined(NS_CAP)
 # error "NS or NS_CAP is not defined"
 #endif
@@ -71,8 +80,9 @@ struct range_bitmap {
     unsigned char       map[];
 };
 
+/* Helper functions __*_range_*() must be called with range_map_lock held */
 static struct range_bitmap * range_map;
-static LOCKTYPE range_map_lock;
+static struct shim_lock range_map_lock;
 
 #define RANGE_HASH_LEN      6
 #define RANGE_HASH_NUM      (1 << RANGE_HASH_LEN)
@@ -82,7 +92,7 @@ static LOCKTYPE range_map_lock;
 /* This hash table organizes range structs by hlist */
 DEFINE_LISTP(range);
 static LISTP_TYPE(range) range_table [RANGE_HASH_NUM];
-/* These lists organizes range structs by list 
+/* These lists organizes range structs by list
  */
 static LISTP_TYPE(range) owned_ranges;
 static LISTP_TYPE(range) offered_ranges;
@@ -140,7 +150,7 @@ void CONCAT3(debug_print, NS, ranges) (void)
             IDTYPE base = RANGE_SIZE * off + 1;
             struct shim_ipc_info * p = r->owner;
 
-            sys_printf("%04u - %04u: owner %010u, port \"%s\" lease %u\n",
+            sys_printf("%04u - %04u: owner %010u, port \"%s\" lease %lu\n",
                        base, base + RANGE_SIZE - 1,
                        p->vmid, qstrgetstr(&p->uri), r->lease);
 
@@ -153,7 +163,7 @@ void CONCAT3(debug_print, NS, ranges) (void)
                     continue;
 
                 p = s->owner;
-                sys_printf("   %04u: owner %010u, port \"%s\" lease %u\n",
+                sys_printf("   %04u: owner %010u, port \"%s\" lease %lu\n",
                            base + k, p->vmid,
                            qstrgetstr(&p->uri), s->lease);
             }
@@ -275,10 +285,13 @@ static int __add_range (struct range * r, int off, IDTYPE owner,
                 /* Chia-Che Tsai 10/17/17: only when tmp->owner is non-NULL,
                  * and tmp->owner->vmid == cur_process.vmid, tmp is on the
                  * owned list, otherwise it is an offered. */
-                if (tmp->owner && tmp->owner->vmid == cur_process.vmid)
+                if (tmp->owner && tmp->owner->vmid == cur_process.vmid) {
                     listp_del(tmp, &owned_ranges, list);
-                else
+                    nowned--;
+                } else {
                     listp_del(tmp, &offered_ranges, list);
+                    noffered--;
+                }
 
                 if (tmp->owner)
                     put_client(tmp->owner);
@@ -515,25 +528,24 @@ int CONCAT3(del, NS, range) (IDTYPE idx)
     if (!r)
         goto failed;
 
-    ret = __set_range_bitmap(off, true);
-    if (ret < 0)
-        goto failed;
-
     if (r->subranges) {
         for (int i = 0 ; i < RANGE_SIZE ; i++)
             if (r->subranges->map[i]) {
                 ret = -EBUSY;
                 goto failed;
             }
-
-        free(r->subranges);
     }
+    ret = __set_range_bitmap(off, true);
+    if (ret < 0)
+        goto failed;
 
     if (r->owner->vmid == cur_process.vmid)
         nowned--;
     else
         noffered--;
 
+    if (r->subranges)
+        free(r->subranges);
     if (r->used)
         free(r->used);
     // Re-acquire the head; kind of ugly
@@ -827,7 +839,7 @@ out:
 
 static int connect_ns (IDTYPE * vmid, struct shim_ipc_port ** portptr)
 {
-    __discover_ns(true, false); // Should not hold cur_process.lock
+    __discover_ns(true, false); // This function cannot be called with cur_process.lock held
     lock(cur_process.lock);
 
     if (!NS_LEADER) {
@@ -896,7 +908,7 @@ int CONCAT3(prepare, NS, leader) (void)
     unlock(cur_process.lock);
 
     if (need_discover)
-        __discover_ns(true, true); // Should not hold cur_process.lock
+        __discover_ns(true, true); // This function cannot be called with cur_process.lock held
     return 0;
 }
 
@@ -1014,7 +1026,7 @@ int NS_CALLBACK(findns) (IPC_CALLBACK_ARGS)
           msg->src);
 
     int ret = 0;
-    __discover_ns(false, true); // Non-blocking discovery; should not hold cur_process.lock
+    __discover_ns(false, true); // This function cannot be called with cur_process.lock held
     lock(cur_process.lock);
 
     if (NS_LEADER && !qstrempty(&NS_LEADER->uri)) {
@@ -1261,7 +1273,7 @@ int NS_SEND(renew) (IDTYPE base, IDTYPE size)
     msgin->base = base;
     msgin->size = size;
 
-    debug("ipc send to %u: " NS_CODE_STR(RENEW) "(%u, %u)\n", base, size);
+    debug("ipc send to : " NS_CODE_STR(RENEW) "(%u, %u)\n", base, size);
     ret = send_ipc_message(msg, port);
     put_ipc_port(port);
 out:
@@ -1737,7 +1749,7 @@ int CONCAT2(NS, add_key) (NS_KEY * key, IDTYPE id)
     INIT_LIST_HEAD(k, hlist);
     listp_add(k, head, hlist);
 
-    debug("add key/id pair (%u, %u) to hash list: %p\n",
+    debug("add key/id pair (%lu, %u) to hash list: %p\n",
           KEY_HASH(key), id, head);
     ret = 0;
 out:
@@ -1797,7 +1809,7 @@ int NS_SEND(findkey) (NS_KEY * key)
     NS_MSG_TYPE(findkey) * msgin = (void *) &msg->msg.msg;
     KEY_COPY(&msgin->key, key);
 
-    debug("ipc send to %u: " NS_CODE_STR(FINDKEY) "(%u)\n",
+    debug("ipc send to %u: " NS_CODE_STR(FINDKEY) "(%lu)\n",
           dest, KEY_HASH(key));
 
     ret = do_ipc_duplex(msg, port, NULL, NULL);
@@ -1816,7 +1828,7 @@ int NS_CALLBACK(findkey) (IPC_CALLBACK_ARGS)
     int ret = 0;
     NS_MSG_TYPE(findkey) * msgin  = (void *) &msg->msg;
 
-    debug("ipc callback from %u: " NS_CODE_STR(FINDKEY) "(%u)\n",
+    debug("ipc callback from %u: " NS_CODE_STR(FINDKEY) "(%lu)\n",
           msg->src, KEY_HASH(&msgin->key));
 
     ret = CONCAT2(NS, get_key)(&msgin->key, false);
@@ -1862,7 +1874,7 @@ int NS_SEND(tellkey) (struct shim_ipc_port * port, IDTYPE dest, NS_KEY * key,
         msgin->id = id;
         msg->seq  = seq;
 
-        debug("ipc send to %u: IPC_SYSV_TELLKEY(%u, %u)\n", dest,
+        debug("ipc send to %u: IPC_SYSV_TELLKEY(%lu, %u)\n", dest,
               KEY_HASH(key), id);
 
         ret = send_ipc_message(msg, port);
@@ -1877,7 +1889,7 @@ int NS_SEND(tellkey) (struct shim_ipc_port * port, IDTYPE dest, NS_KEY * key,
     KEY_COPY(&msgin->key, key);
     msgin->id = id;
 
-    debug("ipc send to %u: IPC_SYSV_TELLKEY(%u, %u)\n", dest,
+    debug("ipc send to %u: IPC_SYSV_TELLKEY(%lu, %u)\n", dest,
           KEY_HASH(key), id);
 
     ret = do_ipc_duplex(msg, port, NULL, NULL);
@@ -1893,7 +1905,7 @@ int NS_CALLBACK(tellkey) (IPC_CALLBACK_ARGS)
     int ret = 0;
     NS_MSG_TYPE(tellkey) * msgin = (void *) &msg->msg;
 
-    debug("ipc callback from %u: " NS_CODE_STR(TELLKEY) "(%u, %u)\n",
+    debug("ipc callback from %u: " NS_CODE_STR(TELLKEY) "(%lu, %u)\n",
           msg->src, KEY_HASH(&msgin->key), msgin->id);
 
     ret = CONCAT2(NS, add_key)(&msgin->key, msgin->id);

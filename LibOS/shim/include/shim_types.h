@@ -22,6 +22,7 @@
 #include <linux/aio_abi.h>
 #include <linux/perf_event.h>
 #include <linux/timex.h>
+#include <linux/version.h>
 
 #include <asm/posix_types.h>
 #include <asm/statfs.h>
@@ -36,8 +37,13 @@ typedef unsigned int        __u32;
 typedef unsigned long int   nfds_t;
 typedef unsigned long int   nlink_t;
 
+typedef uint32_t            socklen_t;
+typedef __kernel_uid_t      uid_t;
+typedef __kernel_gid_t      gid_t;
+typedef __kernel_pid_t      pid_t;
 typedef __kernel_caddr_t    caddr_t;
 typedef __kernel_mode_t     mode_t;
+typedef __kernel_off_t      off_t;
 typedef __kernel_loff_t     loff_t;
 typedef __kernel_time_t     time_t;
 typedef __kernel_old_dev_t  dev_t;
@@ -48,19 +54,21 @@ typedef __kernel_timer_t    timer_t;
 typedef __kernel_fd_set     fd_set;
 
 /* linux/time.h */
+#if LINUX_VERSION_CODE < KERNEL_VERSION(4, 18, 0)
 struct __kernel_timespec {
     __kernel_time_t tv_sec;         /* seconds */
     long            tv_nsec;        /* nanoseconds */
 };
 
-struct __kernel_timeval {
-    __kernel_time_t         tv_sec;         /* seconds */
-    __kernel_suseconds_t    tv_usec;        /* microsecond */
-};
-
 struct __kernel_itimerspec {
     struct __kernel_timespec it_interval;    /* timer period */
     struct __kernel_timespec it_value;       /* timer expiration */
+};
+#endif
+
+struct __kernel_timeval {
+    __kernel_time_t         tv_sec;         /* seconds */
+    __kernel_suseconds_t    tv_usec;        /* microsecond */
 };
 
 struct __kernel_itimerval {
@@ -315,6 +323,8 @@ typedef struct ucontext {
     struct _libc_fpstate __fpregs_mem;
 } ucontext_t;
 
+#define RED_ZONE_SIZE   128
+
 /* bits/ustat.h */
 struct __kernel_ustat
   {
@@ -466,10 +476,10 @@ typedef struct atomic_int REFTYPE;
 
 #include <pal.h>
 
-typedef struct shim_lock {
+struct shim_lock {
     PAL_HANDLE lock;
     IDTYPE owner;
-} LOCKTYPE;
+};
 
 typedef struct shim_aevent {
     PAL_HANDLE event;

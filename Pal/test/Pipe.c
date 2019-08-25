@@ -12,13 +12,17 @@ int main (int argc, char ** argv)
     unsigned long pipeid;
     char uri[40];
 
-    DkRandomBitsRead(&pipeid, sizeof(unsigned long));
+    int ret = DkRandomBitsRead(&pipeid, sizeof(unsigned long));
+    if (ret < 0) {
+        pal_printf("DkRandomBitsRead() failed\n");
+        return -1;
+    }
     pipeid = pipeid % 1024;
 
     snprintf(uri, 40, "pipe.srv:%d", pipeid);
 
     PAL_HANDLE srv = DkStreamOpen(uri, 0, 0,
-                                  PAL_CREAT_TRY|PAL_CREAT_ALWAYS, 0);
+                                  PAL_CREATE_TRY|PAL_CREATE_ALWAYS, 0);
 
     if (!srv) {
         pal_printf("not able to create server (%s)\n", uri);
@@ -28,7 +32,7 @@ int main (int argc, char ** argv)
     snprintf(uri, 40, "pipe:%d", pipeid);
 
     PAL_HANDLE cli = DkStreamOpen(uri, PAL_ACCESS_RDWR, 0,
-                                  PAL_CREAT_TRY|PAL_CREAT_ALWAYS, 0);
+                                  PAL_CREATE_TRY|PAL_CREATE_ALWAYS, 0);
 
     if (!cli) {
         pal_printf("not able to create client\n");

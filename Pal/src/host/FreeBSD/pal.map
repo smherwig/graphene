@@ -1,7 +1,3 @@
-GLIBC {
-    global:
-        r_debug; r_debug_state;
-};
 PAL {
     global:
         # Drawbridge ABIs
@@ -21,7 +17,7 @@ PAL {
         DkSendHandle; DkReceiveHandle; # Added by us
         DkStreamWaitForClient;
         DkStreamGetName;
-        DkStreamAttributesQuerybyHandle; DkStreamAttributesQuery;
+        DkStreamAttributesQueryByHandle; DkStreamAttributesQuery;
 
         DkProcessCreate; DkProcessExit;
 
@@ -40,7 +36,7 @@ PAL {
         DkPhysicalMemoryMap; # IPC
         DkSegmentRegister; # set segmentation registers
         DkStreamChangeName;
-        DkStreamAttributesSetbyHandle;
+        DkStreamAttributesSetByHandle;
         DkMemoryAvailableQuota;
 
         # Debugging ABIs
@@ -49,5 +45,12 @@ PAL {
         # Control block
         pal_control_addr; pal_sec;
 
+        # debugger interface
+        r_debug;
+
     local: *;
+};
+PAL_PRIVATE {
+    global:
+        r_debug_state;
 };

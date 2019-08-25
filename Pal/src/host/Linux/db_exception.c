@@ -54,15 +54,13 @@
  *     }
  */
 
-void restore_rt (void) asm ("__restore_rt");
-
 #ifndef SA_RESTORER
 #define SA_RESTORER  0x04000000
 #endif
 
 #define DEFINE_RESTORE_RT(syscall) DEFINE_RESTORE_RT2(syscall)
 # define DEFINE_RESTORE_RT2(syscall)                \
-    asm (                                           \
+    __asm__ (                                       \
          "    nop\n"                                \
          ".align 16\n"                              \
          ".LSTART_restore_rt:\n"                    \
@@ -72,6 +70,11 @@ void restore_rt (void) asm ("__restore_rt");
          "    syscall\n");
 
 DEFINE_RESTORE_RT(__NR_rt_sigreturn)
+
+/* Workaround for an old GAS (2.27) bug that incorrectly
+ * omits relocations when referencing this symbol */
+__attribute__((visibility("hidden"))) void __restore_rt(void);
+
 #endif
 
 int set_sighandler (int * sigs, int nsig, void * handler)
@@ -83,9 +86,10 @@ int set_sighandler (int * sigs, int nsig, void * handler)
         action.sa_flags = SA_SIGINFO;
 #if !defined(__i386__)
         action.sa_flags |= SA_RESTORER;
-        action.sa_restorer = restore_rt;
+        action.sa_restorer = __restore_rt;
 #endif
     } else {
+        action.sa_flags = 0x0u;
         action.sa_handler = SIG_IGN;
     }
 
@@ -120,7 +124,7 @@ typedef struct {
 static int get_event_num (int signum)
 {
     switch(signum) {
-        case SIGFPE:                return PAL_EVENT_DIVZERO;
+        case SIGFPE:                return PAL_EVENT_ARITHMETIC_ERROR;
         case SIGSEGV: case SIGBUS:  return PAL_EVENT_MEMFAULT;
         case SIGILL:  case SIGSYS:  return PAL_EVENT_ILLEGAL;
         case SIGTERM:               return PAL_EVENT_QUIT;
@@ -130,8 +134,8 @@ static int get_event_num (int signum)
     }
 }
 
-void _DkGenericEventTrigger (PAL_IDX event_num, PAL_EVENT_HANDLER upcall,
-                             PAL_NUM arg, ucontext_t * uc)
+static void _DkGenericEventTrigger (PAL_IDX event_num, PAL_EVENT_HANDLER upcall,
+                                    PAL_NUM arg, ucontext_t * uc)
 {
     PAL_EVENT event;
     event.event_num = event_num;
@@ -152,7 +156,7 @@ static bool _DkGenericSignalHandle (int event_num, siginfo_t * info,
     if (upcall) {
         PAL_NUM arg = 0;
 
-        if (event_num == PAL_EVENT_DIVZERO ||
+        if (event_num == PAL_EVENT_ARITHMETIC_ERROR ||
             event_num == PAL_EVENT_MEMFAULT ||
             event_num == PAL_EVENT_ILLEGAL)
             arg = (PAL_NUM) (info ? info->si_addr : 0);
@@ -179,13 +183,13 @@ static void _DkGenericSighandler (int signum, siginfo_t * info,
         int tid = INLINE_SYSCALL(gettid, 0);
         const char * name = "exception";
         switch(event_num) {
-            case PAL_EVENT_DIVZERO:  name = "div-by-zero exception"; break;
-            case PAL_EVENT_MEMFAULT: name = "memory fault"; break;
-            case PAL_EVENT_ILLEGAL:  name = "illegal instruction"; break;
+            case PAL_EVENT_ARITHMETIC_ERROR: name = "arithmetic exception"; break;
+            case PAL_EVENT_MEMFAULT:         name = "memory fault"; break;
+            case PAL_EVENT_ILLEGAL:          name = "illegal instruction"; break;
         }
 
         printf("*** An unexpected %s occurred inside PAL. Exiting the thread. "
-               "(PID = %d, TID = %d, RIP = +%p) ***\n",
+               "(PID = %d, TID = %d, RIP = +0x%08lx) ***\n",
                name, pid, tid, rip - (uintptr_t) TEXT_START);
 
 #ifdef DEBUG
@@ -207,6 +211,8 @@ static void _DkGenericSighandler (int signum, siginfo_t * info,
 static void _DkTerminateSighandler (int signum, siginfo_t * info,
                                     struct ucontext * uc)
 {
+    __UNUSED(info);
+
     int event_num = get_event_num(signum);
     if (event_num == -1)
         return;
@@ -244,6 +250,9 @@ static void _DkTerminateSighandler (int signum, siginfo_t * info,
 static void _DkPipeSighandler (int signum, siginfo_t * info,
                                struct ucontext * uc)
 {
+    assert(signum == SIGPIPE);
+    __UNUSED(info);
+
     uintptr_t rip = uc->uc_mcontext.gregs[REG_RIP];
     assert(ADDR_IN_PAL(rip)); // This signal can only happens inside PAL
     return;
@@ -294,18 +303,18 @@ struct signal_ops {
 };
 
 struct signal_ops on_signals[] = {
-        [PAL_EVENT_DIVZERO]     = { .signum = { SIGFPE, 0 },
-                                    .handler = _DkGenericSighandler },
-        [PAL_EVENT_MEMFAULT]    = { .signum = { SIGSEGV, SIGBUS, 0 },
-                                    .handler = _DkGenericSighandler },
-        [PAL_EVENT_ILLEGAL]     = { .signum = { SIGILL,  SIGSYS, 0 },
-                                    .handler = _DkGenericSighandler },
-        [PAL_EVENT_QUIT]        = { .signum = { SIGTERM, 0, 0 },
-                                    .handler = _DkTerminateSighandler },
-        [PAL_EVENT_SUSPEND]     = { .signum = { SIGINT, 0 },
-                                    .handler = _DkTerminateSighandler },
-        [PAL_EVENT_RESUME]      = { .signum = { SIGCONT, 0 },
-                                    .handler = _DkTerminateSighandler },
+        [PAL_EVENT_ARITHMETIC_ERROR] = { .signum = { SIGFPE, 0 },
+                                         .handler = _DkGenericSighandler },
+        [PAL_EVENT_MEMFAULT]         = { .signum = { SIGSEGV, SIGBUS, 0 },
+                                         .handler = _DkGenericSighandler },
+        [PAL_EVENT_ILLEGAL]          = { .signum = { SIGILL,  SIGSYS, 0 },
+                                         .handler = _DkGenericSighandler },
+        [PAL_EVENT_QUIT]             = { .signum = { SIGTERM, 0, 0 },
+                                         .handler = _DkTerminateSighandler },
+        [PAL_EVENT_SUSPEND]          = { .signum = { SIGINT, 0 },
+                                         .handler = _DkTerminateSighandler },
+        [PAL_EVENT_RESUME]           = { .signum = { SIGCONT, 0 },
+                                         .handler = _DkTerminateSighandler },
     };
 
 static int _DkPersistentSighandlerSetup (int event_num)
@@ -334,7 +343,7 @@ void signal_setup (void)
         goto err;
 
     int events[] = {
-        PAL_EVENT_DIVZERO,
+        PAL_EVENT_ARITHMETIC_ERROR,
         PAL_EVENT_MEMFAULT,
         PAL_EVENT_ILLEGAL,
         PAL_EVENT_QUIT,

@@ -1,7 +1,7 @@
 include ../src/Makefile.Host
 
 CC	= gcc
-CFLAGS	= -Wall -O2 -std=gnu99 -fgnu89-inline -fno-builtin -nostdlib \
+CFLAGS	= -Wall -O2 -std=c11 -fno-builtin -nostdlib -mavx \
 	  -I../include/pal -I../lib
 
 preloads    = $(patsubst %.c,%,$(wildcard *.so.c))
@@ -30,6 +30,10 @@ ifeq ($(DEBUG),1)
 CC += -g
 endif
 export DEBUG
+
+ifeq ($(WERROR),1)
+CFLAGS += -Werror
+endif
 
 manifest_rules = \
 	-e 's:\$$(PAL):$(abspath ../../Runtime/pal_loader):g' \
@@ -72,22 +76,22 @@ endif
 PYTHONENV = "PYTHONPATH=../../Scripts"
 
 ifeq ($(SGX_RUN),1)
-	PYTHONENV += "TIMEOUT=5000"
+	PYTHONENV += "TIMEOUT=20000"
 endif
 
 regression: $(call expand_target,$(target))
 	@printf "\n\nBasic Bootstrapping:\n"
-	@for f in $(wildcard 00_*.py); do env $(PYTHONENV) python $$f || exit $$?; done
+	@for f in $(wildcard 00_*.py); do env $(PYTHONENV) python3 $$f || exit $$?; done
 	@printf "\n\nException Handling:\n"
-	@for f in $(wildcard 01_*.py); do env $(PYTHONENV) python $$f || exit $$?; done
+	@for f in $(wildcard 01_*.py); do env $(PYTHONENV) python3 $$f || exit $$?; done
 	@printf "\n\nSingle-Process Functionalities:\n"
-	@for f in $(wildcard 02_*.py); do env $(PYTHONENV) python $$f || exit $$?; done
+	@for f in $(wildcard 02_*.py); do env $(PYTHONENV) python3 $$f || exit $$?; done
 	@printf "\n\nProcess Creation:\n"
-	@for f in $(wildcard 03_*.py); do env $(PYTHONENV) python $$f || exit $$?; done
+	@for f in $(wildcard 03_*.py); do env $(PYTHONENV) python3 $$f || exit $$?; done
 	@printf "\n\nMulti-Process Functionalities:\n"
-	@for f in $(wildcard 04_*.py); do env $(PYTHONENV) python $$f || exit $$?; done
+	@for f in $(wildcard 04_*.py); do env $(PYTHONENV) python3 $$f || exit $$?; done
 	@printf "\n\nReference Monitor (Optional):\n"
-	@for f in $(wildcard 05_*.py); do env $(PYTHONENV) python $$f || exit $$?; done
+	@for f in $(wildcard 05_*.py); do env $(PYTHONENV) python3 $$f || exit $$?; done
 	@printf "\n\n"
 
 .PHONY: clean

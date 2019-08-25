@@ -172,7 +172,7 @@
  *
 #define BR_AES_X86NI   1
  */
-#define BR_AES_X86NI   0
+#define BR_AES_X86NI   1
 
 /*
  * When BR_SSE2 is enabled, SSE2 intrinsics will be used for some

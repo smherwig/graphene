@@ -1,7 +1,7 @@
 /* -*- mode:c; c-file-style:"k&r"; c-basic-offset: 4; tab-width:4; indent-tabs-mode:nil; mode:auto-fill; fill-column:78; -*- */
 /* vim: set ts=4 sw=4 et tw=78 fo=cqt wm=0: */
 
-/* Copyright (C) 2017, University of North Carolina at Chapel Hill 
+/* Copyright (C) 2017, University of North Carolina at Chapel Hill
    and Fortanix, Inc.
    This file is part of Graphene Library OS.
 
@@ -66,11 +66,11 @@ static inline int __lookup_flags (int flags)
 }
 
 /* check permission (specified by mask) of a dentry. If force is not set,
- * permission is considered granted on invalid dentries 
- * 
+ * permission is considered granted on invalid dentries
+ *
  * mask is the same as mode in the manual for access(2): F_OK, R_OK, W_OK,
  * X_OK
- * 
+ *
  * Returns 0 on success, negative on failure.
  */
 /* Assume caller has acquired dcache_lock */
@@ -78,7 +78,7 @@ int permission (struct shim_dentry * dent, int mask, bool force) {
 
     mode_t mode = 0;
 
-    /* Pseudo dentries don't really have permssions.  I wonder if 
+    /* Pseudo dentries don't really have permssions.  I wonder if
      * we could tighten up the range of allowed calls.
      */
     if (dent->state & DENTRY_ANCESTOR)
@@ -93,7 +93,7 @@ int permission (struct shim_dentry * dent, int mask, bool force) {
         return 0;
 
     /* A dentry may not have the mode stored.  The original code
-     * used both NO_MODE and !DENTRY_VALID; let's try to consolidate to 
+     * used both NO_MODE and !DENTRY_VALID; let's try to consolidate to
      * just NO_MODE.
      */
     if (dent->mode == NO_MODE) {
@@ -101,7 +101,7 @@ int permission (struct shim_dentry * dent, int mask, bool force) {
         if (!force)
             return 0;
 
-        /* DEP 6/16/17: I don't think we should be defaulting to 0 if 
+        /* DEP 6/16/17: I don't think we should be defaulting to 0 if
          * there isn't a mode function. */
         assert(dent->fs);
         assert(dent->fs->d_ops);
@@ -124,7 +124,7 @@ int permission (struct shim_dentry * dent, int mask, bool force) {
             return err;
 
         dent->mode = mode;
-    } 
+    }
 
     mode = dent->mode;
 
@@ -273,7 +273,9 @@ int __path_lookupat (struct shim_dentry * start, const char * path, int flags,
     int err = 0;
     struct shim_dentry *my_dent = NULL;
     struct shim_qstr this = QSTR_INIT;
-    int base_case = 0, no_start = 0;
+    bool leaf_case = false; // Leaf call in case of recursion
+    bool no_start = false; // start not passed
+    bool no_fs = false; // fs not passed
     struct shim_thread * cur_thread = get_cur_thread();
 
     if (!start) {
@@ -286,23 +288,32 @@ int __path_lookupat (struct shim_dentry * start, const char * path, int flags,
             start = dentry_root;
             assert(start);
         }
-        no_start = 1;
+        no_start = true;
+        // refcount should only be incremented if the caller didn't do it
+        get_dentry(start);
     }
+
     assert(start);
-    get_dentry(start);
-    if (!fs)
+    if (!fs) {
+        no_fs = true;
         fs = start->fs;
+        // refcount should only be incremented if the caller didn't do it
+        get_mount(fs);
+    }
+
     assert(fs);
-    get_mount(fs);
     assert(start->state & DENTRY_ISDIRECTORY);
 
     // Peel off any preceeding slashes
     path = eat_slashes(path);
 
-    // Check that we didn't hit the base case 
-    if (path == '\0') {
+    // Check that we didn't hit the leaf case
+    if (*path == '\0') {
+        // We'll return start since this is the last path element
         my_dent = start;
-        base_case = 1;
+        // Increment refcount of the found entry
+        get_dentry(my_dent);
+        leaf_case = true;
     } else {
         my_path = path;
         // Find the length of the path
@@ -321,8 +332,8 @@ int __path_lookupat (struct shim_dentry * start, const char * path, int flags,
             /* For the recursion to work, we need to do the following:
              * Bump the ref count, set my_dent to start
              */
-            get_dentry(start);
             my_dent = start;
+            get_dentry(my_dent);
         } else if (my_pathlen == 2 && path[0] == '.' && path[1] == '.') {
             if (start->parent) {
                 my_dent = start->parent;
@@ -330,12 +341,13 @@ int __path_lookupat (struct shim_dentry * start, const char * path, int flags,
                 // Root
                 my_dent = start;
             }
-            get_dentry(start);
+            get_dentry(my_dent);
 
         } else {
             // Once we have an atom, look it up and update start
             // XXX: Assume we don't need the force flag here?
             err = lookup_dentry(start, path, my_pathlen, 0, &my_dent, fs);
+            // my_dent's refcount is incremented after this, consistent with cases above
 
             // Allow a negative dentry to move forward
             if (err < 0 && err != -ENOENT)
@@ -355,7 +367,7 @@ int __path_lookupat (struct shim_dentry * start, const char * path, int flags,
 
                 assert(my_dent->fs->d_ops && my_dent->fs->d_ops->follow_link);
 
-                if ((err = my_dent->fs->d_ops->follow_link(my_dent, &this)) < 0) 
+                if ((err = my_dent->fs->d_ops->follow_link(my_dent, &this)) < 0)
                     goto out;
 
                 path = qstrgetstr(&this);
@@ -368,9 +380,17 @@ int __path_lookupat (struct shim_dentry * start, const char * path, int flags,
                         assert(cur_thread);
                         root = cur_thread->root;
                         /*XXX: Check out path_reacquire here? */
+                        // my_dent's refcount was incremented by lookup_dentry above,
+                        // we need to not leak it here
+                        put_dentry(my_dent);
                         my_dent = root;
-                    } else // Relative path, stay in this dir
+                        get_dentry(my_dent);
+                    } else {
+                        // Relative path, stay in this dir
+                        put_dentry(my_dent);
                         my_dent = start;
+                        get_dentry(my_dent);
+                    }
                 }
             }
         }
@@ -381,7 +401,7 @@ int __path_lookupat (struct shim_dentry * start, const char * path, int flags,
         // If we found something, and there is more, recur
         if (*my_path != '\0') {
 
-            /* If we have more to look up, but got a negative DENTRY, 
+            /* If we have more to look up, but got a negative DENTRY,
              * we need to fail or (unlikely) create an ancestor dentry.*/
             if (my_dent->state & DENTRY_NEGATIVE) {
                 if (make_ancestor) {
@@ -415,17 +435,17 @@ int __path_lookupat (struct shim_dentry * start, const char * path, int flags,
                 if (err == -ENOENT)
                     err = 0;
             }
-            base_case = 1;
+            leaf_case = true;
         }
     }
 
     /* Base case.  Set dent and return. */
-    if (base_case) {
+    if (leaf_case) {
         if (dent)
             *dent = my_dent;
 
         // Enforce LOOKUP_CREATE flag at a higher level
-        if (my_dent->state & DENTRY_NEGATIVE) 
+        if (my_dent->state & DENTRY_NEGATIVE)
                 err = -ENOENT;
 
         // Enforce the LOOKUP_DIRECTORY flag
@@ -435,10 +455,12 @@ int __path_lookupat (struct shim_dentry * start, const char * path, int flags,
 
 out:
     /* If we didn't have a start dentry, decrement the ref count here */
-    if (no_start) {
-        put_mount(fs);
+    if (no_start)
         put_dentry(start);
-    }
+
+    if (no_fs)
+        put_mount(fs);
+
     qstrfree(&this);
     return err;
 }
@@ -457,16 +479,16 @@ int path_lookupat (struct shim_dentry * start, const char * name, int flags,
 
 
 /* Open path with given flags, in mode, similar to Unix open.
- * 
+ *
  * The start dentry specifies where to begin the search, and can be null. If
  * specified, we assume the caller has incremented the ref count on the start,
  * but not the associated mount (probably using path_startat)
  *
- * hdl is an optional argument; if passed in, it is initialized to 
+ * hdl is an optional argument; if passed in, it is initialized to
  *   refer to the opened path.
  *
- * We assume the caller has not increased 
- * 
+ * We assume the caller has not increased
+ *
  * The result is stored in dent.
  */
 
@@ -519,8 +541,10 @@ int open_namei (struct shim_handle * hdl, struct shim_dentry * start,
         newly_created = 1;
 
         // If we didn't get an error and made a directory, set the dcache dir flag
-        if (flags & O_DIRECTORY)
+        if (flags & O_DIRECTORY) {
             mydent->state |= DENTRY_ISDIRECTORY;
+            mydent->type = S_IFDIR;
+        }
 
         // Once the dentry is creat-ed, drop the negative flag
         mydent->state &= ~DENTRY_NEGATIVE;
@@ -541,7 +565,7 @@ int open_namei (struct shim_handle * hdl, struct shim_dentry * start,
     }
 
     // Set up the file handle, if provided
-    if (hdl) 
+    if (hdl)
         err = dentry_open(hdl, mydent, flags);
 
 out:
@@ -629,6 +653,9 @@ out:
 static inline void set_dirent_type (mode_t * type, int d_type)
 {
     switch (d_type) {
+        case LINUX_DT_DIR:
+            *type = S_IFDIR;
+            return;
         case LINUX_DT_FIFO:
             *type = S_IFIFO;
             return;
@@ -654,15 +681,15 @@ static inline void set_dirent_type (mode_t * type, int d_type)
 }
 
 /* This function enumerates a directory and caches the results in the cache.
- * 
+ *
  * Input: A dentry for a directory in the DENTRY_ISDIRECTORY and not in the
  * DENTRY_LISTED state.  The dentry DENTRY_LISTED flag is set upon success.
- * 
+ *
  * Return value: 0 on success, <0 on error
- * 
+ *
  * DEP 7/9/17: This work was once done as part of open, but, since getdents*
  * have no consistency semantics, we can apply the principle of laziness and
- * not do the work until we are sure we really need to.  
+ * not do the work until we are sure we really need to.
  */
 int list_directory_dentry (struct shim_dentry *dent) {
 
@@ -670,8 +697,8 @@ int list_directory_dentry (struct shim_dentry *dent) {
     struct shim_mount * fs = dent->fs;
     lock(dcache_lock);
 
-    /* DEP 8/4/17: Another process could list this directory 
-     * while we are waiting on the dcache lock.  This is ok, 
+    /* DEP 8/4/17: Another process could list this directory
+     * while we are waiting on the dcache lock.  This is ok,
      * no need to blow an assert.
      */
     if (dent->state & DENTRY_LISTED){
@@ -696,7 +723,7 @@ int list_directory_dentry (struct shim_dentry *dent) {
         dirent = NULL;
         goto done_read;
     }
-    
+
     struct shim_dirent * d = dirent;
     for ( ; d ; d = d->next) {
         struct shim_dentry * child;

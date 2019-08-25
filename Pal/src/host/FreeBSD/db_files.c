@@ -130,10 +130,11 @@ static int file_close (PAL_HANDLE handle)
 
     int ret = INLINE_SYSCALL(close, 1, fd);
 
+    /* initial realpath is part of handle object and will be freed with it */
     if (handle->file.realpath &&
-        handle->file.realpath != (void *) handle + HANDLE_SIZE(file))
+        handle->file.realpath != (void *) handle + HANDLE_SIZE(file)) {
         free((void *) handle->file.realpath);
-
+    }
     return IS_ERR(ret) ? unix_to_pal_error(ERRNO(ret)) : 0;
 }
 
@@ -270,12 +271,23 @@ static int file_attrsetbyhdl (PAL_HANDLE handle,
 static int file_rename (PAL_HANDLE handle, const char * type,
                         const char * uri)
 {
+    char* tmp = strdup(uri);
+    if (!tmp)
+        return -PAL_ERROR_NOMEM;
+
     int ret = INLINE_SYSCALL(rename, 2, handle->file.realpath, uri);
-
-    if (IS_ERR(ret))
+    if (IS_ERR(ret)) {
+        free(tmp);
         return unix_to_pal_error(ERRNO(ret));
+    }
 
-    handle->file.realpath = malloc_copy(uri, strlen(uri));
+    /* initial realpath is part of handle object and will be freed with it */
+    if (handle->file.realpath &&
+            handle->file.realpath != (void *) handle + HANDLE_SIZE(file)) {
+        free((void *) handle->file.realpath);
+    }
+
+    handle->file.realpath = tmp;
     return 0;
 }
 
@@ -325,11 +337,11 @@ static int dir_open (PAL_HANDLE * handle, const char * type, const char * uri,
     int ret;
     int mode = HOST_PERM(share);
 
-    if (create & PAL_CREAT_TRY) {
+    if (create & PAL_CREATE_TRY) {
         ret = INLINE_SYSCALL(mkdir, 2, uri, mode);
 
         if (IS_ERR(ret) && ERRNO(ret) == EEXIST &&
-            create & PAL_CREAT_ALWAYS)
+            create & PAL_CREATE_ALWAYS)
             return -PAL_ERROR_STREAMEXIST;
     }
 
@@ -391,7 +403,7 @@ int dir_read (PAL_HANDLE handle, int offset, int count, void * buf)
             break;
 
         int size = INLINE_SYSCALL(getdents, 3, handle->dir.fd, dent_buf,
-                                  DIRBUF_SIZE); 
+                                  DIRBUF_SIZE);
 
         if (IS_ERR(size))
             return -PAL_ERROR_DENIED;
@@ -459,9 +471,11 @@ static int dir_close (PAL_HANDLE handle)
         handle->dir.buf = handle->dir.ptr = handle->dir.end = NULL;
     }
 
+    /* initial realpath is part of handle object and will be freed with it */
     if (handle->dir.realpath &&
-        handle->dir.realpath != (void *) handle + HANDLE_SIZE(dir))
+        handle->dir.realpath != (void *) handle + HANDLE_SIZE(dir)) {
         free((void *) handle->dir.realpath);
+    }
 
     if (IS_ERR(ret))
         return -PAL_ERROR_BADHANDLE;
@@ -489,12 +503,23 @@ static int dir_delete (PAL_HANDLE handle, int access)
 static int dir_rename (PAL_HANDLE handle, const char * type,
                        const char * uri)
 {
+    char* tmp = strdup(uri);
+    if (!tmp)
+        return -PAL_ERROR_NOMEM;
+
     int ret = INLINE_SYSCALL(rename, 2, handle->dir.realpath, uri);
-
-    if (IS_ERR(ret))
+    if (IS_ERR(ret)) {
+        free(tmp);
         return unix_to_pal_error(ERRNO(ret));
+    }
 
-    handle->dir.realpath = malloc_copy(uri, strlen(uri));
+    /* initial realpath is part of handle object and will be freed with it */
+    if (handle->dir.realpath &&
+            handle->dir.realpath != (void *) handle + HANDLE_SIZE(dir)) {
+        free((void *) handle->dir.realpath);
+    }
+
+    handle->dir.realpath = tmp;
     return 0;
 }
 

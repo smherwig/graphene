@@ -35,6 +35,8 @@
 # include "sysdep-x86_64.h"
 #endif
 
+#define ENCLAVE_FILENAME RUNTIME_FILE("libpal-Linux-SGX.so")
+
 #define IS_ERR INTERNAL_SYSCALL_ERROR
 #define IS_ERR_P INTERNAL_SYSCALL_ERROR_P
 #define ERRNO INTERNAL_SYSCALL_ERRNO
@@ -213,7 +215,7 @@ extern struct pal_enclave_config {
 #define SGX_DBG(class, fmt...) \
     do { if ((class) & DBG_LEVEL) printf(fmt); } while (0)
 #else
-int pal_printf(const char * fmt, ...);
+#include <pal_debug.h>
 
 #define SGX_DBG(class, fmt...) \
     do { if ((class) & DBG_LEVEL) pal_printf(fmt); } while (0)

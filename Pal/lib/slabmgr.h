@@ -27,6 +27,7 @@
 #define SLABMGR_H
 
 #include "list.h"
+#include "api.h"
 #include <pal_debug.h>
 #include <assert.h>
 #include <errno.h>
@@ -168,10 +169,6 @@ typedef struct __attribute__((packed)) large_mem_obj {
 #define OBJ_LEVEL(obj) ((obj)->level)
 #define OBJ_RAW(obj) (&(obj)->raw)
 
-#ifndef container_of
-#define container_of(ptr, type, field) ((type *)((char *)(ptr) - offsetof(type, field)))
-#endif
-
 #define RAW_TO_LEVEL(raw_ptr) \
             (*((const unsigned char *) (raw_ptr) - OBJ_PADDING - 1))
 #define RAW_TO_OBJ(raw_ptr, type) container_of((raw_ptr), type, raw)
@@ -304,7 +301,7 @@ static inline void destroy_slab_mgr (SLAB_MGR mgr)
 static inline int enlarge_slab_mgr (SLAB_MGR mgr, int level)
 {
     assert(level < SLAB_LEVEL);
-    /* DEP 11/24/17: This strategy basically doubles a level's size 
+    /* DEP 11/24/17: This strategy basically doubles a level's size
      * every time it grows.  The assumption if we get this far is that
      * mgr->addr == mgr->top_addr */
     assert(mgr->addr[level] == mgr->addr_top[level]);
@@ -432,7 +429,7 @@ static inline void * slab_alloc_debug (SLAB_MGR mgr, int size,
 #endif
 
 // Returns user buffer size (i.e. excluding size of control structures).
-static inline size_t slab_get_buf_size(SLAB_MGR mgr, const void * ptr)
+static inline size_t slab_get_buf_size(const void * ptr)
 {
     assert(ptr);
 
@@ -458,7 +455,7 @@ static inline size_t slab_get_buf_size(SLAB_MGR mgr, const void * ptr)
 
 static inline void slab_free (SLAB_MGR mgr, void * obj)
 {
-    /* In a general purpose allocator, free of NULL is allowed (and is a 
+    /* In a general purpose allocator, free of NULL is allowed (and is a
      * nop). We might want to enforce stricter rules for our allocator if
      * we're sure that no clients rely on being able to free NULL. */
     if (!obj)

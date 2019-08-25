@@ -394,7 +394,7 @@ int shim_do_clone (int flags, void * user_stack_addr, int * parent_tidptr,
 int shim_do_fork (void);
 int shim_do_vfork (void);
 int shim_do_execve (const char * file, const char ** argv, const char ** envp);
-int shim_do_exit (int error_code);
+__attribute__((noreturn)) int shim_do_exit (int error_code);
 pid_t shim_do_wait4 (pid_t pid, int * stat_addr, int option,
                      struct __kernel_rusage * ru);
 int shim_do_kill (pid_t pid, int sig);
@@ -451,8 +451,8 @@ int shim_do_chroot (const char * filename);
 pid_t shim_do_gettid (void);
 int shim_do_tkill (int pid, int sig);
 time_t shim_do_time (time_t * tloc);
-int shim_do_futex (unsigned int * uaddr, int op, int val, void * utime,
-                   unsigned int * uaddr2, int val3);
+int shim_do_futex (int * uaddr, int op, int val, void * utime,
+                   int * uaddr2, int val3);
 int shim_do_sched_getaffinity (pid_t pid, size_t len,
                                __kernel_cpu_set_t * user_mask_ptr);
 int shim_do_set_tid_address (int * tidptr);
@@ -730,8 +730,8 @@ int shim_lremovexattr (const char * path, const char * name);
 int shim_fremovexattr (int fd, const char * name);
 int shim_tkill (int pid, int sig);
 time_t shim_time (time_t * tloc);
-int shim_futex (unsigned int * uaddr, int op, int val, void * utime,
-                unsigned int * uaddr2, int val3);
+int shim_futex (int * uaddr, int op, int val, void * utime,
+                int * uaddr2, int val3);
 int shim_sched_setaffinity (pid_t pid, size_t len,
                             __kernel_cpu_set_t * user_mask_ptr);
 int shim_sched_getaffinity (pid_t pid, size_t len,

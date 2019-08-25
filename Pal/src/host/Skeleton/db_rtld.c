@@ -36,11 +36,7 @@
 
 #include <sysdeps/generic/ldsodefs.h>
 #include <elf/elf.h>
-#ifdef __APPLE__
 #include <dlfcn.h>
-#else
-#include <bits/dlfcn.h>
-#endif 
 
 void _DkDebugAddMap (struct link_map * map)
 {
@@ -48,10 +44,4 @@ void _DkDebugAddMap (struct link_map * map)
 
 void _DkDebugDelMap (struct link_map * map)
 {
-}
-
-ElfW(Addr) resolve_rtld (const char * sym_name)
-{
-    /* Not yet implemented */
-    return 0;
 }

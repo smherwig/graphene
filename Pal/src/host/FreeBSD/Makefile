@@ -1,16 +1,8 @@
-CC	= gcc
-AS	= gcc
-AR	= ar rcs
+include Makefile.am
 
-CFLAGS	= -Wall -fPIC -O2 -std=gnu99 -fgnu89-inline -Wall -U_FORTIFY_SOURCE \
-	  -fno-omit-frame-pointer\
-	  -fno-stack-protector -fno-builtin \
-	  -I. -Iinclude -I../.. -I../../../include -I../../../lib -I../../../ipc/linux \
-	  -I../../../linux-3.5/graphene 
-ASFLAGS = -DPIC -DSHARED -fPIC -DASSEMBLER -Wa,--noexecstack \
-	  -x assembler-with-cpp \
-	  -I. -Iinclude -I../.. -I../../../include
-ARFLAGS	=
+CFLAGS	+= -I. -Iinclude -I../.. -I../../../include -I../../../lib -I../../../ipc/linux \
+	   -I../../../linux-kernel/graphene
+ASFLAGS += -I. -Iinclude -I../.. -I../../../include
 
 host_target = libpal-FreeBSD.a ../../pal-gdb
 
@@ -47,18 +39,24 @@ libpal-FreeBSD.a: $(addsuffix .o,$(objs)) $(graphene_lib)
 	@echo [ host/FreeBSD/$@ ]
 	@$(CC) $(CFLAGS) $(defs) -c $< -o $@
 
-%.e: %.c $(headers)
+%.e %.i: %.c $(headers)
 	@echo [ host/FreeBSD/$@ ]
 	@$(CC) $(CFLAGS) $(defs) -E $< -o $@
+
+%.s: %.c $(headers)
+	@echo [ host/FreeBSD/$@ ]
+	@$(CC) $(CFLAGS) $(defs) -S $< -o $@
 
 %.o: %.S $(headers)
 	@echo [ host/FreeBSD/$@ ]
 	@$(AS) $(ASFLAGS) $(defs) -c $< -o $@
 
-%.e: %.S $(headers)
+%.e %.s: %.S $(headers)
 	@echo [ host/FreeBSD/$@ ]
 	@$(AS) $(ASFLAGS) $(defs) -E $< -o $@
 
+CLEAN_FILES += $(notdir $(pal_static) $(pal_lib) $(pal_sec) $(pal_loader))
+
 .PHONY: clean
 clean:
-	rm -f $(addsuffix .o,$(objs)) $(host_target)
+	rm -f $(addsuffix .o,$(objs)) $(host_target) $(CLEAN_FILES)

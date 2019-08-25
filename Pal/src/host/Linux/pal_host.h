@@ -32,7 +32,7 @@
 
 #include <atomic.h>
 
-/* Simpler mutex design: a single variable that tracks whether the 
+/* Simpler mutex design: a single variable that tracks whether the
  * mutex is locked (just waste a 64 bit word for now).  State is 1 (locked) or
  * 0 (unlocked).
  * Keep a count of how many threads are waiting on the mutex.
@@ -70,6 +70,8 @@ typedef struct {
 #endif
 } PAL_RESERVED_HDR;
 
+#define MAX_FDS         (3)
+
 typedef struct pal_handle
 {
     /* TSAI: Here we define the internal types of PAL_HANDLE
@@ -78,10 +80,10 @@ typedef struct pal_handle
      * handles, so we hide the type name of these handles on purpose.
      */
     PAL_HDR hdr;
-    
+
     union {
         struct {
-            PAL_IDX fds[2];
+            PAL_IDX fds[MAX_FDS];
         } generic;
 
         struct {
@@ -90,8 +92,14 @@ typedef struct pal_handle
             PAL_BOL append;
             PAL_BOL pass;
             PAL_STR realpath;
+            /*
+             * map_start is to request this file should be mapped to this
+             * address. When fork is emulated, the address is already
+             * determined by parent process.
+             */
+            PAL_PTR map_start;
         } file;
-        
+
         struct {
             PAL_IDX fd;
             PAL_NUM pipeid;
@@ -99,7 +107,7 @@ typedef struct pal_handle
         } pipe;
 
         struct {
-            PAL_IDX fds[2];
+            PAL_IDX fds[MAX_FDS];
             PAL_BOL nonblocking;
         } pipeprv;
 
@@ -176,7 +184,6 @@ typedef struct pal_handle
 #define WFD(n)          (00010 << (n))
 #define WRITEABLE(n)    (00100 << (n))
 #define ERROR(n)        (01000 << (n))
-#define MAX_FDS         (3)
 #define HAS_FDS         (00077)
 
 #define HANDLE_TYPE(handle)  ((handle)->hdr.type)

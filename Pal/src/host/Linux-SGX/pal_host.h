@@ -43,6 +43,7 @@ int _DkSpinUnlock (struct spinlock * lock);
 #define LOCK_INIT   { .value =  { 0 } }
 #define _DkInternalLock _DkSpinLock
 #define _DkInternalUnlock _DkSpinUnlock
+#define MAX_FDS           (3)
 
 void * malloc_untrusted (int size);
 void free_untrusted (void * mem);
@@ -88,7 +89,7 @@ typedef struct pal_handle
     PAL_HDR hdr;
     union {
         struct {
-            PAL_IDX fds[2];
+            PAL_IDX fds[MAX_FDS];
         } generic;
 
         struct {
@@ -107,7 +108,7 @@ typedef struct pal_handle
         } pipe;
 
         struct {
-            PAL_IDX fds[2];
+            PAL_IDX fds[MAX_FDS];
             PAL_BOL nonblocking;
         } pipeprv;
 
@@ -182,7 +183,6 @@ typedef struct pal_handle
 #define WFD(n)          (00010 << (n))
 #define WRITEABLE(n)    (00100 << (n))
 #define ERROR(n)        (01000 << (n))
-#define MAX_FDS         (3)
 #define HAS_FDS         (00077)
 
 #define HANDLE_TYPE(handle)  ((handle)->hdr.type)
@@ -197,7 +197,7 @@ struct arch_frame {
 
 #ifdef __x86_64__
 # define store_register(reg, var)     \
-    asm volatile ("movq %%" #reg ", %0" : "=g" (var) :: "memory");
+    __asm__ volatile ("movq %%" #reg ", %0" : "=g" (var) :: "memory");
 
 # define store_register_in_frame(reg, f)     store_register(reg, (f)->reg)
 
@@ -213,7 +213,7 @@ struct arch_frame {
     store_register_in_frame(r15, f)
 
 # define restore_register(reg, var, clobber...)  \
-    asm volatile ("movq %0, %%" #reg :: "g" (var) : "memory", ##clobber);
+    __asm__ volatile ("movq %0, %%" #reg :: "g" (var) : "memory", ##clobber);
 
 # define restore_register_in_frame(reg, f)       \
     restore_register(reg, (f)->reg,              \
@@ -243,7 +243,7 @@ struct pal_frame {
 };
 
 /* DEP 12/25/17: This frame storage thing is important to mark volatile.
- * The compiler should not optimize out any of these changes, and 
+ * The compiler should not optimize out any of these changes, and
  * because some accesses can happen during an exception, these are not
  * visible to the compiler in an otherwise stack-local variable (so the
  * compiler will try to optimize out these assignments.
@@ -255,7 +255,7 @@ void __store_frame (volatile struct pal_frame * frame,
     arch_store_frame(&frame->arch)
     frame->func = func;
     frame->funcname = funcname;
-    asm volatile ("nop" ::: "memory");
+    __asm__ volatile ("nop" ::: "memory");
     frame->identifier = PAL_FRAME_IDENTIFIER;
 }
 
@@ -268,7 +268,7 @@ static inline
 void __clear_frame (volatile struct pal_frame * frame)
 {
     if (frame->identifier == PAL_FRAME_IDENTIFIER) {
-        asm volatile ("nop" ::: "memory");
+        __asm__ volatile ("nop" ::: "memory");
         frame->identifier = 0;
     }
 }

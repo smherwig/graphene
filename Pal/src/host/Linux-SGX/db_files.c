@@ -29,6 +29,7 @@
 #include "pal.h"
 #include "pal_internal.h"
 #include "pal_linux.h"
+#include "pal_linux_error.h"
 #include "pal_debug.h"
 #include "pal_error.h"
 #include "api.h"
@@ -47,11 +48,13 @@ typedef __kernel_pid_t pid_t;
 static int file_open (PAL_HANDLE * handle, const char * type, const char * uri,
                       int access, int share, int create, int options)
 {
+    if (!strcmp_static(type, "file"))
+        return -PAL_ERROR_INVAL;
     /* try to do the real open */
     int fd = ocall_open(uri, access|create|options, share);
 
-    if (fd < 0)
-        return fd;
+    if (IS_ERR(fd))
+        return unix_to_pal_error(ERRNO(fd));
 
     /* if try_create_path succeeded, prepare for the file handle */
     int len = strlen(uri);
@@ -73,7 +76,7 @@ static int file_open (PAL_HANDLE * handle, const char * type, const char * uri,
                 "This file is not trusted or allowed.\n", hdl->file.realpath,
                 PAL_STRERROR(-ret));
         free(hdl);
-        return -PAL_ERROR_DENIED;
+        return ret;
     }
 
     hdl->file.stubs = (PAL_PTR) stubs;
@@ -110,8 +113,8 @@ static int64_t file_read (PAL_HANDLE handle, uint64_t offset, uint64_t count,
     void * umem;
     ret = ocall_map_untrusted(handle->file.fd, map_start,
                               map_end - map_start, PROT_READ, &umem);
-    if (ret < 0)
-        return -PAL_ERROR_DENIED;
+    if (IS_ERR(ret))
+        return unix_to_pal_error(ERRNO(ret));
 
     if (stubs) {
         ret = copy_and_verify_trusted_file(handle->file.realpath, umem,
@@ -141,9 +144,8 @@ static int64_t file_write(PAL_HANDLE handle, uint64_t offset, uint64_t count,
 
     ret = ocall_map_untrusted(handle->file.fd, map_start,
                               map_end - map_start, PROT_WRITE, &umem);
-    if (ret < 0) {
-        return -PAL_ERROR_DENIED;
-    }
+    if (IS_ERR(ret))
+        return unix_to_pal_error(ERRNO(ret));
 
     if (offset + count > handle->file.total) {
         ocall_ftruncate(handle->file.fd, offset + count);
@@ -163,6 +165,7 @@ static int file_close (PAL_HANDLE handle)
     int fd = handle->file.fd;
     ocall_close(fd);
 
+    /* initial realpath is part of handle object and will be freed with it */
     if (handle->file.realpath &&
         handle->file.realpath != (void *) handle + HANDLE_SIZE(file))
         free((void *) handle->file.realpath);
@@ -177,7 +180,8 @@ static int file_delete (PAL_HANDLE handle, int access)
     if (access)
         return -PAL_ERROR_INVAL;
 
-    return ocall_delete(handle->file.realpath);
+    int ret = ocall_delete(handle->file.realpath);
+    return IS_ERR(ret) ? unix_to_pal_error(ERRNO(ret)) : ret;
 }
 
 /* 'map' operation for file stream. */
@@ -198,9 +202,9 @@ static int file_map (PAL_HANDLE handle, void ** addr, int prot,
     if (!mem && !stubs && !(prot & PAL_PROT_WRITECOPY)) {
         ret = ocall_map_untrusted(handle->file.fd, offset, size,
                                   HOST_PROT(prot), &mem);
-        if (!ret)
+        if (!IS_ERR(ret))
             *addr = mem;
-        return ret;
+        return IS_ERR(ret) ? unix_to_pal_error(ERRNO(ret)) : ret;
     }
 
     if (!(prot & PAL_PROT_WRITECOPY) && (prot & PAL_PROT_WRITE)) {
@@ -225,9 +229,9 @@ static int file_map (PAL_HANDLE handle, void ** addr, int prot,
 
     ret = ocall_map_untrusted(handle->file.fd, map_start,
                               map_end - map_start, PROT_READ, &umem);
-    if (ret < 0) {
+    if (IS_ERR(ret)) {
         SGX_DBG(DBG_E, "file_map - ocall returned %d\n", ret);
-        return ret;
+        return unix_to_pal_error(ERRNO(ret));
     }
 
     if (stubs) {
@@ -254,8 +258,9 @@ static int file_map (PAL_HANDLE handle, void ** addr, int prot,
 static int64_t file_setlength (PAL_HANDLE handle, uint64_t length)
 {
     int ret = ocall_ftruncate(handle->file.fd, length);
-    if (ret < 0)
-        return ret;
+    if (IS_ERR(ret))
+        return unix_to_pal_error(ERRNO(ret));
+
     handle->file.total = length;
     return (int64_t) length;
 }
@@ -302,18 +307,20 @@ file_attrcopy (PAL_STREAM_ATTR * attr, struct stat * stat)
 static int file_attrquery (const char * type, const char * uri,
                            PAL_STREAM_ATTR * attr)
 {
+    if (!strcmp_static(type, "file") && !strcmp_static(type, "dir") )
+        return -PAL_ERROR_INVAL;
     /* try to do the real open */
     int fd = ocall_open(uri, 0, 0);
-    if (fd < 0)
-        return fd;
+    if (IS_ERR(fd))
+        return unix_to_pal_error(ERRNO(fd));
 
     struct stat stat_buf;
     int ret = ocall_fstat(fd, &stat_buf);
     ocall_close(fd);
 
     /* if it failed, return the right error code */
-    if (ret < 0)
-        return ret;
+    if (IS_ERR(ret))
+        return unix_to_pal_error(ERRNO(ret));
 
     file_attrcopy(attr, &stat_buf);
     return 0;
@@ -327,8 +334,8 @@ static int file_attrquerybyhdl (PAL_HANDLE handle,
     struct stat stat_buf;
 
     int ret = ocall_fstat(fd, &stat_buf);
-    if (ret < 0)
-        return ret;
+    if (IS_ERR(ret))
+        return unix_to_pal_error(ERRNO(ret));
 
     file_attrcopy(attr, &stat_buf);
     return 0;
@@ -339,8 +346,8 @@ static int file_attrsetbyhdl (PAL_HANDLE handle,
 {
     int fd = handle->file.fd;
     int ret = ocall_fchmod(fd, attr->share_flags | 0600);
-    if (ret < 0)
-        return ret;
+    if (IS_ERR(ret))
+        return unix_to_pal_error(ERRNO(ret));
 
     return 0;
 }
@@ -348,13 +355,26 @@ static int file_attrsetbyhdl (PAL_HANDLE handle,
 static int file_rename (PAL_HANDLE handle, const char * type,
                         const char * uri)
 {
-    int ret = ocall_rename(handle->file.realpath, uri);
-    if (ret < 0)
-        return ret;
+    if (!strcmp_static(type, "file"))
+        return -PAL_ERROR_INVAL;
 
-    /* TODO: old realpath memory is potentially leaked here, and need
-     * to check for strdup memory allocation failure. */
-    handle->file.realpath = strdup(uri);
+    char* tmp = strdup(uri);
+    if (!tmp)
+        return -PAL_ERROR_NOMEM;
+
+    int ret = ocall_rename(handle->file.realpath, uri);
+    if (IS_ERR(ret)) {
+        free(tmp);
+        return unix_to_pal_error(ERRNO(ret));
+    }
+
+    /* initial realpath is part of handle object and will be freed with it */
+    if (handle->file.realpath &&
+        handle->file.realpath != (void *) handle + HANDLE_SIZE(file)) {
+        free((void *) handle->file.realpath);
+    }
+
+    handle->file.realpath = tmp;
     return 0;
 }
 
@@ -401,17 +421,23 @@ struct handle_ops file_ops = {
 static int dir_open (PAL_HANDLE * handle, const char * type, const char * uri,
                      int access, int share, int create, int options)
 {
+    if (!strcmp_static(type, "dir"))
+        return -PAL_ERROR_INVAL;
+    if (!WITHIN_MASK(access, PAL_ACCESS_MASK))
+        return -PAL_ERROR_INVAL;
+
     int ret;
 
-    if (create & PAL_CREAT_TRY) {
+    if (create & PAL_CREATE_TRY) {
         ret = ocall_mkdir(uri, share);
-        if (ret == -PAL_ERROR_STREAMEXIST && (create & PAL_CREAT_ALWAYS))
-            return ret;
+        if (IS_ERR(ret) && ERRNO(ret) == EEXIST &&
+            create & PAL_CREATE_ALWAYS)
+            return -PAL_ERROR_STREAMEXIST;
     }
 
     ret = ocall_open(uri, O_DIRECTORY|options, 0);
-    if (ret < 0)
-        return ret;
+    if (IS_ERR(ret))
+        return unix_to_pal_error(ERRNO(ret));
 
     int len = strlen(uri);
     PAL_HANDLE hdl = malloc(HANDLE_SIZE(dir) + len + 1);
@@ -436,6 +462,9 @@ static int dir_open (PAL_HANDLE * handle, const char * type, const char * uri,
 static int64_t dir_read (PAL_HANDLE handle, uint64_t offset, uint64_t count,
                          void * buf)
 {
+    if (offset)
+        return -PAL_ERROR_INVAL;
+
     void * dent_buf = (void *) handle->dir.buf ? : __alloca(DIRBUF_SIZE);
     void * ptr = (void *) handle->dir.ptr;
     void * end = (void *) handle->dir.end;
@@ -450,8 +479,8 @@ static int64_t dir_read (PAL_HANDLE handle, uint64_t offset, uint64_t count,
 
         int size = ocall_getdents(handle->dir.fd, dent_buf, DIRBUF_SIZE);
 
-        if (size < 0)
-            return size;
+        if (IS_ERR(size))
+            return unix_to_pal_error(ERRNO(size));
 
         if (size == 0) {
             handle->dir.endofstream = PAL_TRUE;
@@ -516,6 +545,7 @@ static int dir_close (PAL_HANDLE handle)
         handle->dir.buf = handle->dir.ptr = handle->dir.end = (PAL_PTR) NULL;
     }
 
+    /* initial realpath is part of handle object and will be freed with it */
     if (handle->dir.realpath &&
         handle->dir.realpath != (void *) handle + HANDLE_SIZE(dir))
         free((void *) handle->dir.realpath);
@@ -533,19 +563,33 @@ static int dir_delete (PAL_HANDLE handle, int access)
     if (ret < 0)
         return ret;
 
-    return ocall_delete(handle->dir.realpath);
+    ret = ocall_delete(handle->dir.realpath);
+    return IS_ERR(ret) ? unix_to_pal_error(ERRNO(ret)) : ret;
 }
 
 static int dir_rename (PAL_HANDLE handle, const char * type,
                        const char * uri)
 {
-    int ret = ocall_rename(handle->dir.realpath, uri);
-    if (ret < 0)
-        return ret;
+    if (!strcmp_static(type, "dir"))
+        return -PAL_ERROR_INVAL;
 
-    /* TODO: old realpath memory is potentially leaked here, and need
-     * to check for strdup memory allocation failure. */
-    handle->dir.realpath = strdup(uri);
+    char* tmp = strdup(uri);
+    if (!tmp)
+        return -PAL_ERROR_NOMEM;
+
+    int ret = ocall_rename(handle->dir.realpath, uri);
+    if (IS_ERR(ret)) {
+        free(tmp);
+        return unix_to_pal_error(ERRNO(ret));
+    }
+
+    /* initial realpath is part of handle object and will be freed with it */
+    if (handle->dir.realpath &&
+        handle->dir.realpath != (void *) handle + HANDLE_SIZE(dir)) {
+        free((void *) handle->dir.realpath);
+    }
+
+    handle->dir.realpath = tmp;
     return 0;
 }
 

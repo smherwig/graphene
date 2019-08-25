@@ -42,6 +42,7 @@ typedef __kernel_pid_t pid_t;
 #include <sys/socket.h>
 #include <linux/in.h>
 #include <linux/in6.h>
+#include <linux/time.h>
 #include <netinet/tcp.h>
 #include <asm/errno.h>
 
@@ -156,7 +157,7 @@ static int inet_create_uri (char * uri, int count, struct sockaddr * addr,
 
     if (addr->sa_family == AF_INET) {
         if (addrlen != sizeof(struct sockaddr_in))
-            return PAL_ERROR_INVAL;
+            return -PAL_ERROR_INVAL;
 
         struct sockaddr_in * addr_in = (struct sockaddr_in *) addr;
         char * addr = (char *) &addr_in->sin_addr.s_addr;
@@ -170,7 +171,7 @@ static int inet_create_uri (char * uri, int count, struct sockaddr * addr,
                        __ntohs(addr_in->sin_port));
     } else if (addr->sa_family == AF_INET6) {
         if (addrlen != sizeof(struct sockaddr_in6))
-            return PAL_ERROR_INVAL;
+            return -PAL_ERROR_INVAL;
 
         struct sockaddr_in6 * addr_in6 = (struct sockaddr_in6 *) addr;
         unsigned short * addr = (unsigned short *) &addr_in6->sin6_addr.s6_addr;
@@ -207,8 +208,12 @@ static int socket_parse_uri (char * uri,
     if (!uri || !(*uri)) {
         if (bind_addr)
             *bind_addr = NULL;
+        if (bind_addrlen)
+            *bind_addrlen = 0;
         if (dest_addr)
             *dest_addr = NULL;
+        if (dest_addrlen)
+            *dest_addrlen = 0;
         return 0;
     }
 
@@ -557,6 +562,11 @@ failed:
 static int tcp_open (PAL_HANDLE *handle, const char * type, const char * uri,
                      int access, int share, int create, int options)
 {
+    if (!WITHIN_MASK(access, PAL_ACCESS_MASK) ||
+        !WITHIN_MASK(share, PAL_SHARE_MASK) ||
+        !WITHIN_MASK(create, PAL_CREATE_MASK))
+        return -PAL_ERROR_INVAL;
+
     int uri_len = strlen(uri) + 1;
 
     if (uri_len > PAL_SOCKADDR_SIZE)
@@ -565,10 +575,10 @@ static int tcp_open (PAL_HANDLE *handle, const char * type, const char * uri,
     char uri_buf[PAL_SOCKADDR_SIZE];
     memcpy(uri_buf, uri, uri_len);
 
-    if (strpartcmp_static(type, "tcp.srv:"))
+    if (strcmp_static(type, "tcp.srv"))
         return tcp_listen(handle, uri_buf, options);
 
-    if (strpartcmp_static(type, "tcp:"))
+    if (strcmp_static(type, "tcp"))
         return tcp_connect(handle, uri_buf, options);
 
     return -PAL_ERROR_NOTSUPPORT;
@@ -578,6 +588,9 @@ static int tcp_open (PAL_HANDLE *handle, const char * type, const char * uri,
 static int64_t tcp_read (PAL_HANDLE handle, uint64_t offset, uint64_t len,
                          void * buf)
 {
+    if (offset)
+        return -PAL_ERROR_INVAL;
+
     if (!IS_HANDLE_TYPE(handle, tcp) || !handle->sock.conn)
         return -PAL_ERROR_NOTCONNECTION;
 
@@ -611,6 +624,9 @@ static int64_t tcp_read (PAL_HANDLE handle, uint64_t offset, uint64_t len,
 static int64_t tcp_write (PAL_HANDLE handle, uint64_t offset, uint64_t len,
                           const void * buf)
 {
+    if (offset)
+        return -PAL_ERROR_INVAL;
+
     if (!IS_HANDLE_TYPE(handle, tcp) || !handle->sock.conn)
         return -PAL_ERROR_NOTCONNECTION;
 
@@ -731,7 +747,7 @@ static int udp_connect (PAL_HANDLE * handle, char * uri, int options)
     if (IS_ERR(fd))
         return -PAL_ERROR_DENIED;
 
-    if (dest_addr->sa_family == AF_INET6) {
+    if (dest_addr && dest_addr->sa_family == AF_INET6) {
         int ipv6only = 1;
         INLINE_SYSCALL(setsockopt, 5, fd, SOL_IPV6, IPV6_V6ONLY, &ipv6only,
                        sizeof(int));
@@ -775,6 +791,12 @@ failed:
 static int udp_open (PAL_HANDLE *hdl, const char * type, const char * uri,
                      int access, int share, int create, int options)
 {
+    if (!WITHIN_MASK(access, PAL_ACCESS_MASK) ||
+        !WITHIN_MASK(share, PAL_SHARE_MASK) ||
+        !WITHIN_MASK(create, PAL_CREATE_MASK) ||
+        !WITHIN_MASK(options, PAL_OPTION_MASK))
+        return -PAL_ERROR_INVAL;
+
     char buf[PAL_SOCKADDR_SIZE];
     int len = strlen(uri);
 
@@ -782,12 +804,11 @@ static int udp_open (PAL_HANDLE *hdl, const char * type, const char * uri,
         return -PAL_ERROR_TOOLONG;
 
     memcpy(buf, uri, len + 1);
-    options &= PAL_OPTION_MASK;
 
-    if (strpartcmp_static(type, "udp.srv:"))
+    if (strcmp_static(type, "udp.srv"))
         return udp_bind(hdl, buf, options);
 
-    if (strpartcmp_static(type, "udp:"))
+    if (strcmp_static(type, "udp"))
         return udp_connect(hdl, buf, options);
 
     return -PAL_ERROR_NOTSUPPORT;
@@ -796,6 +817,9 @@ static int udp_open (PAL_HANDLE *hdl, const char * type, const char * uri,
 static int64_t udp_receive (PAL_HANDLE handle, uint64_t offset, uint64_t len,
                             void * buf)
 {
+    if (offset)
+        return -PAL_ERROR_INVAL;
+
     if (!IS_HANDLE_TYPE(handle, udp))
         return -PAL_ERROR_NOTCONNECTION;
 
@@ -825,6 +849,9 @@ static int64_t udp_receive (PAL_HANDLE handle, uint64_t offset, uint64_t len,
 static int64_t udp_receivebyaddr (PAL_HANDLE handle, uint64_t offset, uint64_t len,
                                   void * buf, char * addr, int addrlen)
 {
+    if (offset)
+        return -PAL_ERROR_INVAL;
+
     if (!IS_HANDLE_TYPE(handle, udpsrv))
         return -PAL_ERROR_NOTCONNECTION;
 
@@ -866,6 +893,9 @@ static int64_t udp_receivebyaddr (PAL_HANDLE handle, uint64_t offset, uint64_t l
 static int64_t udp_send (PAL_HANDLE handle, uint64_t offset, uint64_t len,
                          const void * buf)
 {
+    if (offset)
+        return -PAL_ERROR_INVAL;
+
     if (!IS_HANDLE_TYPE(handle, udp))
         return -PAL_ERROR_NOTCONNECTION;
 
@@ -900,6 +930,9 @@ static int64_t udp_send (PAL_HANDLE handle, uint64_t offset, uint64_t len,
 static int64_t udp_sendbyaddr (PAL_HANDLE handle, uint64_t offset, uint64_t len,
                                const void * buf, const char * addr, int addrlen)
 {
+    if (offset)
+        return -PAL_ERROR_INVAL;
+
     if (!IS_HANDLE_TYPE(handle, udpsrv))
         return -PAL_ERROR_NOTCONNECTION;
 
@@ -1337,6 +1370,9 @@ err:
 static int64_t mcast_send (PAL_HANDLE handle, uint64_t offset, uint64_t size,
                            const void * buf)
 {
+    if (offset)
+        return -PAL_ERROR_INVAL;
+
     if (handle->mcast.srv == PAL_IDX_POISON)
         return -PAL_ERROR_BADHANDLE;
 
@@ -1377,6 +1413,9 @@ static int64_t mcast_send (PAL_HANDLE handle, uint64_t offset, uint64_t size,
 static int64_t mcast_receive (PAL_HANDLE handle, uint64_t offset, uint64_t size,
                               void * buf)
 {
+    if (offset)
+        return -PAL_ERROR_INVAL;
+
     if (handle->mcast.cli == PAL_IDX_POISON)
         return -PAL_ERROR_BADHANDLE;
 

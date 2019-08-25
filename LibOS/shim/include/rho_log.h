@@ -15,35 +15,24 @@ RHO_DECLS_BEGIN
 
 #define RHO_ASSERT(cond) assert(cond)
 
-/* 
- * if you want to long thread id, 
- * add "tid=%lu", (unsigned long)pthread_self()
- */
-
-
-#ifdef RHO_TRACE
 #define RHO_TRACE_ENTER(fmt, ...) \
-    sys_printf("> %s: " fmt "\n", __func__, ##__VA_ARGS__)
+    debug("> %s: " fmt "\n", __func__, ##__VA_ARGS__)
 
 #define RHO_TRACE_EXIT(fmt, ...) \
-    sys_printf("< %s: "fmt "\n", __func__, ##__VA_ARGS__)
-#else
-#define RHO_TRACE_ENTER(fmt, ...)
-#define RHO_TRACE_EXIT(fmt, ...)
-#endif
+    debug("< %s: "fmt "\n", __func__, ##__VA_ARGS__)
 
 #define rho_errno_die(errnum, fmt, ...) \
     do { \
         sys_printf("die %s:%d " fmt ": %s\n", \
                 __func__, __LINE__,##__VA_ARGS__, PAL_STRERROR(errnum)); \
-        shim_terminate(); \
+        shim_terminate(-1); \
     } while (0)
 
 #define rho_die(fmt, ...) \
     do { \
         sys_printf("die %s:%d " fmt "\n", \
                 __func__, __LINE__,##__VA_ARGS__); \
-        shim_terminate(); \
+        shim_terminate(-1); \
     } while (0)
 
 #define rho_errno_warn(errnum, fmt, ...) \

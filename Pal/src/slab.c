@@ -71,6 +71,8 @@ static inline void * __malloc (int size)
 
 static inline void __free (void * addr, int size)
 {
+    if (!addr)
+        return;
 #if STATIC_SLAB == 1
     if (addr >= (void *)mem_pool && addr < mem_pool_end)
         return;
@@ -125,7 +127,7 @@ void * malloc (size_t size)
          * condition and must terminate the current process.
          */
         printf("******** Out-of-memory in PAL ********\n");
-        _DkProcessExit(-1);
+        _DkProcessExit(-ENOMEM);
     }
 
 #if PROFILING == 1
@@ -152,7 +154,7 @@ char * strdup (const char *s)
 
     if (new)
         memcpy(new, s, len);
-    
+
     return new;
 }
 
@@ -168,6 +170,8 @@ void * calloc (size_t nmem, size_t size)
 
 void free (void * ptr)
 {
+    if (!ptr)
+        return;
 #if PROFILING == 1
     unsigned long before_slab = _DkSystemTimeQuery();
 #endif

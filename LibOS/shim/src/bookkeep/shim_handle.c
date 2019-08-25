@@ -32,7 +32,7 @@
 #include <pal.h>
 #include <pal_error.h>
 
-static LOCKTYPE handle_mgr_lock;
+static struct shim_lock handle_mgr_lock;
 
 #define HANDLE_MGR_ALLOC        32
 
@@ -54,7 +54,7 @@ static inline int init_tty_handle (struct shim_handle * hdl, bool write)
     struct shim_dentry * dent = NULL;
     int ret;
     struct shim_thread * cur_thread = get_cur_thread();
-    
+
     /* XXX: Try getting the root FS from current thread? */
     assert(cur_thread);
     assert(cur_thread->root);
@@ -520,7 +520,7 @@ static void destroy_handle (struct shim_handle * hdl)
 {
     destroy_lock(hdl->lock);
 
-    if (MEMORY_MIGRATED(hdl))
+    if (memory_migrated(hdl))
         memset(hdl, 0, sizeof(struct shim_handle));
     else
         free_mem_obj_to_mgr(handle_mgr, hdl);
@@ -652,6 +652,9 @@ int dup_handle_map (struct shim_handle_map ** new,
     struct shim_handle_map * new_map =
                 get_new_handle_map(old_map->fd_size);
 
+    if (!new_map)
+        return -ENOMEM;
+
     new_map->fd_top = old_map->fd_top;
 
     if (old_map->fd_top == FD_NULL)
@@ -676,6 +679,7 @@ int dup_handle_map (struct shim_handle_map ** new,
                 }
                 unlock(old_map->lock);
                 *new = NULL;
+                free(new_map);
                 return -ENOMEM;
             }
 

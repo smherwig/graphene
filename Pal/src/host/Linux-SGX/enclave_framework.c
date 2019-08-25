@@ -2,12 +2,14 @@
 /* vim: set ts=4 sw=4 et tw=78 fo=cqt wm=0: */
 
 #include <pal_linux.h>
+#include <pal_linux_error.h>
 #include <pal_internal.h>
 #include <pal_debug.h>
 #include <pal_security.h>
 #include <pal_crypto.h>
 #include <api.h>
 #include <list.h>
+#include <stdbool.h>
 
 #include "enclave_pages.h"
 
@@ -19,9 +21,21 @@ struct pal_enclave_config pal_enclave_config;
 
 static int register_trusted_file (const char * uri, const char * checksum_str);
 
-bool sgx_is_within_enclave (const void * addr, uint64_t size)
+bool sgx_is_completely_within_enclave (const void * addr, uint64_t size)
 {
+    if (((uint64_t) addr) > (UINT64_MAX - size)) {
+        return false;
+    }
+
     return enclave_base <= addr && addr + size <= enclave_top;
+}
+
+bool sgx_is_completely_outside_enclave(const void* addr, uint64_t size) {
+    if (((uint64_t) addr) > (UINT64_MAX - size)) {
+        return false;
+    }
+
+    return enclave_base >= addr + size || enclave_top <= addr;
 }
 
 void * sgx_ocget_frame (void)
@@ -29,21 +43,61 @@ void * sgx_ocget_frame (void)
     return GET_ENCLAVE_TLS(ustack);
 }
 
-void * sgx_ocalloc (uint64_t size)
-{
-    void * ustack = GET_ENCLAVE_TLS(ustack) - size;
-    SET_ENCLAVE_TLS(ustack, ustack);
-    return ustack;
-}
-
 void sgx_ocfree_frame (void * frame)
 {
     SET_ENCLAVE_TLS(ustack, frame);
 }
 
-void sgx_ocfree (void)
-{
+void* sgx_alloc_on_ustack(uint64_t size) {
+    void* ustack = GET_ENCLAVE_TLS(ustack) - size;
+    if (!sgx_is_completely_outside_enclave(ustack, size)) {
+        return NULL;
+    }
+    SET_ENCLAVE_TLS(ustack, ustack);
+    return ustack;
+}
+
+void* sgx_copy_to_ustack(const void* ptr, uint64_t size) {
+    if (!sgx_is_completely_within_enclave(ptr, size)) {
+        return NULL;
+    }
+    void* uptr = sgx_alloc_on_ustack(size);
+    if (uptr) {
+        memcpy(uptr, ptr, size);
+    }
+    return uptr;
+}
+
+void sgx_reset_ustack(void) {
     SET_ENCLAVE_TLS(ustack, GET_ENCLAVE_TLS(ustack_top));
+}
+
+/* NOTE: Value from possibly untrusted uptr must be copied inside
+ * CPU register or enclave stack (to prevent TOCTOU). Function call
+ * achieves this. Attribute ensures no inline optimization. */
+__attribute__((noinline))
+bool sgx_copy_ptr_to_enclave(void** ptr, void* uptr, uint64_t size) {
+    assert(ptr);
+    if (!sgx_is_completely_outside_enclave(uptr, size)) {
+        *ptr = NULL;
+        return false;
+    }
+    *ptr = uptr;
+    return true;
+}
+
+/* NOTE: Value from possibly untrusted uptr and usize must be copied
+ * inside CPU registers or enclave stack (to prevent TOCTOU). Function
+ * call achieves this. Attribute ensures no inline optimization. */
+__attribute__((noinline))
+uint64_t sgx_copy_to_enclave(const void* ptr, uint64_t maxsize, const void* uptr, uint64_t usize) {
+    if (usize > maxsize ||
+        !sgx_is_completely_outside_enclave(uptr, usize) ||
+        !sgx_is_completely_within_enclave(ptr, usize)) {
+        return 0;
+    }
+    memcpy((void*) ptr, uptr, usize);
+    return usize;
 }
 
 int sgx_get_report (sgx_arch_hash_t * mrenclave,
@@ -66,7 +120,7 @@ int sgx_get_report (sgx_arch_hash_t * mrenclave,
         return -PAL_ERROR_DENIED;
 
     SGX_DBG(DBG_S, "Generated report:\n");
-    SGX_DBG(DBG_S, "    cpusvn:           %08x %08x\n", report->cpusvn[0],
+    SGX_DBG(DBG_S, "    cpusvn:           %08lx %08lx\n", report->cpusvn[0],
                                                 report->cpusvn[1]);
     SGX_DBG(DBG_S, "    mrenclave:        %s\n",        alloca_bytes2hexstr(report->mrenclave));
     SGX_DBG(DBG_S, "    mrsigner:         %s\n",        alloca_bytes2hexstr(report->mrsigner));
@@ -155,7 +209,7 @@ DEFINE_LISTP(trusted_file);
 static LISTP_TYPE(trusted_file) trusted_file_list = LISTP_INIT;
 static struct spinlock trusted_file_lock = LOCK_INIT;
 static int trusted_file_indexes = 0;
-static int allow_file_creation = 0;
+static bool allow_file_creation = 0;
 
 
 /*
@@ -177,7 +231,7 @@ int load_trusted_file (PAL_HANDLE file, sgx_stub_t ** stubptr,
     char normpath[URI_MAX];
     int ret, fd = file->file.fd, uri_len, len;
 
-    if (!(HANDLE_HDR(file)->flags & RFD(0))) 
+    if (!(HANDLE_HDR(file)->flags & RFD(0)))
         return -PAL_ERROR_DENIED;
 
     uri_len = _DkStreamGetName(file, uri, URI_MAX);
@@ -279,8 +333,10 @@ int load_trusted_file (PAL_HANDLE file, sgx_stub_t ** stubptr,
             goto failed;
 
         ret = ocall_map_untrusted(fd, offset, mapping_size, PROT_READ, &umem);
-        if (ret < 0)
+        if (IS_ERR(ret)) {
+            ret = unix_to_pal_error(ERRNO(ret));
             goto unmap;
+        }
 
         /*
          * To prevent TOCTOU attack when generating the file checksum, we
@@ -498,7 +554,7 @@ int copy_and_verify_trusted_file (const char * path, const void * umem,
          */
         if (memcmp(s, hash, sizeof(sgx_stub_t))) {
             SGX_DBG(DBG_E, "Accesing file:%s is denied. Does not match with MAC"
-                    " at chunk starting at %llu-%llu.\n",
+                    " at chunk starting at %lu-%lu.\n",
                     path, checking, checking_end);
             return -PAL_ERROR_DENIED;
         }
@@ -581,7 +637,7 @@ static int register_trusted_file (const char * uri, const char * checksum_str)
         }
 
         new->index = (++trusted_file_indexes);
-        SGX_DBG(DBG_S, "trusted: [%d] %s %s\n", new->index,
+        SGX_DBG(DBG_S, "trusted: [%ld] %s %s\n", new->index,
                 checksum_text, new->uri);
     } else {
         memset(&new->checksum, 0, sizeof(sgx_checksum_t));
@@ -609,7 +665,7 @@ static int init_trusted_file (const char * key, const char * uri)
     char cskey[URI_MAX], * tmp;
     char checksum[URI_MAX];
     char normpath[URI_MAX];
-    
+
     tmp = strcpy_static(cskey, "sgx.trusted_checksum.", URI_MAX);
     memcpy(tmp, key, strlen(key) + 1);
 
@@ -639,7 +695,7 @@ int init_trusted_files (void)
     ssize_t cfgsize;
     int nuris, ret;
 
-    if (pal_sec.exec_fd != PAL_IDX_POISON) {
+    if (pal_sec.exec_name[0] != '\0') {
         ret = init_trusted_file("exec", pal_sec.exec_name);
         if (ret < 0)
             goto out;
@@ -744,9 +800,9 @@ no_allowed:
     ret = 0;
 
     if (get_config(store, "sgx.allow_file_creation", cfgbuf, CONFIG_MAX) <= 0) {
-        allow_file_creation = 0;
+        allow_file_creation = false;
     } else
-        allow_file_creation = 1;
+        allow_file_creation = true;
 
 out:
     free(cfgbuf);
@@ -857,6 +913,24 @@ void test_dh (void)
 
 int init_enclave (void)
 {
+    // Get report to initialize info (MRENCLAVE, etc.) about this enclave from
+    // a trusted source.
+
+    // Since this report is only read by ourselves we can
+    // leave targetinfo zeroed.
+    sgx_arch_targetinfo_t targetinfo = {0};
+    struct pal_enclave_state reportdata = {0};
+    sgx_arch_report_t report;
+
+    int ret = sgx_report(&targetinfo, &reportdata, &report);
+    if (ret) {
+        SGX_DBG(DBG_E, "failed to get self report: %d\n", ret);
+        return -PAL_ERROR_INVAL;
+    }
+    memcpy(pal_sec.mrenclave, report.mrenclave, sizeof(pal_sec.mrenclave));
+    memcpy(pal_sec.mrsigner, report.mrsigner, sizeof(pal_sec.mrsigner));
+    pal_sec.enclave_attributes = report.attributes;
+
 #if 0
     /*
      * This enclave-specific key is a building block for authenticating
@@ -1030,7 +1104,7 @@ int _DkStreamAttestationRequest (PAL_HANDLE stream, void * data,
     }
 
     if (ret == 1) {
-        SGX_DBG(DBG_S, "Not an allowed encalve (mrenclave = %s)\n",
+        SGX_DBG(DBG_S, "Not an allowed enclave (mrenclave = %s)\n",
                 alloca_bytes2hexstr(att.mrenclave));
         ret = -PAL_ERROR_DENIED;
         goto out;
@@ -1153,4 +1227,29 @@ int _DkStreamAttestationRespond (PAL_HANDLE stream, void * data,
 out:
     DkStreamDelete(stream, 0);
     return ret;
+}
+
+/*
+ * Restore an sgx_context_t as generated by .Lhandle_exception. Execution will
+ * continue as specified by the rip in the context.
+ *
+ * It is required that:
+ *
+ *     ctx == ctx->rsp - (sizeof(sgx_context_t) + RED_ZONE_SIZE)
+ *
+ * This means that the ctx is allocated directly below the "normal" stack
+ * (honoring its red zone). This is needed to properly restore the old state
+ * (see _restore_sgx_context for details).
+ *
+ * For the original sgx_context_t allocated by .Lhandle_exception this is true.
+ * This is a safe wrapper around _restore_sgx_context, which checks this
+ * preconditon.
+ */
+void restore_sgx_context(sgx_context_t *ctx) {
+    if (((uint64_t) ctx) != ctx->rsp - (sizeof(sgx_context_t) + RED_ZONE_SIZE)) {
+        SGX_DBG(DBG_E, "Invalid sgx_context_t pointer passed to restore_sgx_context!\n");
+        ocall_exit(1);
+    }
+
+    _restore_sgx_context(ctx);
 }

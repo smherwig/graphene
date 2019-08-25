@@ -8,12 +8,6 @@
 
 #define SHIM_TLS_CANARY $xdeadbeef
 
-#if defined(__x86_64__)
-# define SHIM_TCB_OFFSET    80
-#else
-# define SHIM_TCB_OFFSET    44
-#endif
-
 #else /* !__ASSEMBLER__ */
 
 #define SHIM_TLS_CANARY 0xdeadbeef
@@ -43,6 +37,7 @@ struct shim_regs {
     unsigned long           rdi;
     unsigned long           rbx;
     unsigned long           rbp;
+    unsigned long           rflags;
 };
 
 struct shim_context {
@@ -63,6 +58,8 @@ struct shim_context {
 
 #endif /* IN_SHIM */
 
+struct debug_buf;
+
 typedef struct {
     uint64_t                canary;
     void *                  self;
@@ -70,7 +67,7 @@ typedef struct {
     struct shim_context     context;
     unsigned int            tid;
     int                     pal_errno;
-    void *                  debug_buf;
+    struct debug_buf *      debug_buf;
 
     /* This record is for testing the memory of user inputs.
      * If a segfault occurs with the range [start, end],
@@ -95,23 +92,29 @@ typedef struct
 
 #include <stddef.h>
 
-#define SHIM_TLS_CHECK_CANARY()                                \
-    ({ uint64_t __canary;                                      \
-        asm ("movq %%fs:%c1,%q0" : "=r" (__canary)             \
-           : "i" (offsetof(__libc_tcb_t, shim_tcb.canary)));   \
-      __canary == SHIM_TLS_CANARY; })
+static inline bool shim_tls_check_canary(void)
+{
+    uint64_t __canary;
+    __asm__ ("movq %%fs:%c1,%q0" : "=r" (__canary)
+             : "i" (offsetof(__libc_tcb_t, shim_tcb.canary)));
+    return __canary == SHIM_TLS_CANARY;
+}
 
-#define SHIM_GET_TLS()                                         \
-    ({ shim_tcb_t *__self;                                     \
-        asm ("movq %%fs:%c1,%q0" : "=r" (__self)               \
-           : "i" (offsetof(__libc_tcb_t, shim_tcb.self)));     \
-      __self; })
+static inline shim_tcb_t * shim_get_tls(void)
+{
+    shim_tcb_t *__self;
+    __asm__ ("movq %%fs:%c1,%q0" : "=r" (__self)
+             : "i" (offsetof(__libc_tcb_t, shim_tcb.self)));
+    return __self;
+}
 
-#define GET_LIBC_TCB()                                         \
-    ({ void *__self;                                           \
-        asm ("movq %%fs:%c1,%q0" : "=r" (__self)               \
-           : "i" (offsetof(__libc_tcb_t, tcb)));               \
-      __self; })
+static inline __libc_tcb_t * shim_libc_tcb(void)
+{
+    __libc_tcb_t *__self;
+    __asm__ ("movq %%fs:%c1,%q0" : "=r" (__self)
+             : "i" (offsetof(__libc_tcb_t, tcb)));
+    return __self;
+}
 
 #endif /* IN_SHIM */
 

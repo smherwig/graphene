@@ -32,7 +32,9 @@ void rho_buf_truncate(struct rho_buf *buf, off_t off);
 void rho_buf_clear(struct rho_buf *buf);
 
 void * rho_buf_raw(const struct rho_buf *buf, off_t offset, int whence);
+
 size_t rho_buf_length(const struct rho_buf *buf);
+size_t rho_buf_left(const struct rho_buf *buf);
 void rho_buf_setlength(struct rho_buf *buf, size_t len);
 
 int rho_buf_preadu8_at(struct rho_buf *buf, uint8_t *v, off_t offset);
@@ -95,9 +97,9 @@ void rho_buf_writeu32be(struct rho_buf *buf, uint32_t v);
 #define rho_buf_pread32be(buf, v) rho_buf_preadu32be(buf, (uint32_t *)(v))
 #define rho_buf_read32be(buf, v) rho_buf_readu32be(buf, (uint32_t *)(v))
 
-#define rho_buf_pwrite32be_at(buf, v, offset) rho_buf_pwriteu32be_at(buf, (uint32j_t)(v), offset)
-#define rho_buf_pwrite32be(buf, v) rho_buf_pwriteu32be(buf, (uint32j_t)(v))
-#define rho_buf_write32be(buf, v) rho_buf_writeu32be(buf, (uint32j_t)(v))
+#define rho_buf_pwrite32be_at(buf, v, offset) rho_buf_pwriteu32be_at(buf, (uint32_t)(v), offset)
+#define rho_buf_pwrite32be(buf, v) rho_buf_pwriteu32be(buf, (uint32_t)(v))
+#define rho_buf_write32be(buf, v) rho_buf_writeu32be(buf, (uint32_t)(v))
 
 int rho_buf_preadu32le_at(struct rho_buf *buf, uint32_t *v, off_t offset);
 int rho_buf_preadu32le(struct rho_buf *buf, uint32_t *v);
@@ -123,9 +125,9 @@ void rho_buf_pwriteu64be_at(struct rho_buf *buf, uint64_t v, off_t offset);
 void rho_buf_pwriteu64be(struct rho_buf *buf, uint64_t v);
 void rho_buf_writeu64be(struct rho_buf *buf, uint64_t v);
 
-#define rho_buf_pread64be_at(buf, v, offset) rho_buf_preadu64be_at(buf, (int64_t *)(v), offset)
-#define rho_buf_pread64be(buf, v) rho_buf_preadu64be(buf, (int64_t *)(v))
-#define rho_buf_read64be(buf, v) rho_buf_readu64be(buf, (int64_t *)(v))
+#define rho_buf_pread64be_at(buf, v, offset) rho_buf_preadu64be_at(buf, (uint64_t *)(v), offset)
+#define rho_buf_pread64be(buf, v) rho_buf_preadu64be(buf, (uint64_t *)(v))
+#define rho_buf_read64be(buf, v) rho_buf_readu64be(buf, (uint64_t *)(v))
 
 #define rho_buf_pwrite64be_at(buf, v, offset) rho_buf_pwriteu64be_at(buf, (uint64_t)(v), offset)
 #define rho_buf_pwrite64be(buf, v) rho_buf_pwriteu64be(buf, (uint64_t)(v))
@@ -139,9 +141,9 @@ void rho_buf_pwriteu64le_at(struct rho_buf *buf, uint64_t v, off_t offset);
 void rho_buf_pwriteu64le(struct rho_buf *buf, uint64_t v);
 void rho_buf_writeu64le(struct rho_buf *buf, uint64_t v);
 
-#define rho_buf_pread64le_at(buf, v, offset) rho_buf_preadu64le_at(buf, (int64_t *)(v), offset)
-#define rho_buf_pread64le(buf, v) rho_buf_preadu64le(buf, (int64_t *)(v))
-#define rho_buf_read64le(buf, v) rho_buf_readu64le(buf, (int64_t *)(v))
+#define rho_buf_pread64le_at(buf, v, offset) rho_buf_preadu64le_at(buf, (uint64_t *)(v), offset)
+#define rho_buf_pread64le(buf, v) rho_buf_preadu64le(buf, (uint64_t *)(v))
+#define rho_buf_read64le(buf, v) rho_buf_readu64le(buf, (uint64_t *)(v))
 
 #define rho_buf_pwrite64le_at(buf, v, offset) rho_buf_pwriteu64le_at(buf, (uint64_t)(v), offset)
 #define rho_buf_pwrite64le(buf, v) rho_buf_pwriteu64le(buf, (uint64_t)(v))
@@ -150,52 +152,19 @@ void rho_buf_writeu64le(struct rho_buf *buf, uint64_t v);
 size_t rho_buf_read(struct rho_buf *buf, void *b, size_t len);
 void rho_buf_write(struct rho_buf *buf, const void *b, size_t len);
 
+int rho_buf_read_u32size_blob(struct rho_buf *buf, void *b, size_t len,
+        size_t *ngot);
+
+void rho_buf_write_u32size_blob(struct rho_buf *buf, const void *b,
+        size_t len);
+
 void rho_buf_puts(struct rho_buf *buf, const char *s);
 void rho_buf_puts_nul(struct rho_buf *buf, const char *s);
 
-#if 0
-void rho_buf_printf(struct rho_buf *buf, const char *fmt, ...);
-void rho_buf_printf_nul(struct rho_buf *buf, const char *fmt, ...);
-#endif
+int rho_buf_read_u32size_str(struct rho_buf *buf, char *s, size_t len);
+void rho_buf_write_u32size_str(struct rho_buf *buf, const char *s);
 
 void rho_buf_append(struct rho_buf *buf, const struct rho_buf *a);
-
-#if 0
-General: reads and writes should return ssize_t, which is -1
-on error, and the number of bytes read/written on success.
-
-int rho_buf_cmp(const struct rho_buf *a, const struct rho_buf *b);
-
-void rho_buf_fill(struct rho_buf *a, void *data, size_t len, off_t start, off_t end);
-void rho_buf_fill_byte(struct rho_buf *a, uint8_t byte, off_t start, off_t end);
-void rho_buf_fill_char(struct rho_buf *a, char c, off_t start, off_t end);
-void rho_buf_fill_str(struct rho_buf *a, const char *s, off_t start, off_t end);
-
-off_t rho_buf_index(const struct rho_buf *buf, void *match, size_t len);
-off_t rho_buf_rindex(const struct rho_buf *buf, void *match, size_t len);
-
-off_t rho_buf_index_byte(const struct rho_buf *buf, uint8_t byte);
-off_t rho_buf_rindex_byte(const struct rho_buf *buf, uint8_t byte);
-
-off_t rho_buf_index_chr(const struct rho_buf *buf, char c);
-off_t rho_buf_rindex_chr(const struct rho_buf *buf, char c);
-
-off_t rho_buf_index_str(const struct rho_buf *buf, const char *s);
-off_t rho_buf_rindex_str(const struct rho_buf *buf, const char *s);
-
-bool rho_buf_includes(const struct rho_buf *buf, void *data, size_t len);
-
-rho_buf * rho_buf_slice(const struct rho_buf *buf, off_t start, off_t end); 
-void rho_buf_slice_into_cbuf(const struct rho_buf *buf, off_t start, off_t end, void *a); 
-char * rho_buf_slice_as_str_alloc(const struct rho_buf *buf, off_t start, off_t end, void *a); 
-
-rho_buf_readline_into_cbuf(struct rho_buf *buf, void *b, size_t blen);
-char * rho_buf_readline_as_str_alloc(struct rho_buf *buf, void **b, size_t blen);
-const char * rho_buf_readline_as_str(struct rho_buf *buf);
- 
-// return the number of bytes available for reading.
-int rho_buf_canread(const struct rho_buf *buf);  
-#endif
 
 RHO_DECLS_END
 

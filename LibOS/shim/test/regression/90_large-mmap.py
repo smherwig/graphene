@@ -1,5 +1,3 @@
-#!/usr/bin/python
-
 import os, sys, mmap
 from regression import Regression
 
@@ -15,4 +13,5 @@ regression.add_check(name="Large mmap",
     check=lambda res: "large-mmap: mmap 1 completed OK" in res[0].out and \
                      "large-mmap: mmap 2 completed OK" in res[0].out)
 
-regression.run_checks()
+rv = regression.run_checks()
+if rv: sys.exit(rv)

@@ -1,5 +1,3 @@
-#!/usr/bin/python
-
 import os, sys, mmap
 from regression import Regression
 
@@ -11,4 +9,14 @@ regression = Regression(loader, "futex")
 regression.add_check(name="Futex Wake Test",
     check=lambda res: "Woke all kiddos" in res[0].out)
 
-regression.run_checks()
+rv = regression.run_checks()
+if rv: sys.exit(rv)
+
+# Running futex-timeout
+regression = Regression(loader, "futex-timeout")
+
+regression.add_check(name="Futex Timeout Test",
+    check=lambda res: "futex correctly timed out" in res[0].out)
+
+rv = regression.run_checks()
+if rv: sys.exit(rv)

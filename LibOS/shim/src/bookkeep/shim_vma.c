@@ -113,7 +113,7 @@ static MEM_MGR vma_mgr = NULL;
  */
 DEFINE_LISTP(shim_vma);
 static LISTP_TYPE(shim_vma) vma_list = LISTP_INIT;
-static LOCKTYPE vma_list_lock;
+static struct shim_lock vma_list_lock;
 
 /*
  * Return true if [s, e) is exactly the area represented by vma.
@@ -342,7 +342,9 @@ int init_vma (void)
     uint64_t addr_rand_size =
         (PAL_CB(user_address.end) - PAL_CB(user_address.start)) * 5 / 6;
     uint64_t rand;
-    getrand(&rand, sizeof(rand));
+    ret = DkRandomBitsRead(&rand, sizeof(rand));
+    if (ret < 0)
+        return -convert_pal_errno(-ret);
     current_heap_top -= ALIGN_DOWN(rand % addr_rand_size);
 #endif
 
@@ -1132,8 +1134,8 @@ BEGIN_RS_FUNC(vma)
 
     SAVE_PROFILE_INTERVAL(vma_add_bookkeep);
 
-    DEBUG_RS("vma: %p-%p flags %x prot %p\n", vma->addr, vma->addr + vma->length,
-             vma->flags, vma->prot);
+    DEBUG_RS("vma: %p-%p flags %x prot 0x%08x\n",
+             vma->addr, vma->addr + vma->length, vma->flags, vma->prot);
 
     if (!(vma->flags & VMA_UNMAPPED)) {
         if (vma->file) {
@@ -1186,12 +1188,12 @@ BEGIN_RS_FUNC(vma)
         get_handle(vma->file);
 
     if (vma->file)
-        DEBUG_RS("%p-%p,size=%d,prot=%08x,flags=%08x,off=%d,path=%s,uri=%s",
+        DEBUG_RS("%p-%p,size=%ld,prot=%08x,flags=%08x,off=%ld,path=%s,uri=%s",
                  vma->addr, vma->addr + vma->length, vma->length,
                  vma->prot, vma->flags, vma->offset,
                  qstrgetstr(&vma->file->path), qstrgetstr(&vma->file->uri));
     else
-        DEBUG_RS("%p-%p,size=%d,prot=%08x,flags=%08x,off=%d",
+        DEBUG_RS("%p-%p,size=%ld,prot=%08x,flags=%08x,off=%ld",
                  vma->addr, vma->addr + vma->length, vma->length,
                  vma->prot, vma->flags, vma->offset);
 }
@@ -1251,7 +1253,7 @@ void debug_print_vma_list (void)
             }
         }
 
-        sys_printf("[%p-%p] prot=%08x flags=%08x%s%s offset=%d%s%s%s%s\n",
+        sys_printf("[%p-%p] prot=%08x flags=%08x%s%s offset=%ld%s%s%s%s\n",
                    vma->start, vma->end,
                    vma->prot,
                    vma->flags & ~(VMA_INTERNAL|VMA_UNMAPPED|VMA_TAINTED|VMA_CP),

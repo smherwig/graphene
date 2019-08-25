@@ -289,6 +289,12 @@ rho_buf_length(const struct rho_buf *buf)
     return (buf->len);
 }
 
+size_t
+rho_buf_left(const struct rho_buf *buf)
+{
+    return (buf->len - buf->pos);
+}
+
 /* XXX: unsafe -- needed by rho_sock_precvn_buf */
 void
 rho_buf_setlength(struct rho_buf *buf, size_t len)
@@ -400,7 +406,7 @@ rho_buf_preadu16be_at(struct rho_buf *buf, uint16_t *v, off_t offset)
     }
 
     x = *((uint16_t *)(buf->data + offset));
-    x = be16toh(x);
+    x = rho_be16toh(x);
     *v = x;
 
 out:
@@ -441,7 +447,7 @@ rho_buf_pwriteu16be_at(struct rho_buf *buf, uint16_t v, off_t offset)
         }
     }
 
-    v = htobe16(v);
+    v = rho_htobe16(v);
     memcpy(buf->data + offset, &v, sizeof(v));
 
     if (((size_t)newpos) > buf->len)
@@ -483,7 +489,7 @@ rho_buf_preadu16le_at(struct rho_buf *buf, uint16_t *v, off_t offset)
     }
 
     x = *((uint16_t *)(buf->data + offset));
-    x = le16toh(x);
+    x = rho_le16toh(x);
     *v = x;
 
 out:
@@ -524,7 +530,7 @@ rho_buf_pwriteu16le_at(struct rho_buf *buf, uint16_t v, off_t offset)
         }
     }
 
-    v = htole16(v);
+    v = rho_htole16(v);
     memcpy(buf->data + offset, &v, sizeof(v));
     buf->pos = newpos;
 
@@ -569,7 +575,7 @@ rho_buf_preadu32be_at(struct rho_buf *buf, uint32_t *v, off_t offset)
     }
 
     x = *((uint32_t *)(buf->data + offset));
-    x = be32toh(x);
+    x = rho_be32toh(x);
     *v = x;
 
 out:
@@ -610,7 +616,7 @@ rho_buf_pwriteu32be_at(struct rho_buf *buf, uint32_t v, off_t offset)
         }
     }
 
-    v = htobe32(v);
+    v = rho_htobe32(v);
     memcpy(buf->data + offset, &v, sizeof(v));
 
     if (((size_t)newpos) > buf->len)
@@ -652,7 +658,7 @@ rho_buf_preadu32le_at(struct rho_buf *buf, uint32_t *v, off_t offset)
     }
 
     x = *((uint32_t *)(buf->data + offset));
-    x = le32toh(x);
+    x = rho_le32toh(x);
     *v = x;
 
 out:
@@ -693,7 +699,7 @@ rho_buf_pwriteu32le_at(struct rho_buf *buf, uint32_t v, off_t offset)
         }
     }
 
-    v = htole32(v);
+    v = rho_htole32(v);
     memcpy(buf->data + offset, &v, sizeof(v));
 
     if (((size_t)newpos) > buf->len)
@@ -735,7 +741,7 @@ rho_buf_preadu64be_at(struct rho_buf *buf, uint64_t *v, off_t offset)
     }
 
     x = *((uint64_t *)(buf->data + offset));
-    x = be64toh(x);
+    x = rho_be64toh(x);
     *v = x;
 
 out:
@@ -776,7 +782,7 @@ rho_buf_pwriteu64be_at(struct rho_buf *buf, uint64_t v, off_t offset)
         }
     }
 
-    v = htobe64(v);
+    v = rho_htobe64(v);
     memcpy(buf->data + offset, &v, sizeof(v));
 
     if (((size_t)newpos) > buf->len)
@@ -819,7 +825,7 @@ rho_buf_preadu64le_at(struct rho_buf *buf, uint64_t *v, off_t offset)
     }
 
     x = *((uint64_t *)(buf->data + offset));
-    x = le64toh(x);
+    x = rho_le64toh(x);
     *v = x;
 
 out:
@@ -860,7 +866,7 @@ rho_buf_pwriteu64le_at(struct rho_buf *buf, uint64_t v, off_t offset)
         }
     }
 
-    v = htole64(v);
+    v = rho_htole64(v);
     memcpy(buf->data + offset, &v, sizeof(v));
 
     if (((size_t)newpos) > buf->len)
@@ -930,6 +936,55 @@ rho_buf_write(struct rho_buf *buf, const void *b, size_t len)
         buf->len = buf->pos;
 }
 
+/**********************************************************
+ * BYTE ARRAY WITH A U32 SIZE PREFIX
+ **********************************************************/
+
+int
+rho_buf_read_u32size_blob(struct rho_buf *buf, void *b, size_t len, size_t *ngot)
+{
+    int error = 0;
+    uint32_t n = 0;
+    size_t left = 0;
+
+    rho_buf_readu32be(buf, &n);
+
+    /* malformed */
+    left = rho_buf_left(buf);
+    if (left < n) {
+        rho_warn("want %lu bytes, but only have %lu",
+                (unsigned long)n, (unsigned long)left);
+        error = -1;
+        goto done;
+    }
+
+    /* too big to fit in s */
+    if (n > len) {
+        rho_warn("blob is %lu bytes, but buffer can only hold %lu",
+                (unsigned long)n, (unsigned long)len);
+        error = -1;
+        goto done;
+    }
+
+    rho_buf_read(buf, b, n);
+    if (ngot != NULL)
+        *ngot = (size_t)n;
+
+done:
+    return (error);
+}
+
+void
+rho_buf_write_u32size_blob(struct rho_buf *buf, const void *b, size_t len)
+{
+    rho_buf_writeu32be(buf, len);
+    rho_buf_write(buf, b, len);
+}
+
+/**********************************************************
+ * STRINGS
+ **********************************************************/
+
 static void
 rho_buf_doputs(struct rho_buf *buf, bool nulterm, const char *s)
 {
@@ -974,6 +1029,60 @@ rho_buf_puts_nul(struct rho_buf *buf, const char *s)
     rho_buf_doputs(buf, true, s);
 }
 
+/**********************************************************
+ * STRINGS WITH A U32 SIZE PREFIX (aka, PASCAL STRINGS)
+ **********************************************************/
+
+/*
+ * len is the number of bytes s can hold, including the nul.
+ */
+int
+rho_buf_read_u32size_str(struct rho_buf *buf, char *s, size_t len)
+{
+    int error = 0;
+    uint32_t n = 0;
+    size_t left = 0;
+
+    rho_buf_readu32be(buf, &n);
+
+    /* malformed */
+    left = rho_buf_left(buf);
+    if (left < n) {
+        rho_warn("want %lu bytes, but only have %lu",
+                (unsigned long)n, (unsigned long)left);
+        error = -1;
+        goto done;
+    }
+
+    /* too big to fit in s */
+    if ((n+1) > len) {
+        rho_warn("string+nul is %lu bytes, but buffer can only hold %lu",
+                (unsigned long)(n+1), (unsigned long)len);
+        error = -1;
+        goto done;
+    }
+
+    rho_buf_read(buf, s, n);
+
+    /* nul terminate */
+    s[n] = '\0';
+
+done:
+    return (error);
+}
+
+void
+rho_buf_write_u32size_str(struct rho_buf *buf, const char *s)
+{
+    size_t len = strlen(s);
+    rho_buf_writeu32be(buf, len);
+    rho_buf_puts(buf, s);
+}
+
+/**********************************************************
+ * OPERTAIONS WITH TWO RHO_BUFS
+ **********************************************************/
+
 void
 rho_buf_append(struct rho_buf *buf, const struct rho_buf *a)
 {
@@ -1000,80 +1109,3 @@ rho_buf_append(struct rho_buf *buf, const struct rho_buf *a)
     if (((size_t)buf->pos) > buf->len)
         buf->len = buf->pos;
 }
-
-#if 0
-/*
- * FORMATED
- */
-
-/* does not write nul byte to buffer */
-
-/*
- * 0 1 2
- * a b c
- * d e
- *
- * n = 2
- * m = 3
- *
- * save c at 2
- */
-static void
-rho_buf_doprintf(struct rho_buf *buf, bool nulterm, const char *fmt, va_list ap)
-{
-    va_list ap2;
-    int n = 0;
-    int m = 0;
-    uint8_t save = 0;
-
-    va_copy(ap2, ap);
-    /* returns number of chars printed (does not include nul byte) */
-    n = vsnprintf(NULL, 0, fmt, ap); 
-    if (n == -1)
-        rho_die("vsnprintf(NULL, 0, %s) returned %d", fmt, n);
-
-    m = n + 1;
-    rho_buf_ensure(buf, m);
-
-    /* save the n+1 byte -- vsnprintf will write over this with a nul */
-    if (!nulterm)
-        save = buf->data[buf->pos + n];
-
-    n = vsnprintf((char *)(buf->data + buf->pos), m, fmt, ap2);
-    if (n == -1)
-        rho_die("vsnprintf(*, %d, %s) returned %d", m, fmt, n);
-    if (n != (m - 1))
-        rho_die("expected vsnprintf(*, %d, %s) to return %d, but returned %d",
-                m, fmt, m-1, n);
-
-    /* restore the saved byte */
-    if (!nulterm)
-        buf->data[buf->pos + n] = save;
-
-    buf->pos += n;
-    if (((size_t)buf->pos) > buf->len)
-        buf->len = buf->pos;
-
-    va_end(ap2);
-}
-
-void
-rho_buf_printf(struct rho_buf *buf, const char *fmt, ...)
-{
-    va_list ap;
-
-    va_start(ap, fmt);
-    rho_buf_doprintf(buf, false, fmt, ap);
-    va_end(ap);
-}
-
-void
-rho_buf_printf_nul(struct rho_buf *buf, const char *fmt, ...)
-{
-    va_list ap;
-
-    va_start(ap, fmt);
-    rho_buf_doprintf(buf, true, fmt, ap);
-    va_end(ap);
-}
-#endif
