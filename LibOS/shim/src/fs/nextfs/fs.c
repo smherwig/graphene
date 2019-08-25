@@ -285,8 +285,10 @@ nextfs_marshal_str(struct rho_buf *buf, const char *s)
 static void
 nextfs_pmarshal_hdr(struct rho_buf *buf, uint32_t op, uint32_t bodylen)
 {
+    RHO_TRACE_ENTER("op=%u, bodylen=%u", op, bodylen);
     rho_buf_pwriteu32be_at(buf, op, 0);
     rho_buf_pwriteu32be_at(buf, bodylen, 4);
+    RHO_TRACE_EXIT();
 }
 
 static void
@@ -356,7 +358,7 @@ nextfs_client_request(struct nextfs_client *client,
     struct rho_sock *sock = client->sock;
     struct rho_buf *buf = client->buf;
 
-    //debug("> nextfs_client_request\n");
+    RHO_TRACE_ENTER("buffer length: %lu\n", rho_buf_length(client->buf));
 
     n = rho_sock_sendn_buf(sock, buf, rho_buf_length(buf));
     if (n == -1) {
@@ -388,7 +390,7 @@ nextfs_client_request(struct nextfs_client *client,
     }
 
 done:
-    //debug("< nextfs_client_request\n");
+    RHO_TRACE_EXIT();
     return (error);
 }
 
