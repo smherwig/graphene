@@ -478,6 +478,7 @@ int initialize_enclave (struct pal_enclave * enclave)
 
     /* SMHERWIG: patch from Chia-Che to support hardware performance counters */
 #ifdef DEBUG
+    SGX_DBG(DBG_E, "hardware performance counters enabled\n");
     char memfile[20];
     snprintf(memfile, 20, "/proc/%d/mem", INLINE_SYSCALL(getpid, 0));
     int memfd = INLINE_SYSCALL(open, 2, memfile, O_RDWR);
