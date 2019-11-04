@@ -96,9 +96,9 @@ Base components
 ---------------
 
 - [librho](https://github.com/smherwig/librho#building)
-- [librpc](https://github.com/smherwig/librpc#building)
-- [lwext4](https://github.com/smherwig/#lwext4building)
-- [libbd](https://github.com/smherwig/libbd#building)
+- [librpc](https://github.com/smherwig/phoenix-librpc#building)
+- [lwext4](https://github.com/smherwig/lwext#building)
+- [libbd](https://github.com/smherwig/phoenix-libbd#building)
 
 
 Kernel servers
