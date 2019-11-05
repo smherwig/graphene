@@ -11,8 +11,13 @@ libOS for Intel SGX hardware enclaves.  Phoenix adds to Graphene:
 Phoenix also includes an OpenSSL engine that proxies RSA-2048 key operations to
 an enclaved key server.
 
-Phoenix implements all extensions as servers, and thus the Phoenix design is
-evocative of a micro-kernel.
+Phoenix implements all extensions as servers.  For instance, the encrypted filesystem is a
+userspace server that runs on top of the Phoenix libOS in an enclave; a user
+can configure other instances of Phoenix (such as those running applications)
+to use the remote filesystem.
+
+The Phoenix design is thus evocative of a micro-kernel, and we refer to the servers
+as "kernel servers".
 
 
 <a name="setup"/> Setup
@@ -27,7 +32,7 @@ For our operating system, we use
 with the following kernels:
 
 - `4.10.0-38-generic #42~16.04.1-Ubuntu SMP Tue Oct 10 16:32:20 UTC 2017 x86_64 x86_64 x86_64 GNU/Linux`
-- `4.4.0-157-generic #185-Ubuntu SMP Tue July 23 09:17:01 UTC 2019.
+- `4.4.0-157-generic #185-Ubuntu SMP Tue July 23 09:17:01 UTC 2019`
 
 At the time of developing Phoenix, Graphene only suppported Ubuntu 16.04.
 
@@ -139,8 +144,21 @@ directory, as appropriate):
 Enter the Intel SGX driver directory:
 /home/smherwig/src/linux-sgx-driver-sgx_driver_1.9
 
-Enter the dirver versoin (default: 1.9): 1.9
+Enter the driver version (default: 1.9): 1.9
 ```
+
+The script `Tools/make_phoenix_keys.sh` may be used to generate a root
+certificate (`root.crt`) and a leaf certificate (`proc.crt`) and key
+(`proc.key`).  The kernel servers and Phoenix application instances use this
+keying material.  For convenicne, a copy of the keying material is present in
+this directory.  Copy the keying material to `~/share/phoenix`:
+
+```
+cd ~/src/phoenix/Tools
+mkdir -p ~/share/phoenix
+cp root.crt proc.crt proc.key ~/share/phoenix/
+```
+
 
 Base components
 ---------------
