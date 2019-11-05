@@ -71,14 +71,16 @@ sudo apt-get install build-essential ocaml automake autoconf \
 make                    # builds the SDK and PSW
 make sdk_install_pkg    # builds the SDK installer
 make deb_pkg            # builds the PWS installer
+
 cd linux/installer/bin
 
 # install the SDK to /opt
 sudo ./sgx_linux_x64_sdk_2.6.100.51363.bin
 
 #install the PSW
-cd ~/src/linux-sgx-sgx_2.6/linux/install/deb
-
+cd ~/src/linux-sgx-sgx_2.6/linux/installer/deb
+sudo dpkg -i ./libsgx-urts_2.6.100.51363-xenial1_amd64.deb \
+    ./libsgx-enclave-common_2.6.100.51363-xenial1_amd64.deb
 ```
 
 Phoenix needs the PSW, but not the SDK.  That said, if using the SDK for other
