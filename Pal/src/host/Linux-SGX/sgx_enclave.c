@@ -304,7 +304,7 @@ static int sgx_ocall_futex(void * pms)
         ts->tv_nsec = (ms->ms_timeout - ts->tv_sec * 1000000) * 1000;
     }
     /* SMHERWIG */
-    //SGX_DBG(DBG_E, "futex called\n");
+    SGX_DBG(DBG_I, "futex called\n");
     ret = INLINE_SYSCALL(futex, 6, ms->ms_futex, ms->ms_op, ms->ms_val,
                          ts, NULL, 0);
     return ret;
