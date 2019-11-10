@@ -114,7 +114,7 @@ cd phoenix
 git submodule update --init -- Pal/src/host/Linux-SGX/sgx-driver
 ```
 
-Generate a enclave signing key
+Generate an enclave signing key
 
 ```
 cd Pal/src/host/Linux-SGX/signer
@@ -143,8 +143,7 @@ When prompted for the Intel SGX driver and version, enter (changing the home
 directory, as appropriate):
 
 ```
-Enter the Intel SGX driver directory:
-/home/smherwig/src/linux-sgx-driver-sgx_driver_1.9
+Enter the Intel SGX driver directory: /home/smherwig/src/linux-sgx-driver-sgx_driver_1.9
 
 Enter the driver version (default: 1.9): 1.9
 ```
@@ -152,12 +151,11 @@ Enter the driver version (default: 1.9): 1.9
 The script `Tools/make_phoenix_keys.sh` may be used to generate a root
 certificate (`root.crt`) and a leaf certificate (`proc.crt`) and key
 (`proc.key`).  The kernel servers and Phoenix application instances use this
-keying material.  For convenicne, a copy of the keying material is present in
+keying material.  For convenience, a copy of the keying material is present in
 this directory.  Copy the keying material to `~/share/phoenix`:
 
 ```
 cd ~/src/phoenix/Tools
-mkdir -p ~/share/phoenix
 cp root.crt proc.crt proc.key ~/share/phoenix/
 ```
 
