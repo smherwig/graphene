@@ -231,3 +231,15 @@ and the kernel server micro-benchmarks:
 - [memserver](https://github.com/smherwig/phoenix-memserver#micro-benchmarks)
 - [keyserver](https://github.com/smherwig/phoenix-keyserver#micro-benchmarks)
 - [timeserver](https://github.com/smherwig/phoenix-timeserver#micro-benchmarks)
+
+
+<a name="limitations"/> Limitations
+===================================
+
+The following features are not yet implemented:
+
+- local and remote attestation (though these features have been
+  maturing in main-line Graphene)
+- binding an SGX quote to an X.509 certificate
+- the provisioning servers and agents
+- bundling all executables and resources into a single image
