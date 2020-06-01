@@ -136,6 +136,21 @@ int memcmp (const void *s1, const void *s2, size_t len);
 
 bool strendswith(const char* haystack, const char* needle);
 
+void * memrchr(const void *m, int c, size_t n); 
+int strcasecmp(const char *_l, const char *_r);
+char * strdup(const char *s);
+int strncasecmp(const char *_l, const char *_r, size_t n); 
+int strncmp(const char *_l, const char *_r, size_t n); 
+char *strndup(const char *s, size_t n); 
+char *strrchr(const char *s, int c); 
+
+/* ctypes */
+int islower(int c); 
+int isupper(int c); 
+int tolower(int c); 
+int toupper(int c); 
+
+
 /* Libc memory allocation functions. stdlib.h. */
 void *malloc(size_t size);
 void free(void *ptr);

@@ -97,6 +97,10 @@ $(filter-out crypto/mbedtls/crypto/library/aes.c,$(patsubst %.o,%.c,$(crypto_mbe
 objs += \
 	avl_tree.o \
 	crypto/udivmodti4.o \
+	ctype/islower.o \
+	ctype/isupper.o \
+	ctype/tolower.o \
+	ctype/toupper.o \
 	graphene/config.o \
 	graphene/path.o \
 	network/hton.o \
@@ -105,11 +109,18 @@ objs += \
 	string/atoi.o \
 	string/memcmp.o \
 	string/memcpy.o \
+	string/memrchr.o \
 	string/memset.o \
+	string/strcasecmp.o \
 	string/strchr.o \
 	string/strcmp.o \
+	string/strdup.o \
 	string/strendswith.o \
 	string/strlen.o \
+	string/strncasecmp.o \
+	string/strncmp.o \
+	string/strndup.o \
+	string/strrchr.o \
 	string/wordcopy.o
 
 $(addprefix $(target),crypto/adapters/mbedtls_adapter.o crypto/adapters/mbedtls_dh.o crypto/adapters/mbedtls_encoding.o): crypto/mbedtls/crypto/library/aes.c

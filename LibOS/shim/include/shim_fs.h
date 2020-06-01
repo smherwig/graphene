@@ -82,6 +82,7 @@ struct shim_fs_ops {
     void (*hput)(struct shim_handle* hdl);
 
     /* lock and unlock the file */
+    int (*advlock) (struct shim_handle *hdl, int op, struct flock *flock);
     int (*lock)(const char* trim_name);
     int (*unlock)(const char* trim_name);
 
@@ -522,6 +523,18 @@ extern struct shim_d_ops chroot_d_ops;
 
 extern struct shim_fs_ops str_fs_ops;
 extern struct shim_d_ops str_d_ops;
+
+extern struct shim_fs_ops nextfs_fs_ops;
+extern struct shim_d_ops nextfs_d_ops;
+
+extern struct shim_fs_ops smdish_fs_ops;
+extern struct shim_d_ops smdish_d_ops;
+
+extern struct shim_fs_ops smuf_fs_ops;
+extern struct shim_d_ops smuf_d_ops;
+
+extern struct shim_fs_ops smc_fs_ops;
+extern struct shim_d_ops smc_d_ops;
 
 extern struct shim_mount chroot_builtin_fs;
 extern struct shim_mount pipe_builtin_fs;

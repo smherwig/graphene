@@ -7,6 +7,7 @@ CFLAGS += -fPIC -Winline -Wwrite-strings \
 	  -Werror=implicit-function-declaration \
 	  $(cc-option, -Wnull-dereference) \
 	  -fno-stack-protector -fno-builtin -Wno-inline \
+	  -I../../../bearssl-0.6/inc \
 	  -I../include \
 	  -I../include/arch/$(ARCH) \
 	  -I../../../Pal/include \
@@ -61,11 +62,15 @@ objs = \
 	fs/dev/std.o \
 	fs/dev/zero.o \
 	fs/eventfd/fs.o \
+	fs/nextfs/fs.o \
 	fs/pipe/fs.o \
 	fs/proc/fs.o \
 	fs/proc/info.o \
 	fs/proc/ipc-thread.o \
 	fs/proc/thread.o \
+	fs/smc/fs.o \
+	fs/smdish/fs.o \
+	fs/smuf/fs.o \
 	fs/socket/fs.o \
 	fs/str/fs.o \
 	ipc/shim_ipc.o \
@@ -108,6 +113,30 @@ objs = \
 	sys/shim_wrappers.o \
 	utils/md5.o \
 	utils/printf.o \
+	utils/rho_bearssl_cert.o \
+	utils/rho_bearssl_error.o \
+	utils/rho_bearssl_key.o \
+	utils/rho_bearssl_pem.o \
+	utils/rho_bearssl_ta.o \
+	utils/rho_binascii.o \
+	utils/rho_buf.o \
+	utils/rho_crypto.o \
+	utils/rho_der.o \
+	utils/rho_file.o \
+	utils/rho_log.o \
+	utils/rho_mem.o \
+	utils/rho_path.o \
+	utils/rho_pem.o \
+	utils/rho_rand.o \
+	utils/rho_shim_dentry.o \
+	utils/rho_shim_handle.o \
+	utils/rho_sock.o \
+	utils/rho_ssl.o \
+	utils/rho_ssl_common.o \
+	utils/rho_str.o \
+	utils/rho_url.o \
+	utils/rho_vector.o \
+	utils/rpc.o \
 	utils/strobjs.o \
 	vdso/vdso-data.o
 
@@ -116,6 +145,7 @@ all_objs = \
 	vdso/vdso-note.o \
 	vdso/vdso.o
 
+bearssl_lib = ../../../bearssl-0.6/build/libbearssl.a
 graphene_lib = .lib/graphene-lib.a
 pal_lib = $(RUNTIME_DIR)/libpal-$(PAL_HOST).so
 
@@ -130,13 +160,13 @@ $(files_to_install): $(RUNTIME_DIR)/%: %
 
 LDFLAGS-libsysdb.so += --version-script shim.map -T shim-$(ARCH).lds
 libsysdb.so: $(objs) $(filter %.map %.lds,$(LDFLAGS-$@)) \
-	     $(graphene_lib) $(pal_lib) shim.map shim-$(ARCH).lds
+	     $(bearssl_lib) $(graphene_lib) $(pal_lib) shim.map shim-$(ARCH).lds
 	$(call cmd,ld_so_o)
 
 LDFLAGS-libsysdb_debug.so += --version-script shim-debug.map -T shim-$(ARCH).lds
 libsysdb_debug.so: $(filter-out syscallas-$(ARCH).o,$(objs)) \
 		   $(filter %.map %.lds,$(LDFLAGS-$@)) \
-		   $(graphene_lib) $(pal_lib) shim-debug.map shim-$(ARCH).lds
+		   $(bearssl_lib) $(graphene_lib) $(pal_lib) shim-debug.map shim-$(ARCH).lds
 	$(call cmd,ld_so_o)
 
 .PHONY: graphene_lib_recurse

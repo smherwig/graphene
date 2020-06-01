@@ -53,6 +53,26 @@ struct shim_fs mountable_fs[] = {
         .fs_ops = &dev_fs_ops,
         .d_ops  = &dev_d_ops,
     },
+    {
+        .name   = "nextfs",
+        .fs_ops = &nextfs_fs_ops,
+        .d_ops  = &nextfs_d_ops
+    },
+    {
+        .name   = "smdish",
+        .fs_ops = &smdish_fs_ops,
+        .d_ops  = &smdish_d_ops
+    },
+    {
+        .name   = "smuf",
+        .fs_ops = &smuf_fs_ops,
+        .d_ops  = &smuf_d_ops
+    },
+    {
+        .name   = "smc",
+        .fs_ops = &smc_fs_ops,
+        .d_ops  = &smc_d_ops
+    }
 };
 
 struct shim_mount* builtin_fs[] = {

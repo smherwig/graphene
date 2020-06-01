@@ -36,6 +36,7 @@
 #include <shim_sysv.h>
 #include <shim_types.h>
 #include <stdalign.h>
+#include <stdint.h>
 
 /* start definition of shim handle */
 enum shim_handle_type {
@@ -50,7 +51,11 @@ enum shim_handle_type {
     TYPE_FUTEX,
     TYPE_STR,
     TYPE_EPOLL,
-    TYPE_EVENTFD
+    TYPE_EVENTFD,
+    TYPE_NEXTFS,
+    TYPE_SMDISH,
+    TYPE_SMUF,
+    TYPE_SMC
 };
 
 struct shim_handle;
@@ -312,6 +317,22 @@ struct shim_epoll_handle {
     LISTP_TYPE(shim_epoll_item) fds;
 };
 
+struct shim_nextfs_handle {
+    uint32_t fd;    /* remote fd */
+};
+
+struct shim_smdish_handle {
+    int mf_idx; 
+};
+
+struct shim_smuf_handle {
+    int mf_idx; 
+};
+
+struct shim_smc_handle {
+    int mf_idx; 
+};
+
 struct shim_mount;
 struct shim_qstr;
 struct shim_dentry;
@@ -347,6 +368,10 @@ struct shim_handle {
         struct shim_sem_handle sem;
         struct shim_str_handle str;
         struct shim_epoll_handle epoll;
+        struct shim_nextfs_handle nextfs;
+        struct shim_smdish_handle smdish;
+        struct shim_smuf_handle smuf;
+        struct shim_smc_handle smc;
     } info;
 
     struct shim_dir_handle dir_info;
