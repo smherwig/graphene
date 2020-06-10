@@ -39,7 +39,7 @@
 #include <rho_sock.h>
 #include <rho_str.h>
 
-#define TNT_DEFAULT_TOLERANCE   (10 * 1000000UL) /* microseconds */
+#define TNT_DEFAULT_TOLERANCE   (10 * 1000000L) /* microseconds */
 
 /*
  * TNT response is 288 bytes:
@@ -252,7 +252,7 @@ tnt_client_request(struct tnt_client *client)
     rho_buf_writeu64be(buf, nonce);
     rho_buf_rewind(buf);
     n = rho_sock_send_buf(sock, buf, rho_buf_length(buf));
-    if (n != rho_buf_length(buf)) {
+    if (n < 0 || ((unsigned long)n) != rho_buf_length(buf)) {
         rho_warn("error: only sent %ld", n);
         goto done;
     }
@@ -305,7 +305,7 @@ tnt_client_get_trusted_time_usec(struct tnt_client *client)
     long host_time = 0;
     long diff = 0;
 
-    //RHO_TRACE_ENTER();
+    RHO_TRACE_ENTER();
 
     host_time = DkSystemTimeQuery();
     client->last_host_time = host_time;
@@ -320,7 +320,7 @@ tnt_client_get_trusted_time_usec(struct tnt_client *client)
         rho_warn("trusted time %ld and host time %ld differ significanly!\n",
                 trusted_time, host_time);
 
-    //RHO_TRACE_EXIT();
+    RHO_TRACE_EXIT();
     return (trusted_time);
 }
 
@@ -329,7 +329,7 @@ tnt_client_get_host_time_usec(struct tnt_client *client)
 {
     long time = 0;
 
-    //RHO_TRACE_ENTER();
+    RHO_TRACE_ENTER();
 
     time = DkSystemTimeQuery();
     if (time < client->last_host_time)
@@ -338,7 +338,7 @@ tnt_client_get_host_time_usec(struct tnt_client *client)
 
     client->last_host_time = time;
 
-    //RHO_TRACE_EXIT();
+    RHO_TRACE_EXIT();
     return (time);
 }
 
@@ -362,7 +362,7 @@ tnt_client_get_time_usec(struct tnt_client *client)
     long time = 0;
     uint32_t r = 0;
 
-    //RHO_TRACE_ENTER();
+    RHO_TRACE_ENTER();
 
     r = rho_rand_uniform_u32(0, 10000);
     if (r < client->rate)
@@ -370,7 +370,7 @@ tnt_client_get_time_usec(struct tnt_client *client)
     else
         time = tnt_client_get_host_time_usec(client);
 
-    //RHO_TRACE_EXIT();
+    RHO_TRACE_EXIT();
     return (time);
 }
 

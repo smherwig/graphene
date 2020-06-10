@@ -26,11 +26,11 @@
 #include <asm/unistd.h>
 #include <asm/prctl.h>
 
-#include <inttypes.h>
 #include <string.h>
 
 #include "rho_binascii.h"
 #include "rho_buf.h"
+#define RHO_LOG_PREFIX "NEXTFS"
 #include "rho_log.h"
 #include "rho_mem.h"
 #include "rho_rand.h"
@@ -39,65 +39,31 @@
 #include "rho_sock.h"
 #include "rho_ssl.h"
 
-#define URI_MAX_SIZE    STR_SIZE
+#include "rpc.h"
 
-#define TTY_FILE_MODE   0666
-
-#define FILE_BUFMAP_SIZE (PAL_CB(pagesize) * 4)
-#define FILE_BUF_SIZE (PAL_CB(pagesize))
-
-/*****/
 
 #define NEXTFS_HEADER_LENGTH            8
 #define NEXTFS_MAX_PATH_LENGTH          255
 
-/* TODO: move to errno.h */
-#define ERPC                            999
-
-#define NEXTFS_OP_DEVICE_REGISTER       0
-#define NEXTFS_OP_MOUNT                 1
-#define NEXTFS_OP_UMOUNT                2
-#define NEXTFS_OP_MOUNT_POINT_STATS     3
-#define NEXTFS_OP_CACHE_WRITE_BACK      4
-
 #define NEXTFS_OP_FILE_REMOVE           5
-#define NEXTFS_OP_FILE_LINK             6
 #define NEXTFS_OP_FILE_RENAME           7
-#define NEXTFS_OP_FILE_OPEN             8
 #define NEXTFS_OP_FILE_OPEN2            9
 #define NEXTFS_OP_FILE_CLOSE            10
 #define NEXTFS_OP_FILE_TRUNCATE         11
 #define NEXTFS_OP_FILE_READ             12
 #define NEXTFS_OP_FILE_WRITE            13
 #define NEXTFS_OP_FILE_SEEK             14
-#define NEXTFS_OP_FILE_TELL             15
-#define NEXTFS_OP_FILE_SIZE             16
 
 #define NEXTFS_OP_DIR_RM                17
-#define NEXTFS_OP_DIR_MV                18
 #define NEXTFS_OP_DIR_MK                19
-#define NEXTFS_OP_DIR_MKDIR             20
 #define NEXTFS_OP_DIR_OPEN              21
 #define NEXTFS_OP_DIR_CLOSE             22
-#define NEXTFS_OP_DIR_ENTRY_NEXT        23
-#define NEXTFS_OP_DIR_ENTRY_REWIND      24
 #define NEXTFS_OP_DIR_LIST              25
-
-#define NEXTFS_OP_SYMLINK               26
-#define NEXTFS_OP_MKNOD                 27
-#define NEXTFS_OP_READLINK              28
 
 #define NEXTFS_OP_RAW_INODE             29
 #define NEXTFS_OP_MODE_SET              30
 #define NEXTFS_OP_MODE_GET              31
 #define NEXTFS_OP_OWNER_SET             32
-#define NEXTFS_OP_OWNER_GET             33
-#define NEXTFS_OP_ATIME_SET             34
-#define NEXTFS_OP_ATIME_GET             35
-#define NEXTFS_OP_MTIME_SET             36
-#define NEXTFS_OP_MTIME_GET             37
-#define NEXTFS_OP_CTIME_SET             38
-#define NEXTFS_OP_CTIME_GET             39
 
 #define NEXTFS_OP_FORK                  40
 #define NEXTFS_OP_CHILD_ATTACH          41
@@ -105,102 +71,40 @@
 
 #define NEXTFS_OP_FILE_MMAP             43
 
-
-struct nextfs_client {
-    struct rho_sock *sock;
-    struct rho_buf *buf;
-};
-
 struct nextfs_mdata {
     char    url[512];       /* URL for server */
     uint64_t ident;     /* auth cookie for child */
     unsigned char ca_der[4096];
     size_t  ca_der_len;
-    struct nextfs_client *client;
+    struct rpc_agent *agent;
     uint32_t debug_cookie;
 };
-
-static void nextfs_marshal_str(struct rho_buf *buf, const char *s);
-static void nextfs_pmarshal_hdr(struct rho_buf *buf, uint32_t op,
-        uint32_t bodylen);
-static void nextfs_demarshal_hdr(struct rho_buf *buf, uint32_t *status,
-        uint32_t *bodylen);
-
-static struct nextfs_client * nextfs_client_open(const char *url, 
-        unsigned char *ca_der, size_t ca_der_len);
-
-static int nextfs_client_request(struct nextfs_client *client,
-        uint32_t *status, uint32_t *bodylen);
-
-static int nextfs_mount(const char *uri, void **mount_data);
-static int nextfs_unmount(void *mount_data);
-static int nextfs_close(struct shim_handle *hdl);
-static ssize_t nextfs_read(struct shim_handle *hdl, void *data, size_t count);
-static ssize_t nextfs_write(struct shim_handle *hdl, const void *data,
-        size_t count);
-
-static int nextfs_mmap(struct shim_handle *hdl, void **addr, size_t size,
-                        int prot, int flags, off_t offset);
-
-static int nextfs_flush(struct shim_handle *hdl);
-static off_t nextfs_seek(struct shim_handle *hdl, off_t offset, int whence);
-static int nextfs_move(const char *trim_old_name, const char *trim_new_name);
-static int nextfs_copy(const char *trim_old_name, const char *trim_new_name);
-static int nextfs_truncate(struct shim_handle *hdl, off_t len);
-static int nextfs_hstat(struct shim_handle *hdl, struct stat *stat);
-static int nextfs_setflags(struct shim_handle *hdl, int flags);
-static void nextfs_hput(struct shim_handle *hdl);
-static int nextfs_lock(const char *trim_name);
-static int nextfs_unlock(const char *trim_name);
-static int nextfs_lockfs(void);
-static int nextfs_unlockfs(void);
-static int nextfs_checkout(struct shim_handle *hdl);
-static int nextfs_checkin(struct shim_handle *hdl);
-static off_t nextfs_poll(struct shim_handle *hdl, int poll_type);
-static ssize_t nextfs_checkpoint(void **checkpoint, void *mount_data);
-static int nextfs_migrate(void *checkpoint, void **mount_data);
-
-static int nextfs_opendir(struct shim_handle *hdl, struct shim_dentry *dent,
-        int flags);
-static int nextfs_open(struct shim_handle *hdl, struct shim_dentry *dent,
-        int flags);
-static int nextfs_lookup(struct shim_dentry *dent);
-static int nextfs_mode(struct shim_dentry *dent, mode_t *mode);
-static int nextfs_dput(struct shim_dentry *dent);
-static int nextfs_creat(struct shim_handle *hdl, struct shim_dentry *dir,
-        struct shim_dentry *dent, int flags, mode_t mode);
-static int nextfs_unlink(struct shim_dentry *dir, struct shim_dentry *dent);
-static int nextfs_mkdir(struct shim_dentry *dir, struct shim_dentry *dent,
-        mode_t mode);
-static int nextfs_stat(struct shim_dentry *dent, struct stat *stat);
-static int nextfs_follow_link(struct shim_dentry *dent, struct shim_qstr *link);
-static int nextfs_set_link(struct shim_dentry *dent, const char *link);
-static int nextfs_chmod(struct shim_dentry *dent, mode_t mode);
-static int nextfs_chown(struct shim_dentry *dent, int uid, int gid);
-static int nextfs_rename(struct shim_dentry *old, struct shim_dentry *new);
-static int nextfs_readdir(struct shim_dentry *dent,
-        struct shim_dirent **dirent);
 
 /********************************* 
  * RETRIEVE DATA FROM HDL/DENTRY
  *********************************/
-#define NEXTFS_HDL_GET_FD(hdl) \
-    hdl->info.nextfs.fd
+#define NEXTFS_HDL_GET_MDATA(hdl) \
+    (hdl)->fs->data
 
-struct nextfs_client *
-nextfs_hdl_get_client(struct shim_handle *hdl)
+#define NEXTFS_HDL_GET_AGENT(hdl) \
+    (hdl)->fs->data->agent
+
+#define NEXTFS_HDL_GET_FD(hdl) \
+    (hdl)->info.nextfs.fd
+
+struct rpc_agent *
+nextfs_hdl_get_agent(struct shim_handle *hdl)
 {
     struct shim_mount *fs = NULL;
     struct nextfs_mdata *mdata = NULL;
-    struct nextfs_client *client = NULL;
+    struct rpc_agent *agent = NULL;
 
+    RHO_TRACE_ENTER(); 
     rho_shim_handle_print(hdl);
-    debug("nextfs_hdl_get_client: (path=\"%s\")\n",
-            qstrgetstr(&hdl->path));
 
     fs = hdl->fs;
     if (fs == NULL) {
-        debug("nextfs_hdl_get_client: hdl->fs is NULL");
+        debug("nextfs_hdl_get_agent: hdl->fs is NULL");
     } else {
         RHO_ASSERT(hdl->dentry != NULL);
         rho_shim_dentry_print(hdl->dentry);
@@ -211,19 +115,19 @@ nextfs_hdl_get_client(struct shim_handle *hdl)
     mdata = fs->data;
     RHO_ASSERT(mdata != NULL);
 
-    client = mdata->client;
-    RHO_ASSERT(client != NULL);
+    agent = mdata->agent;
+    RHO_ASSERT(agent != NULL);
 
-    //debug("nextfs_mdata debug_cookie=%u\n", mdata->debug_cookie);
-    return (client);
+    RHO_TRACE_EXIT("return: agent=%p", agent);
+    return (agent);
 }
 
-struct nextfs_client *
-nextfs_dentry_get_client(struct shim_dentry *dentry)
+struct rpc_agent *
+nextfs_dentry_get_agent(struct shim_dentry *dentry)
 {
     struct shim_mount *fs = NULL;
     struct nextfs_mdata *mdata = NULL;
-    struct nextfs_client *client = NULL;
+    struct rpc_agent *agent = NULL;
 
     fs = dentry->fs;
     RHO_ASSERT(fs != NULL);
@@ -231,11 +135,11 @@ nextfs_dentry_get_client(struct shim_dentry *dentry)
     mdata = fs->data;
     RHO_ASSERT(mdata != NULL);
 
-    client = mdata->client;
-    RHO_ASSERT(client != NULL);
+    agent = mdata->agent;
+    RHO_ASSERT(agent != NULL);
 
     //debug("nextfs_mdata debug_cookie=%u\n", mdata->debug_cookie);
-    return (client);
+    return (agent);
 }
 
 /********************************* 
@@ -247,7 +151,7 @@ nextfs_mdata_create(const char *uri, unsigned char *ca_der,
 {
     struct nextfs_mdata *mdata = NULL;
     
-    debug("> nextfs_mdata_create\n");
+    RHO_TRACE_ENTER("uri=\"%s\", ca_cer_len=%lu", uri, ca_der_len);
 
     mdata = rhoL_zalloc(sizeof(struct nextfs_mdata));
     memcpy(mdata->url, uri, strlen(uri));
@@ -258,21 +162,73 @@ nextfs_mdata_create(const char *uri, unsigned char *ca_der,
 
     mdata->debug_cookie = rho_rand_u32();
 
-    debug("< nextfs_mdata_create\n");
+    RHO_TRACE_EXIT("return: mdata=%p", mdata);
     return (mdata);
 }
 
 static void
 nextfs_mdata_print(const struct nextfs_mdata *mdata)
 {
-    debug("nextfs_mdata = {url: %s, ident:%llu, debug_cookie:%lu}\n",
+    rho_debug("nextfs_mdata = {url: %s, ident:%llu, debug_cookie:%lu}\n",
             mdata->url, (unsigned long long)mdata->ident,
             (unsigned long)mdata->debug_cookie);
 }
 
-/********************************* 
- * RPC UTILS
- *********************************/
+/**********************************************************
+ * RPC AGENT
+ **********************************************************/
+
+static struct rpc_agent *
+nextfs_agent_open(const char *url, unsigned char *ca_der, size_t ca_der_len)
+{
+    struct rpc_agent *agent = NULL;
+    struct rho_sock *sock = NULL;
+    struct rho_ssl_params *params = NULL;
+    struct rho_ssl_ctx *ctx = NULL;
+
+    RHO_TRACE_ENTER("url=\"%s\", ca_der_len=%lu", url, ca_der_len);
+
+    sock = rho_sock_open_url(url);
+    if (sock == NULL) {
+        rho_warn("failed to connect to nextfs server at \"%s\"", url);
+        goto done;
+    }
+
+    if (ca_der != NULL) {
+        rho_debug("nextfs client using TLS\n");
+        params = rho_ssl_params_create();
+        rho_ssl_params_set_mode(params, RHO_SSL_MODE_CLIENT);
+        rho_ssl_params_set_protocol(params, RHO_SSL_PROTOCOL_TLSv1_2);
+        rho_ssl_params_set_ca_der(params, ca_der, ca_der_len);
+        ctx = rho_ssl_ctx_create(params);
+        rho_ssl_wrap(sock, ctx);
+        //rho_ssl_params_destroy(params);
+    }
+
+    agent = rpc_agent_create(sock);
+
+done:
+    RHO_TRACE_EXIT("return: agent=%p", agent);
+    return (agent);
+}
+
+#if 0
+static void
+nextfs_client_close(struct nextfs_client *client)
+{
+    RHO_TRACE_ENTER();
+
+    rho_sock_destroy(client->sock);
+    rho_buf_destroy(client->buf);
+    rhoL_free(client);
+
+    RHO_TRACE_EXIT();
+}
+#endif
+
+/**********************************************************
+ * RPC HELPERS
+ **********************************************************/
 
 static void
 nextfs_marshal_str(struct rho_buf *buf, const char *s)
@@ -282,629 +238,485 @@ nextfs_marshal_str(struct rho_buf *buf, const char *s)
     rho_buf_puts(buf, s);
 }
 
-static void
-nextfs_pmarshal_hdr(struct rho_buf *buf, uint32_t op, uint32_t bodylen)
-{
-    RHO_TRACE_ENTER("op=%u, bodylen=%u", op, bodylen);
-    rho_buf_pwriteu32be_at(buf, op, 0);
-    rho_buf_pwriteu32be_at(buf, bodylen, 4);
-    RHO_TRACE_EXIT();
-}
-
-static void
-nextfs_demarshal_hdr(struct rho_buf *buf, uint32_t *status, uint32_t *bodylen)
-{
-    rho_buf_readu32be(buf, status);
-    rho_buf_readu32be(buf, bodylen);
-}
-
-/********************************* 
- * NEXTFS RPC CLIENT
- *********************************/
-
-static struct nextfs_client *
-nextfs_client_open(const char *url, unsigned char *ca_der, size_t ca_der_len)
-{
-    struct nextfs_client *client = NULL;
-    struct rho_ssl_params *params = NULL;
-    struct rho_ssl_ctx *ctx = NULL;
-
-    debug("> nextfs_client_open(url=%s)\n", url);
-
-    client = rhoL_zalloc(sizeof(*client));
-    client->buf = rho_buf_create();
-    client->sock = rho_sock_open_url(url);
-
-    if (ca_der != NULL) {
-        debug("nextfs client using TLS\n");
-        params = rho_ssl_params_create();
-        rho_ssl_params_set_mode(params, RHO_SSL_MODE_CLIENT);
-        rho_ssl_params_set_protocol(params, RHO_SSL_PROTOCOL_TLSv1_2);
-        rho_ssl_params_set_ca_der(params, ca_der, ca_der_len);
-        ctx = rho_ssl_ctx_create(params);
-        rho_ssl_wrap(client->sock, ctx);
-        //rho_ssl_params_destroy(params);
-    }
-
-    debug("< nextfs_client_open\n");
-    return (client);
-}
-
-static void
-nextfs_client_close(struct nextfs_client *client)
-{
-    debug("> nextfs_client_close\n");
-
-    rho_sock_destroy(client->sock);
-    rho_buf_destroy(client->buf);
-    rhoL_free(client);
-
-    debug("< nextfs_client_close\n");
-}
-
-/*
- * return 0 on success, or -errno on failure?
+/**********************************************************
+ * RPCs
  *
- * On success, status and bodylen point to the responses'
- * status and bodylen, and client->buf holds the reponse
- * (starting at offset=0, with buf cursor at 0).
- */
+ * These functions return 0 on success; a negative errno
+ * on failure.
+ *
+ * - rpc_agent_request rurns 0 on success, -errno on failure.
+ * - rho_buf_readINT return 0 on success, -1 on failure.
+ **********************************************************/
+
 static int
-nextfs_client_request(struct nextfs_client *client,
-        uint32_t *status, uint32_t *bodylen)
+nextfs_new_fdtable_rpc(struct rpc_agent *agent)
 {
     int error = 0;
-    ssize_t n = 0;
-    struct rho_sock *sock = client->sock;
-    struct rho_buf *buf = client->buf;
 
-    RHO_TRACE_ENTER("buffer length: %lu\n", rho_buf_length(client->buf));
+    RHO_TRACE_ENTER();
 
-    n = rho_sock_sendn_buf(sock, buf, rho_buf_length(buf));
-    if (n == -1) {
-        error = -1;
-        goto done;
-    }
+    rpc_agent_new_msg(agent, NEXTFS_OP_NEW_FDTABLE);
+    error = rpc_agent_request(agent);
 
-    //debug("receiving nextfs header\n");
-
-    rho_buf_clear(buf);
-    n = rho_sock_precvn_buf(sock, buf, 8);
-    if (n == -1) {
-        error = -1;
-        goto done;
-    }
-
-    //debug("demarshaling nextfs header (n=%ld)\n", n);
-
-    nextfs_demarshal_hdr(buf, status, bodylen);
-    if (*bodylen > 0) {
-        rho_buf_clear(buf);
-        //debug("response status=%u, len=%u\n", *status, *bodylen);
-        //debug("receiving nextfs body\n");
-        n = rho_sock_precvn_buf(sock, buf, *bodylen);
-        if (n == -1) {
-            error = -1;
-            goto done;
-        }
-    }
-
-done:
-    RHO_TRACE_EXIT();
+    RHO_TRACE_EXIT("return=%d", error);
     return (error);
 }
 
-/********************************* 
- * FILE/FILESYSTEM OPERATIONS
- *********************************/
-
-/*
- * XXX: For now, we assume that only one nextfs is mounted, and that
- * it is a unix domain socket.
- */
-
-/*
- * Mount should allocated a struct nextfs_mountdata and return it
- * in the mount_data out parameter.
- *
- * uri is the host URI for the resource to be "mounted", and
- * root is the guest mountpoint.
- */
 static int
-nextfs_mount(const char *uri, void **mount_data)
+nextfs_fork_rpc(struct rpc_agent *agent, uint64_t *child_ident)
 {
     int error = 0;
-    uint32_t status = 0;
-    uint32_t bodylen = 0;
-    char ca_hex[CONFIG_MAX] = { 0 };
-    unsigned char *ca_der = NULL;
-    ssize_t len = 0;
-    struct nextfs_mdata *mdata = NULL;
-    struct nextfs_client *client = NULL;
+    struct rho_buf *buf = agent->ra_bodybuf;
 
-    RHO_TRACE_ENTER("uri=\"%s\", mount_data=*", uri);
+    RHO_TRACE_ENTER();
 
-    len = get_config(root_config, "phoenix.ca_der", ca_hex, sizeof(ca_hex));
-    if (len > 0) {
-        debug("READ phoenix.ca_der (size=%ld)\n", len);
-        ca_der = rhoL_malloc(len / 2);
-        rho_binascii_hex2bin(ca_der, ca_hex);
-    }
-    client = nextfs_client_open(uri, ca_der, len / 2);
-    rho_buf_rewind(client->buf);
-    nextfs_pmarshal_hdr(client->buf, NEXTFS_OP_NEW_FDTABLE, 0);
-    error = nextfs_client_request(client, &status, &bodylen);
-    if (error != 0) {
-        error = -ERPC;
+    rpc_agent_new_msg(agent, NEXTFS_OP_FORK);
+    error = rpc_agent_request(agent);
+    if (error != 0)
+        goto done;
+
+    error = rho_buf_readu64be(buf, child_ident);
+	if (error != 0) {
+		error = -EPROTO;
         goto done;
     }
 
-    if (status != 0) {
-        error = -status;
-        goto done;
-    }
-
-    mdata = nextfs_mdata_create(uri, ca_der, len / 2);
-    mdata->client = client;
-    *mount_data = mdata;
+    rho_debug("child_ident=0x%lx", *child_ident);
 
 done:
-    /* TODO: need to propagate an error if we can't open the client */
-    rho_buf_clear(client->buf);
-    if (ca_der != NULL)
-        rhoL_free(ca_der);
-    RHO_TRACE_EXIT("return %d", error);
+    RHO_TRACE_EXIT("return=%d", error);
     return (error);
 }
 
-/* POSTPONE: 
- *
- * You need to close the client and rfree the global struct nextfs_mountdata 
- *
- * Currently, Graphene never calls unmount.
- */
-static int 
-nextfs_unmount(void *mount_data)
+static int
+nextfs_child_attach_rpc(struct rpc_agent *agent, uint64_t child_ident)
 {
-    struct nextfs_mdata *mdata = mount_data;
+    int error = 0;
+    struct rho_buf *buf = agent->ra_bodybuf;
 
-    debug("> nextfs_unmount\n");
+    RHO_TRACE_ENTER("child_ident=0x%lx", child_ident);
 
-    nextfs_client_close(mdata->client);
-    rhoL_free(mdata);
+    rpc_agent_new_msg(agent, NEXTFS_OP_CHILD_ATTACH);
+    rho_buf_writeu64be(buf, child_ident);
+    rpc_agent_autoset_bodylen(agent);
 
-    debug("< nextfs_unmount\n");
-    return (0);
+    error = rpc_agent_request(agent);
+
+    RHO_TRACE_EXIT("return=%d", error);
+    return (error);
 }
 
 static int
-nextfs_close(struct shim_handle *hdl)
+nextfs_file_close_rpc(struct rpc_agent *agent, uint32_t nextfs_fd)
 {
     int error = 0;
-    uint32_t bodylen = 0;
-    uint32_t status = 0;
-    struct nextfs_client *client = NULL;
-    struct rho_buf *buf = NULL;
-    uint32_t nextfs_fd = 0;
+    struct rho_buf *buf = agent->ra_bodybuf;
 
+    RHO_TRACE_ENTER("nextfs_fd=%u", nextfs_fd);
 
-    client = nextfs_hdl_get_client(hdl);
-    buf = client->buf;
-    nextfs_fd = NEXTFS_HDL_GET_FD(hdl);
-
-    RHO_TRACE_ENTER("fd=%u", nextfs_fd);
-
-    /* build request */
-    rho_buf_seek(buf, NEXTFS_HEADER_LENGTH, SEEK_SET); 
+    rpc_agent_new_msg(agent, NEXTFS_OP_FILE_CLOSE);
     rho_buf_writeu32be(buf, nextfs_fd);
-    bodylen = rho_buf_length(buf) - NEXTFS_HEADER_LENGTH;
-    rho_buf_rewind(buf);
-    nextfs_pmarshal_hdr(buf, NEXTFS_OP_FILE_CLOSE, bodylen);
+    rpc_agent_autoset_bodylen(agent);
 
-    /* make request */
-    error = nextfs_client_request(client, &status, &bodylen);
-    if (error != 0) {
-        error = -ERPC;
-        goto done;
-    }
+    error = rpc_agent_request(agent);
 
-    if (status != 0) {
-        error = -status;
-        goto done;
-    }
-
-done:
-    rho_buf_clear(buf);
-    RHO_TRACE_EXIT("return %d", error);
+    RHO_TRACE_EXIT("return=%d", error);
     return (error);
 }
 
-static ssize_t
-nextfs_read(struct shim_handle *hdl, void *data, size_t count)
+static int
+nextfs_file_read_rpc(struct rpc_agent *agent, uint32_t nextfs_fd,
+        void *data, size_t count, size_t *rcnt)
 {
     int error = 0;
+    struct rho_buf *buf = agent->ra_bodybuf;
     uint32_t bodylen = 0;
-    uint32_t status = 0;
-    struct nextfs_client *client = NULL;
-    struct rho_buf *buf = NULL;
-    uint32_t nextfs_fd = 0;
 
-    debug("::nextfs_read\n");
+    RHO_TRACE_ENTER("nextfs_fd=%u, count=%lu", nextfs_fd, count);
 
-    client = nextfs_hdl_get_client(hdl);
-    buf = client->buf;
-    nextfs_fd = NEXTFS_HDL_GET_FD(hdl);
-
-    debug("> nextfs_read(fd=%u, count=%lu), fs=%p, mdata=%p, client=%p\n", 
-        nextfs_fd, (unsigned long)count, hdl->fs, hdl->fs->data,
-        ((struct nextfs_mdata *)hdl->fs->data)->client);
-
-    /* build request */
-    rho_buf_seek(buf, NEXTFS_HEADER_LENGTH, SEEK_SET); 
+    rpc_agent_new_msg(agent, NEXTFS_OP_FILE_READ);
     rho_buf_writeu32be(buf, nextfs_fd);
-    rho_buf_writeu32be(buf, count);
-    bodylen = rho_buf_length(buf) - NEXTFS_HEADER_LENGTH;
-    rho_buf_rewind(buf);
-    nextfs_pmarshal_hdr(buf, NEXTFS_OP_FILE_READ, bodylen);
+    rho_buf_writeu32be(buf, count); /* FIXME: either cast or make u64 */
+    rpc_agent_autoset_bodylen(agent);
 
-    /* make request */
-    error = nextfs_client_request(client, &status, &bodylen);
-    if (error != 0) {
-        error = -ERPC;
+    error = rpc_agent_request(agent);
+    if (error != 0)
         goto done;
-    }
 
-    if (status != 0) {
-        error = -status;
-        goto done;
-    }
-
-    /* copy result */
+    bodylen = rpc_agent_get_bodylen(agent);
     memcpy(data, rho_buf_raw(buf, 0, SEEK_SET), bodylen); 
-    error = (int)bodylen;
+    *rcnt = bodylen;
 
 done:
-    rho_buf_clear(buf);
-    debug("< nextfs_read\n");
-    return (error);
-}
-
-static ssize_t
-nextfs_write(struct shim_handle *hdl, const void *data, size_t count)
-{
-    int error = 0;
-    uint32_t bodylen = 0;
-    uint32_t status = 0;
-    struct nextfs_client *client = NULL;
-    struct rho_buf *buf = NULL;
-    uint32_t nextfs_fd = 0;
-    uint32_t wcnt = 0;
-
-    debug("::nextfs_write\n");
-
-    client = nextfs_hdl_get_client(hdl);
-    buf = client->buf;
-    nextfs_fd = NEXTFS_HDL_GET_FD(hdl);
-
-    debug("> nextfs_write\n");
-
-    /* build request */
-    rho_buf_seek(buf, NEXTFS_HEADER_LENGTH, SEEK_SET); 
-    rho_buf_writeu32be(buf, nextfs_fd);
-    /* TODO: make rho_buf_write_u32size_blob */
-    rho_buf_writeu32be(buf, count);
-    rho_buf_write(buf, data, count);
-    bodylen = rho_buf_length(buf) - NEXTFS_HEADER_LENGTH;
-    rho_buf_rewind(buf);
-    nextfs_pmarshal_hdr(buf, NEXTFS_OP_FILE_WRITE, bodylen);
-
-    /* make request */
-    error = nextfs_client_request(client, &status, &bodylen);
-    if (error != 0) {
-        error = -ERPC;
-        goto done;
-    }
-
-    if (status != 0) {
-        error = -status;
-        goto done;
-    }
-
-    error = rho_buf_readu32be(buf, &wcnt);
-    if (error == -1) {
-        error = -ERPC;
-        goto done;
-    }
-
-    error = (int)wcnt;
-
-done:
-    rho_buf_clear(buf);
-    debug("< nextfs_write returns %d\n", error);
+    RHO_TRACE_EXIT("return=%d", error);
     return (error);
 }
 
 static int
-nextfs_mmap(struct shim_handle *hdl, void **addr, size_t size,
-                        int prot, int flags, off_t offset)
+nextfs_file_write_rpc(struct rpc_agent *agent, uint32_t nextfs_fd,
+        const void *data, uint32_t count, uint32_t *wcnt)
 {
     int error = 0;
-    uint32_t bodylen = 0;
-    uint32_t status = 0;
-    struct nextfs_client *client = NULL;
-    struct rho_buf *buf = NULL;
-    uint32_t nextfs_fd = 0;
-    /* XXX: was hardcoded to prot=PROT_READ|PROT_WRITE, flags=0; */
-    int pal_prot = LINUX_PROT_TO_PAL(prot, flags);
+    struct rho_buf *buf = agent->ra_bodybuf;
 
-    debug("::nextfs_mmap\n");
+    RHO_TRACE_ENTER("nextfs_fd=%u, count=%u", nextfs_fd, count);
 
-    client = nextfs_hdl_get_client(hdl);
-    buf = client->buf;
-    nextfs_fd = NEXTFS_HDL_GET_FD(hdl);
+    rpc_agent_new_msg(agent, NEXTFS_OP_FILE_WRITE);
+    rho_buf_writeu32be(buf, nextfs_fd);
+    rho_buf_writeu32be(buf, count); /* FIXME: either cast or make u64 */
+    rho_buf_write(buf, data, count);
+    rpc_agent_autoset_bodylen(agent);
 
-    RHO_TRACE_ENTER("addr=%p, *addr=%p, size=%lu, prot=%08x, flags=%08x, offset=%ld",
-            addr, *addr, size, prot, flags, offset);
+    error = rpc_agent_request(agent);
+    if (error != 0)
+        goto done;
 
-    /* build request */
-    rho_buf_seek(buf, NEXTFS_HEADER_LENGTH, SEEK_SET); 
+    error = rho_buf_readu32be(buf, (uint32_t *)wcnt);
+    if (error != 0) {
+        error = -EPROTO;
+        goto done;
+    }
+
+done:
+    RHO_TRACE_EXIT("return=%d", error);
+    return (error);
+}
+
+static int
+nextfs_file_mmap_rpc(struct rpc_agent *agent, uint32_t nextfs_fd, size_t size,
+        off_t offset)
+{
+    int error = 0;
+    struct rho_buf *buf = agent->ra_bodybuf;
+
+    RHO_TRACE_ENTER("nextfs_fd=%ud, size=%lu, offset=%ld",
+            nextfs_fd, size, offset);
+
+    rpc_agent_new_msg(agent, NEXTFS_OP_FILE_MMAP);
     rho_buf_writeu32be(buf, nextfs_fd);
     rho_buf_writeu32be(buf, size);
     rho_buf_writeu32be(buf, offset);
-    bodylen = rho_buf_length(buf) - NEXTFS_HEADER_LENGTH;
-    rho_buf_rewind(buf);
-    nextfs_pmarshal_hdr(buf, NEXTFS_OP_FILE_MMAP, bodylen);
+    rpc_agent_autoset_bodylen(agent);
 
-    /* make request */
-    error = nextfs_client_request(client, &status, &bodylen);
-    if (error != 0) {
-        error = -ERPC;
-        goto done;
-    }
+    error = rpc_agent_request(agent);
 
-    if (status != 0) {
-        error = -status;
-        goto done;
-    }
-
-    /* XXX: make this a rho_bug call */
-    if (bodylen > size) {
-        error = -ERPC;
-        goto done;
-    }
-
-    *addr = DkVirtualMemoryAlloc(*addr, size, 0, pal_prot);
-    if (*addr == NULL) {
-        error = -ENOMEM;
-        goto done;
-    }
-
-    memset(*addr, 0x00, size);
-    /* copy result */
-    memcpy(*addr, rho_buf_raw(buf, 0, SEEK_SET), bodylen); 
-
-done:
-    rho_buf_clear(buf);
-    debug("< nextfs_mmap -> %d\n", error);
+    RHO_TRACE_EXIT("return=%d", error);
     return (error);
 }
 
-/* POSTPONE: */
 static int
-nextfs_flush(struct shim_handle *hdl)
-{
-    debug("> nextfs_flush\n");
-    (void)hdl;
-    debug("< nextfs_flush\n");
-    return (0);
-}
-
-static off_t
-nextfs_seek(struct shim_handle *hdl, off_t offset, int whence)
+nextfs_file_seek_rpc(struct rpc_agent *agent, uint32_t nextfs_fd,
+        off_t offset, int whence, off_t *new_offset)
 {
     int error = 0;
-    uint32_t bodylen = 0;
-    uint32_t status = 0;
-    struct nextfs_client *client = NULL;
-    struct rho_buf *buf = NULL;
-    int nextfs_fd = 0;
-    uint64_t newoffset = 0;
+    struct rho_buf *buf = agent->ra_bodybuf;
 
-    debug("::nextfs_seek\n");
+    RHO_TRACE_ENTER("nextfs_fd=%u, offset=%ld, whence=%d",
+            nextfs_fd, offset, whence);
 
-    client = nextfs_hdl_get_client(hdl);
-    buf = client->buf;
-    nextfs_fd = NEXTFS_HDL_GET_FD(hdl);
-
-    debug("> nextfs_seek\n");
-
-    /* build request */
-    rho_buf_seek(buf, NEXTFS_HEADER_LENGTH, SEEK_SET); 
+    rpc_agent_new_msg(agent, NEXTFS_OP_FILE_SEEK);
     rho_buf_writeu32be(buf, nextfs_fd);
     rho_buf_write64be(buf, offset);
     rho_buf_writeu32be(buf, whence);
+    rpc_agent_autoset_bodylen(agent);
 
-    bodylen = rho_buf_length(buf) - NEXTFS_HEADER_LENGTH;
-    rho_buf_rewind(buf);
-    nextfs_pmarshal_hdr(buf, NEXTFS_OP_FILE_SEEK, bodylen);
+    error = rpc_agent_request(agent);
+    if (error != 0)
+        goto done;
 
-    /* make request */
-    error = nextfs_client_request(client, &status, &bodylen);
+    error = rho_buf_readu64be(buf, (uint64_t*)new_offset);
     if (error != 0) {
-        error = -ERPC;
-        goto done;
-    }
-
-    if (status != 0) {
-        error = -status;
-        goto done;
-    }
-
-    error = rho_buf_readu64be(buf, &newoffset);
-    if (error == -1) {
-        error = -ERPC;
-        goto done;
-    } else {
-        /* FIXME: there's an int-size type mismatch */
-        error = (int)newoffset;
-    }
-
-done:
-    rho_buf_clear(buf);
-    debug("< nextfs_seek\n");
-    return (error);
-}
-
-/* XXX: what does "trim_name" mean? 
- *
- * FIXME: I don't think this function is ever called.  The problem
- * is that there is no way to go from a path name to the mountdata
- * without us keeping some lookup table.
- */
-static int
-nextfs_move(const char *trim_old_name, const char *trim_new_name)
-{
-    int error = 0;
-    uint32_t bodylen = 0;
-    uint32_t status = 0;
-    struct nextfs_client *client = NULL;
-    struct rho_buf *buf = NULL;
-
-    debug("> nextfs_move(%s, %s)\n", trim_old_name, trim_new_name);
-
-    /* build request */
-    rho_buf_seek(buf, NEXTFS_HEADER_LENGTH, SEEK_SET); 
-    nextfs_marshal_str(buf, trim_old_name);
-    nextfs_marshal_str(buf, trim_new_name);
-
-    bodylen = rho_buf_length(buf) - NEXTFS_HEADER_LENGTH;
-    rho_buf_rewind(buf);
-    nextfs_pmarshal_hdr(buf, NEXTFS_OP_FILE_RENAME, bodylen);
-
-    /* make request */
-    error = nextfs_client_request(client, &status, &bodylen);
-    if (error != 0) {
-        error = -ERPC;
-        goto done;
-    }
-
-    if (status != 0) {
-        error = -status;
+        error = -EPROTO;
         goto done;
     }
 
 done:
-    rho_buf_clear(buf);
-    debug("< nextfs_move\n");
+    RHO_TRACE_EXIT("return=%d", error);
     return (error);
 }
 
-/* POSTPONE: */
 static int
-nextfs_copy(const char *trim_old_name, const char *trim_new_name)
-{
-    debug("> nextfs_copy\n");
-
-    (void)trim_old_name;
-    (void)trim_new_name;
-
-    debug("< nextfs_copy\n");
-    return (0);
-}
-
-/* FIXME: I don't think you take into accuont that off_t could be negative */
-static int
-nextfs_truncate(struct shim_handle *hdl, off_t len)
+nextfs_file_truncate_rpc(struct rpc_agent *agent, uint32_t nextfs_fd,
+        off_t len)
 {
     int error = 0;
-    uint32_t bodylen = 0;
-    uint32_t status = 0;
-    struct nextfs_client *client = NULL;
-    struct rho_buf *buf = NULL;
-    int nextfs_fd = 0;
+    struct rho_buf *buf = agent->ra_bodybuf;
 
-    debug("::nextfs_truncate\n");
+    RHO_TRACE_EXIT("nextfs_fd=%u, len=%ld", nextfs_fd, len);
 
-    client = nextfs_hdl_get_client(hdl);
-    buf = client->buf;
-    nextfs_fd = NEXTFS_HDL_GET_FD(hdl);
-
-    debug("> nextfs_truncate(len=%ld)\n", len);
-
-    /* build request */
-    rho_buf_seek(buf, NEXTFS_HEADER_LENGTH, SEEK_SET); 
+    rpc_agent_new_msg(agent, NEXTFS_OP_FILE_TRUNCATE);
     rho_buf_writeu32be(buf, nextfs_fd);
     rho_buf_writeu64be(buf, len);
+    rpc_agent_autoset_bodylen(agent);
 
-    bodylen = rho_buf_length(buf) - NEXTFS_HEADER_LENGTH;
-    rho_buf_rewind(buf);
-    nextfs_pmarshal_hdr(buf, NEXTFS_OP_FILE_TRUNCATE, bodylen);
+    error = rpc_agent_request(agent);
 
-    /* make request */
-    error = nextfs_client_request(client, &status, &bodylen);
-    if (error != 0) {
-        error = -ERPC;
-        goto done;
-    }
-
-    if (status != 0) {
-        error = -status;
-        goto done;
-    }
-
-done:
-    rho_buf_clear(buf);
-    debug("< nextfs_truncate returns %d\n", error);
+    RHO_TRACE_EXIT("return=%d", error);
     return (error);
 }
 
 static int
-nextfs_hstat(struct shim_handle *hdl, struct stat *stat)
+nextfs_file_open2_rpc(struct rpc_agent *agent, const char *path, int flags,
+        uint32_t *nextfs_fd)
 {
     int error = 0;
-    uint32_t bodylen = 0;
-    uint32_t status = 0;
-    struct nextfs_client *client = NULL;
-    struct rho_buf *buf = NULL;
-    char path[NEXTFS_MAX_PATH_LENGTH] = { 0 };
+    struct rho_buf *buf = agent->ra_bodybuf;
+
+    RHO_TRACE_ENTER("path=\"%s\" flags=0x%x", path, flags);
+
+    rpc_agent_new_msg(agent, NEXTFS_OP_FILE_OPEN2);
+    nextfs_marshal_str(buf, path);
+    rho_buf_writeu32be(buf, flags);
+    rpc_agent_autoset_bodylen(agent);
+
+    error = rpc_agent_request(agent);
+    if (error != 0) {
+        goto done;
+    }
+
+    error = rho_buf_readu32be(buf, nextfs_fd);
+    if (error == -1) {
+        error = -EPROTO;
+        goto done;
+    }
+
+done:
+    RHO_TRACE_EXIT("return=%d", error);
+    return (error);
+}
+
+static int
+nextfs_dir_open_rpc(struct rpc_agent *agent, const char *path,
+        uint32_t *nextfs_fd)
+{
+    int error = 0;
+    struct rho_buf *buf = agent->ra_bodybuf;
+
+    RHO_TRACE_ENTER("path=\"%s\"", path);
+
+    rpc_agent_new_msg(agent, NEXTFS_OP_DIR_OPEN);
+    nextfs_marshal_str(buf, path);
+    rpc_agent_autoset_bodylen(agent);
+
+    error = rpc_agent_request(agent);
+    if (error != 0) {
+        goto done;
+    }
+
+    error = rho_buf_readu32be(buf, nextfs_fd);
+    if (error != 0) {
+        error = -EPROTO;
+        goto done;
+    }
+
+done:
+    RHO_TRACE_EXIT("return=%d", error);
+    return (error);
+}
+
+static int
+nextfs_dir_close_rpc(struct rpc_agent *agent, uint32_t nextfs_fd)
+{
+    int error = 0;
+    struct rho_buf *buf = agent->ra_bodybuf;
+
+    RHO_TRACE_ENTER("nextfs_fd=%u", nextfs_fd);
+
+    rpc_agent_new_msg(agent, NEXTFS_OP_DIR_CLOSE);
+    rho_buf_writeu32be(buf, nextfs_fd);
+    rpc_agent_autoset_bodylen(agent);
+
+    error = rpc_agent_request(agent);
+
+    RHO_TRACE_EXIT("return=%d", error);
+    return (error);
+}
+
+static int
+nextfs_dir_rm_rpc(struct rpc_agent *agent, const char *path)
+{
+    int error = 0;
+    struct rho_buf *buf = agent->ra_bodybuf;
+
+    RHO_TRACE_ENTER("path=\"%s\"", path);
+
+    rpc_agent_new_msg(agent, NEXTFS_OP_DIR_RM);
+    nextfs_marshal_str(buf, path);
+    rpc_agent_autoset_bodylen(agent);
+
+    error = rpc_agent_request(agent);
+
+    RHO_TRACE_EXIT("return=%d", error);
+    return (error);
+}
+
+static unsigned char
+nextfs_lwext4_dirent_type_to_linux(unsigned char d_type)
+{
+    switch (d_type) {
+    case 0: /* EXT4_DE_UNKNOWN */
+        return LINUX_DT_UNKNOWN;
+    case 1: /* EXT4_DE_REG_FILE */
+        return LINUX_DT_REG;
+    case 2: /* EXT4_DE_DIR */
+        return LINUX_DT_DIR;
+    case 3: /* EXT4_DE_CHRDEV */
+        return LINUX_DT_CHR;
+    case 4: /* EXT4_DE_BLKDEV */
+        return LINUX_DT_BLK;
+    case 5: /* EXT4_DE_FIFO */
+        return LINUX_DT_FIFO;
+    case 6: /* EXT4_DE_SOCK */
+        return LINUX_DT_SOCK;
+    case 7: /* EXT4_DE_SYMLINK */
+        return LINUX_DT_LNK;
+    default:
+        return LINUX_DT_UNKNOWN;
+    }
+}
+
+static int
+nextfs_dir_list_rpc(struct rpc_agent *agent, uint32_t nextfs_fd,
+        struct shim_dirent **dirent)
+{
+    int error = 0;
+    struct rho_buf *buf = agent->ra_bodybuf;
+    uint32_t i = 0;
+    uint32_t n = 0;
+    struct shim_dirent *array = NULL;
+    struct shim_dirent *pd = NULL;
+    uint32_t namelen = 0;
+
+    RHO_TRACE_ENTER("nextfs_fd=%u", nextfs_fd);
+
+    rpc_agent_new_msg(agent, NEXTFS_OP_DIR_LIST);
+    rho_buf_writeu32be(buf, nextfs_fd);
+    rpc_agent_autoset_bodylen(agent);
+
+    error = rpc_agent_request(agent);
+    if (error != 0)
+        goto done;
+
+    /* 
+     * The RPC response is an array, where each entry is:
+     * First is a u32 of the number of entries.  Then, each entry:
+     *
+     * {u32 inode, u8 inode_type, u32 name length, name[255] (null terminated)}
+     *
+     * The current implementation is simple but fairly wasteful:
+     *  1. each pathname occupies 255 bytes
+     *  2. we double copy between the representation of the array in 
+     *     RPC response and the "return value" represenation.
+     */
+
+    error = rho_buf_readu32be(buf, &n);
+    if (error != 0) {
+        error = -EPROTO;
+        goto done;
+    }
+
+    rho_debug("received %u direntries\n", n);
+
+    array = rhoL_mallocarray(n, (sizeof(struct shim_dirent) + 255), RHO_MEM_ZERO);
+
+    for (i = 0; i < n; i++) {
+        /* 
+         * XXX: flexible array members (aka, last member of struct is
+         * a zero-length array) are evil 
+         */
+        pd = (struct shim_dirent *)
+            (((uint8_t *)array) + (i * (sizeof(struct shim_dirent) + 255)));
+
+        /* XXX: &pd->ino is unsigned long */
+        error = rho_buf_readu32be(buf, (uint32_t *)(&pd->ino));
+        if (error != 0) {
+            error = -EPROTO;
+            goto done;
+        }
+
+        error = rho_buf_readu8(buf, &pd->type);
+        if (error != 0) {
+            error = -EPROTO;
+            goto done;
+        }
+
+        pd->type = nextfs_lwext4_dirent_type_to_linux(pd->type);
+
+        error = rho_buf_readu32be(buf, &namelen);
+        if (error != 0) {
+            error = -EPROTO;
+            goto done;
+        }
+
+        if (rho_buf_read(buf, pd->name, 255) != 255) {
+            error = -EPROTO;
+            goto done;
+        }
+
+        rho_debug("dirent: ino:%lu, name:\"%s\", type:%u\n",
+                pd->ino, pd->name, pd->type);
+
+        if ((i + 1) < n) {
+            pd->next = (struct shim_dirent *)
+                (((uint8_t *)array) + ((i+1) * (sizeof(struct shim_dirent) + 255)));
+        } else {
+            pd->next = NULL;
+        }
+    }
+
+    *dirent = array;
+
+done:
+    RHO_TRACE_EXIT("return=%d", error);
+    return (error);
+}
+
+static int
+nextfs_mode_get_rpc(struct rpc_agent *agent, const char *path, mode_t *mode)
+{
+    int error = 0;
+    struct rho_buf *buf = agent->ra_bodybuf;
+
+    RHO_TRACE_ENTER("path=\"%s\"", path);
+
+    rpc_agent_new_msg(agent, NEXTFS_OP_MODE_GET);
+    nextfs_marshal_str(buf, path);
+    rpc_agent_autoset_bodylen(agent);
+
+    error = rpc_agent_request(agent);
+    if (error != 0)
+        goto done;
+
+    error = rho_buf_readu32be(buf, mode);
+    if (error != 0) {
+        error = -EPROTO;
+        goto done;
+    }
+
+done:
+    RHO_TRACE_EXIT("return=%d", error);
+    return (error);
+}
+
+static int
+nextfs_raw_inode_rpc(struct rpc_agent *agent, const char *path,
+        struct stat *stat)
+{
+    int error = 0;
+    struct rho_buf *buf = agent->ra_bodybuf;
     uint32_t deletion_time = 0;
     uint32_t flags = 0;
 
-    debug("::nextfs_hstat\n");
+    RHO_TRACE_ENTER("path=\"%s\"", path);
 
-    client = nextfs_hdl_get_client(hdl);
-    buf = client->buf;
-
-    debug("> nextfs_hstat(hdl=*, stat=*)\n");
-
-    rho_shim_dentry_print(hdl->dentry);
-    debug("hstat: hdl->path: %s\n", qstrgetstr(&hdl->path));
-    debug("hstat: hdl->uri: %s\n", qstrgetstr(&hdl->uri));
-
-    /* get path */
-    rho_shim_dentry_relpath(hdl->dentry, path, sizeof(path));
-
-    /* build request */
-    rho_buf_seek(buf, NEXTFS_HEADER_LENGTH, SEEK_SET); 
+    rpc_agent_new_msg(agent, NEXTFS_OP_RAW_INODE);
     nextfs_marshal_str(buf, path);
+    rpc_agent_autoset_bodylen(agent);
 
-    bodylen = rho_buf_length(buf) - NEXTFS_HEADER_LENGTH;
-    rho_buf_rewind(buf);
-    nextfs_pmarshal_hdr(buf, NEXTFS_OP_RAW_INODE, bodylen);
-
-    /* make request */
-    error = nextfs_client_request(client, &status, &bodylen);
-    if (error != 0) {
-        error = -ERPC;
+    error = rpc_agent_request(agent);
+    if (error != 0)
         goto done;
-    }
 
-    if (status != 0) {
-        error = -status;
-        goto done;
-    }
-
-    /* fill in stat buf */
     /* TODO: fill in st_dev */
     rho_memzero(stat, sizeof(*stat));
     rho_buf_readu32be(buf, (uint32_t *)&stat->st_ino);   /* XXX is unsigned long */
@@ -928,167 +740,378 @@ nextfs_hstat(struct shim_handle *hdl, struct stat *stat)
     /* XXX: check with lwext4; 1024 seems like a reasonable guess, though */
     stat->st_blksize = 4096;
 
-    debug("st_size=%ld\n", stat->st_size);
+    rho_debug("st_size=%ld", stat->st_size);
 
 done:
-    rho_buf_clear(buf);
-    debug("< nextfs_hstat (error=%d)\n", error);
+    RHO_TRACE_EXIT("return=%d", error);
     return (error);
 }
 
-/* POSTPONE: */
 static int
-nextfs_setflags(struct shim_handle *hdl, int flags)
+nextfs_file_remove_rpc(struct rpc_agent *agent, const char *path)
 {
-    debug("> nextfs_setflags\n");
+    int error = 0;
+    struct rho_buf *buf = agent->ra_bodybuf;
 
-    (void)hdl;
-    (void)flags;
+    RHO_TRACE_ENTER("path=\"%s\"", path);
 
-    debug("< nextfs_setflags\n");
-    return (0);
+    rpc_agent_new_msg(agent, NEXTFS_OP_FILE_REMOVE);
+    nextfs_marshal_str(buf, path);
+    rpc_agent_autoset_bodylen(agent);
+
+    error = rpc_agent_request(agent);
+
+    RHO_TRACE_EXIT("return=%d", error);
+    return (error);
 }
 
-/* POSTPONE: */
-static void
-nextfs_hput(struct shim_handle *hdl)
-{
-    debug("> nextfs_hput\n");
-    (void)hdl;
-    debug("< nextfs_hput\n");
-    return;
-}
-
-/* POSTPONE: */
 static int
-nextfs_lock(const char *trim_name)
+nextfs_dir_mk_rpc(struct rpc_agent *agent, const char *path, mode_t mode)
 {
-    debug("> nextfs_lock\n");
-    (void)trim_name;
-    debug("< nextfs_lock\n");
-    return (0);
+    int error = 0;
+    struct rho_buf *buf = agent->ra_bodybuf;
+
+    RHO_TRACE_ENTER("path=\"%s\" mode=0x%x", path, mode);
+
+    rpc_agent_new_msg(agent, NEXTFS_OP_DIR_MK);
+    nextfs_marshal_str(buf, path);
+    rho_buf_writeu32be(buf, mode);
+    rpc_agent_autoset_bodylen(agent);
+
+    error = rpc_agent_request(agent);
+
+    RHO_TRACE_EXIT("return=%d", error);
+    return (error);
 }
 
-/* POSTPONE: */
 static int
-nextfs_unlock(const char *trim_name)
+nextfs_mode_set_rpc(struct rpc_agent *agent, const char *path, mode_t mode)
 {
-    debug("> nextfs_unlock\n");
-    (void)trim_name;
-    debug("< nextfs_unlock\n");
-    return (0);
+    int error = 0;
+    struct rho_buf *buf = agent->ra_bodybuf;
+
+    RHO_TRACE_ENTER("path=\"%s\", mode=0x%x", path, mode);
+
+    rpc_agent_new_msg(agent, NEXTFS_OP_MODE_SET);
+    nextfs_marshal_str(buf, path);
+    rho_buf_writeu32be(buf, mode);
+    rpc_agent_autoset_bodylen(agent);
+
+    error = rpc_agent_request(agent);
+
+    RHO_TRACE_EXIT("return=%d", error);
+    return (error);
 }
 
-/* POSTPONE: */
 static int
-nextfs_lockfs(void)
+nextfs_owner_set_rpc(struct rpc_agent *agent, const char *path, int uid,
+        int gid)
 {
-    debug("> nextfs_lockfs\n");
-    debug("< nextfs_lockfs\n");
-    return (0);
+    int error = 0;
+    struct rho_buf *buf = agent->ra_bodybuf;
+
+    RHO_TRACE_ENTER("path=\"%s\", uid=%d, gid=%d", path, uid, gid);
+
+    rpc_agent_new_msg(agent, NEXTFS_OP_OWNER_SET);
+    nextfs_marshal_str(buf, path);
+    rho_buf_writeu32be(buf, uid);
+    rho_buf_writeu32be(buf, gid);
+    rpc_agent_autoset_bodylen(agent);
+
+    error = rpc_agent_request(agent);
+
+    RHO_TRACE_EXIT("return=%d", error);
+    return (error);
 }
 
-/* POSTPONE: */
 static int
-nextfs_unlockfs(void)
+nextfs_file_rename_rpc(struct rpc_agent *agent, const char *old_path, 
+        const char *new_path)
 {
-    debug("> nextfs_lockfs\n");
-    debug("< nextfs_lockfs\n");
-    return (0);
+    int error = 0;
+    struct rho_buf *buf = agent->ra_bodybuf;
+
+    RHO_TRACE_ENTER("old_path=\"%s\", new_path=\"%s\"", old_path, new_path);
+
+    rpc_agent_new_msg(agent, NEXTFS_OP_FILE_RENAME);
+    nextfs_marshal_str(buf, old_path);
+    nextfs_marshal_str(buf, new_path);
+    rpc_agent_autoset_bodylen(agent);
+
+    error = rpc_agent_request(agent);
+
+    RHO_TRACE_EXIT("return=%d", error);
+    return (error);
 }
 
-/* POSTPONE: NEED */
+/********************************* 
+ * FILE/FILESYSTEM OPERATIONS
+ *********************************/
+
+/*
+ * Mount should allocated a struct nextfs_mountdata and return it
+ * in the mount_data out parameter.
+ *
+ * uri is the host URI for the resource to be "mounted"
+ */
+static int
+nextfs_mount(const char *uri, void **mount_data)
+{
+    int error = 0;
+    char ca_hex[CONFIG_MAX] = { 0 };
+    unsigned char *ca_der = NULL;
+    ssize_t len = 0;
+    struct nextfs_mdata *mdata = NULL;
+    struct rpc_agent *agent = NULL;
+
+    RHO_TRACE_ENTER("uri=\"%s\"", uri);
+
+    len = get_config(root_config, "phoenix.ca_der", ca_hex, sizeof(ca_hex));
+    if (len > 0) {
+        rho_debug("READ phoenix.ca_der (size=%ld)\n", len);
+        ca_der = rhoL_malloc(len / 2);
+        rho_binascii_hex2bin(ca_der, ca_hex);
+    }
+
+    agent = nextfs_agent_open(uri, ca_der, len / 2);
+    if (agent == NULL) {
+        /* FIXME: better errno; what's in PAL_ERRNO? */
+        error = -ENXIO;
+        goto fail;
+    }
+
+    error = nextfs_new_fdtable_rpc(agent);
+    if (error != 0)
+        goto fail;
+
+    mdata = nextfs_mdata_create(uri, ca_der, len / 2);
+    mdata->agent = agent;
+    *mount_data = mdata;
+
+    goto succeed;
+
+fail:
+    if (agent != NULL)
+        rpc_agent_destroy(agent);
+
+succeed:
+    if (ca_der != NULL)
+        rhoL_free(ca_der);
+
+    RHO_TRACE_EXIT("return=%d", error);
+    return (error);
+}
+
+static int
+nextfs_close(struct shim_handle *hdl)
+{
+    int error = 0;
+    struct rpc_agent *agent = nextfs_hdl_get_agent(hdl);
+    uint32_t nextfs_fd =  NEXTFS_HDL_GET_FD(hdl);
+
+    RHO_TRACE_ENTER();
+    rho_shim_handle_print(hdl);
+
+    error = nextfs_file_close_rpc(agent, nextfs_fd);
+
+    RHO_TRACE_EXIT("return=%d", error);
+    return (error);
+}
+
+static ssize_t
+nextfs_read(struct shim_handle *hdl, void *data, size_t count)
+{
+    int error = 0;
+    struct rpc_agent *agent = nextfs_hdl_get_agent(hdl);
+    uint32_t nextfs_fd =  NEXTFS_HDL_GET_FD(hdl);
+    size_t rcnt = 0;
+
+    RHO_TRACE_ENTER("count=%lu", count);
+    rho_shim_handle_print(hdl);
+
+    error = nextfs_file_read_rpc(agent, nextfs_fd, data, count, &rcnt);
+    if (error == 0)
+        error = (int)rcnt;
+
+    RHO_TRACE_EXIT("return=%d", error);
+    return (error);
+}
+
+static ssize_t
+nextfs_write(struct shim_handle *hdl, const void *data, size_t count)
+{
+    int error = 0;
+    struct rpc_agent *agent = nextfs_hdl_get_agent(hdl);
+    uint32_t nextfs_fd =  NEXTFS_HDL_GET_FD(hdl);
+    uint32_t wcnt = 0;
+
+    RHO_TRACE_ENTER("count=%lu", count);
+    rho_shim_handle_print(hdl);
+
+    /* FIXME: check if count exceeds a u32 */
+    error = nextfs_file_write_rpc(agent, nextfs_fd, data, (uint32_t)count,
+            &wcnt);
+    if (error == 0)
+        error = (int)wcnt;
+
+    RHO_TRACE_EXIT("return=%d", error);
+    return (error);
+}
+
+static int
+nextfs_mmap(struct shim_handle *hdl, void **addr, size_t size,
+                        int prot, int flags, off_t offset)
+{
+    int error = 0;
+    struct rpc_agent *agent = nextfs_hdl_get_agent(hdl);
+    uint32_t nextfs_fd =  NEXTFS_HDL_GET_FD(hdl);
+    /* XXX: was previously hardcoded to prot=PROT_READ|PROT_WRITE, flags=0; */
+    int pal_prot = LINUX_PROT_TO_PAL(prot, flags);
+    struct rho_buf *buf = NULL;
+    uint32_t bodylen = 0;
+
+    RHO_TRACE_ENTER("addr=%p, *addr=%p, size=%lu, prot=0x%x, flags=0x%x, offset=%ld",
+            addr, *addr, size, prot, flags, offset);
+    rho_shim_handle_print(hdl);
+
+    error = nextfs_file_mmap_rpc(agent, nextfs_fd, size, offset);
+    if (error != 0)
+        goto done;
+
+    bodylen = rpc_agent_get_bodylen(agent);
+    /* XXX: make this a rho_bug call */
+    if (bodylen > size) {
+        error = -EPROTO;
+        goto done;
+    }
+
+    *addr = DkVirtualMemoryAlloc(*addr, size, 0, pal_prot);
+    if (*addr == NULL) {
+        error = -ENOMEM;
+        goto done;
+    }
+
+    memset(*addr, 0x00, size);
+    /* copy result */
+    memcpy(*addr, rho_buf_raw(buf, 0, SEEK_SET), bodylen); 
+
+done:
+    RHO_TRACE_EXIT("return=%d", error);
+    return (error);
+}
+
+static off_t
+nextfs_seek(struct shim_handle *hdl, off_t offset, int whence)
+{
+    off_t ret = 0;
+    int error = 0;
+    struct rpc_agent *agent = nextfs_hdl_get_agent(hdl);
+    uint32_t nextfs_fd =  NEXTFS_HDL_GET_FD(hdl);
+    off_t new_offset = 0;
+
+    RHO_TRACE_ENTER("offset=%ld, whence=%d", offset, whence);
+    rho_shim_handle_print(hdl);
+
+    error = nextfs_file_seek_rpc(agent, nextfs_fd, offset, whence, &new_offset);
+    if (error == 0)
+        ret = new_offset;
+    else
+        ret = error;
+
+    RHO_TRACE_EXIT("return=%ld", ret);
+    return (ret);
+}
+
+/* FIXME: I don't think you take into accuont that off_t could be negative */
+static int
+nextfs_truncate(struct shim_handle *hdl, off_t len)
+{
+    int error = 0;
+    struct rpc_agent *agent = nextfs_hdl_get_agent(hdl);
+    uint32_t nextfs_fd =  NEXTFS_HDL_GET_FD(hdl);
+
+    RHO_TRACE_ENTER("len=%ld", len);
+    rho_shim_handle_print(hdl);
+
+    error = nextfs_file_truncate_rpc(agent, nextfs_fd, len);
+
+    RHO_TRACE_EXIT("return=%d", error);
+    return (error);
+}
+
+static int
+nextfs_hstat(struct shim_handle *hdl, struct stat *stat)
+{
+    int error = 0;
+    struct rpc_agent *agent = nextfs_hdl_get_agent(hdl);
+    char path[NEXTFS_MAX_PATH_LENGTH] = { 0 };
+
+    RHO_TRACE_ENTER();
+    rho_shim_handle_print(hdl);
+
+    rho_shim_dentry_relpath(hdl->dentry, path, sizeof(path));
+    error = nextfs_raw_inode_rpc(agent, path, stat);
+
+    RHO_TRACE_EXIT("return=%d", error);
+    return (error);
+}
+
 static int
 nextfs_checkout(struct shim_handle *hdl)
 {
-    debug("> nextfs_checkout\n");
-    debug("checkout hdl = {path:%s}\n", qstrgetstr(&hdl->path));
+    RHO_TRACE_ENTER("hdl path=%s", qstrgetstr(&hdl->path));
     hdl->fs = NULL;
-    debug("< nextfs_checkout\n");
+    RHO_TRACE_EXIT("return=0");
     return (0);
 }
 
-/* POSTPONE: */
 static int
 nextfs_checkin(struct shim_handle *hdl)
 {
     struct nextfs_mdata *mdata = NULL;
-    debug("> nextfs_checkin\n");
-    debug("checkin hdl = {path:%s, fs=%p}\n",
-            qstrgetstr(&hdl->path), hdl->fs);
+
+    RHO_TRACE_ENTER();
+    rho_shim_handle_print(hdl);
 
     if (hdl->fs != NULL && hdl->fs->data != NULL) {
         mdata = hdl->fs->data;
         nextfs_mdata_print(mdata);
     }
 
-    debug("< nextfs_checkin\n");
+    RHO_TRACE_EXIT("return=0");
     return (0);
 }
 
-/* POSTPONE: */
-static off_t
-nextfs_poll(struct shim_handle *hdl, int poll_type)
-{
-    debug("> nextfs_poll\n");
-    (void)hdl;
-    (void)poll_type;
-    debug("< nextfs_poll\n");
-    return (0);
-}
-
-/* POSTPONE: NEED */
 static ssize_t
 nextfs_checkpoint(void **checkpoint, void *mount_data)
 {
+    ssize_t ret = 0;
     int error = 0;
-    uint32_t bodylen = 0;
-    uint32_t status = 0;
     struct nextfs_mdata *mdata = mount_data;
-    struct nextfs_client *client = mdata->client;;
-    struct rho_buf *buf = client->buf;
-    uint64_t ident = 0;
+    uint64_t child_ident = 0;
 
-    debug("> nextfs_checkpoint\n");
+    RHO_TRACE_ENTER();
 
-    rho_buf_rewind(buf);
-    nextfs_pmarshal_hdr(buf, NEXTFS_OP_FORK, 0);
-
-    /* make request */
-    error = nextfs_client_request(client, &status, &bodylen);
+    error = nextfs_fork_rpc(mdata->agent, &child_ident);
     if (error != 0) {
-        error = -ERPC;
+        ret = error;
         goto done;
     }
 
-    if (status != 0) {
-        error = -status;
-        goto done;
-    }
+    rho_debug("nextfs child_ident=0x%lx", child_ident);
 
-    error = rho_buf_readu64be(buf, &ident);
-    if (error == -1) {
-        error = -ERPC;
-        goto done;
-    }
-
-    debug("nextfs child ident = %llu\n", (unsigned long long)ident);
-
-    mdata = mount_data;
-    mdata->ident = ident;
+    mdata->ident = child_ident;
     *checkpoint = mdata;
+    ret = sizeof(struct nextfs_mdata);
 
 done:
-    rho_buf_clear(buf);
-    debug("< nextfs_checkpoint\n");
-    return (sizeof(struct nextfs_mdata));
+    RHO_TRACE_EXIT("return=%ld", ret);
+    return (ret);
 }
 
 /* 
- * POSTPONE: NEED
- *
- * Not clear to be the memory management for this function:
- * should the parent's client be free'd.  Should hte
+ * What is the memory management for this function?
+ * Should the parent's client be free'd.  Should the
  * old mdata be free'd?
  *
  * I think this function must return 0 on success.
@@ -1098,185 +1121,107 @@ nextfs_migrate(void *checkpoint, void **mount_data)
 {
     int error = 0;
     struct nextfs_mdata *mdata = NULL;
-    struct nextfs_client *client = NULL;
-    struct rho_buf *buf = NULL;
-    uint32_t status = 0;
-    uint32_t bodylen = 0;
+    struct rpc_agent *agent = NULL;
 
-    debug("> nextfs_migrate\n");
+    RHO_TRACE_ENTER();
 
     mdata = rhoL_zalloc(sizeof(struct nextfs_mdata));
     memcpy(mdata, checkpoint, sizeof(struct nextfs_mdata));
     mdata->debug_cookie = rho_rand_u32();
     nextfs_mdata_print(mdata);
 
-    client = nextfs_client_open(mdata->url, 
+    agent = nextfs_agent_open(mdata->url, 
             mdata->ca_der[0] == 0x00 ? NULL : mdata->ca_der,
             mdata->ca_der_len);
 
-    debug("nextfs migrate: client=%p, mdata=%p\n", client, mdata);
+    mdata->agent = agent;
 
-    mdata->client = client;
-    buf = client->buf;
-
-    rho_buf_seek(buf, NEXTFS_HEADER_LENGTH, SEEK_SET); 
-    rho_buf_writeu64be(buf, mdata->ident);
-    bodylen = rho_buf_length(buf) - NEXTFS_HEADER_LENGTH;
-    rho_buf_rewind(buf);
-    nextfs_pmarshal_hdr(buf, NEXTFS_OP_CHILD_ATTACH, bodylen);
-    error = nextfs_client_request(client, &status, &bodylen);
-    if (error != 0) {
-        error = -ERPC;
-        goto done;
-    }
-
-    if (status != 0) {
-        error = -status;
-        goto done;
-    }
-
+    error = nextfs_child_attach_rpc(agent, mdata->ident);
     *mount_data = mdata;
 
-done:
-    rho_buf_clear(buf);
-    debug("< nextfs_migrate\n");
+    RHO_TRACE_EXIT("return=%d", error);
+    return (error);
+}
+
+
+/***********************************
+ * FS_OPS STUBS: NOT YET IMPLEMENTED
+ ***********************************/
+static int
+nextfs_flush(struct shim_handle *hdl)
+{
+    RHO_TRACE_ENTER();
+    __UNUSED(hdl);
+    RHO_TRACE_EXIT("return=0");
     return (0);
+}
+
+static int
+nextfs_setflags(struct shim_handle *hdl, int flags)
+{
+    RHO_TRACE_ENTER("flags=%d", flags);
+    __UNUSED(hdl);
+    __UNUSED(flags);
+    RHO_TRACE_EXIT("return=0");
+    return (0);
+}
+
+static void
+nextfs_hput(struct shim_handle *hdl)
+{
+    RHO_TRACE_ENTER();
+    __UNUSED(hdl);
+    RHO_TRACE_EXIT();
+    return;
 }
 
 /********************************* 
  * DIRECTORY OPERATIONS
  *********************************/
-static int
-nextfs_opendir(struct shim_handle *hdl, struct shim_dentry *dent, int flags)
-{
-    int error = 0;
-    uint32_t bodylen = 0;
-    uint32_t status = 0;
-    struct nextfs_client *client = NULL;
-    struct rho_buf *buf = NULL;
-    uint32_t fd = 0;
-    char path[NEXTFS_MAX_PATH_LENGTH] = { 0 };
-
-    debug("::nextfs_opendir\n");
-
-    client = nextfs_dentry_get_client(dent);
-    buf = client->buf;
-
-    debug("> nextfs_opendir\n");
-
-    (void)flags;
-
-    /* get path */
-    rho_shim_dentry_relpath(dent, path, sizeof(path));
-    /* build request */
-    rho_buf_seek(buf, NEXTFS_HEADER_LENGTH, SEEK_SET); 
-    nextfs_marshal_str(buf, path);
-    bodylen = rho_buf_length(buf) - NEXTFS_HEADER_LENGTH;
-    rho_buf_rewind(buf);
-    nextfs_pmarshal_hdr(buf, NEXTFS_OP_DIR_OPEN, bodylen);
-
-    /* make request */
-    error = nextfs_client_request(client, &status, &bodylen);
-    debug("nextfs_client_request returned %d\n", error);
-    if (error != 0) {
-        error = -ERPC;
-        goto done;
-    }
-
-    if (status != 0) {
-        error = -status;
-        goto done;
-    }
-
-    rho_buf_readu32be(buf, &fd);
-
-    debug("nextfs_opendir returned fd=%lu\n", (unsigned long)fd);
-
-    /* fill in handle */
-    hdl->info.nextfs.fd = fd;
-    hdl->type = TYPE_NEXTFS;
-    hdl->flags = flags;
-    hdl->acc_mode = ACC_MODE(flags & O_ACCMODE);
-
-done:
-    rho_buf_clear(buf);
-    debug("< nextfs_opendir\n");
-    return (error);
-}
 
 static int
 nextfs_open(struct shim_handle *hdl, struct shim_dentry *dent, int flags)
 {
     int error = 0;
-    uint32_t bodylen = 0;
-    uint32_t status = 0;
-    struct nextfs_client *client = NULL;
-    struct rho_buf *buf = NULL;
-    uint32_t fd = 0;
+    /* XXX: should we get the agent form hdl or dent? */
+    struct rpc_agent *agent = nextfs_dentry_get_agent(dent);
     char path[NEXTFS_MAX_PATH_LENGTH] = { 0 };
+    uint32_t nextfs_fd = 0;
 
-    debug("::nextfs_open\n");
-
-    client = nextfs_dentry_get_client(dent);
-    buf = client->buf;
-
-    debug("> nextfs_open(hdl=(%p), dent=(%p), flags=0x%08x\n", hdl, dent, flags);
+    RHO_TRACE_ENTER("flags=0x%x", flags);
+    rho_shim_handle_print(hdl);
     rho_shim_dentry_print(dent);
 
-    /* XXX: probably also want to make sure that O_RDONLY is specified */
-    if (flags & O_DIRECTORY) {
-        error = nextfs_opendir(hdl, dent, flags);
-        goto done;
-    }
-
-    /* get path */
     rho_shim_dentry_relpath(dent, path, sizeof(path));
 
-    /* build request */
-    rho_buf_seek(buf, NEXTFS_HEADER_LENGTH, SEEK_SET); 
-    nextfs_marshal_str(buf, path);
-    rho_buf_writeu32be(buf, flags);
-    bodylen = rho_buf_length(buf) - NEXTFS_HEADER_LENGTH;
-    rho_buf_rewind(buf);
-    nextfs_pmarshal_hdr(buf, NEXTFS_OP_FILE_OPEN2, bodylen);
+    /* XXX: probably also want to make sure that O_RDONLY is specified */
+    if (flags & O_DIRECTORY)
+        error = nextfs_dir_open_rpc(agent, path, &nextfs_fd);
+    else
+        error = nextfs_file_open2_rpc(agent, path, flags, &nextfs_fd);
 
-    /* make request */
-    error = nextfs_client_request(client, &status, &bodylen);
-    debug("nextfs_client_request returned %d\n", error);
-    if (error != 0) {
-        error = -ERPC;
+    if (error != 0)
         goto done;
-    }
 
-    if (status != 0) {
-        error = -status;
-        goto done;
-    }
-
-    rho_buf_readu32be(buf, &fd);
-
-    debug("nextfs_open returned fd=%lu\n", (unsigned long)fd);
-
-    /* fill in handle */
-    hdl->info.nextfs.fd = fd;
+    hdl->info.nextfs.fd = nextfs_fd;
     hdl->type = TYPE_NEXTFS;
     hdl->flags = flags;
     hdl->acc_mode = ACC_MODE(flags & O_ACCMODE);
 
 done:
-    rho_buf_clear(buf);
-    debug("< nextfs_open\n");
+    RHO_TRACE_EXIT("return=%d", error);
     return (error);
 }
 
-/* POSTPONE: */
 static int
 nextfs_lookup(struct shim_dentry *dent)
 {
     int error = 0;
     struct stat sb;
+    struct rpc_agent *agent = nextfs_dentry_get_agent(dent);
+    char path[NEXTFS_MAX_PATH_LENGTH] = { 0 };
 
-    debug("> nextfs_lookup(dent=*)\n");
+    RHO_TRACE_ENTER();
     rho_shim_dentry_print(dent);
 
     if (qstrempty(&dent->rel_path)) {
@@ -1285,19 +1230,30 @@ nextfs_lookup(struct shim_dentry *dent)
     }
 
     rho_memzero(&sb, sizeof(struct stat));
-    error = nextfs_stat(dent, &sb);
-    if (error != 0)
+    rho_shim_dentry_relpath(dent, path, sizeof(path));
+    error = nextfs_raw_inode_rpc(agent, path, &sb);
+    if (error != 0) {
+        dent->state |= DENTRY_NEGATIVE;
         goto done;
+    }
+
+    /* 
+     * XXX: it's unclear to me the difference between 
+     * dent's state, type, and mode fields; set all;
+     * internally, nextfs will rely on mode, which contains
+     * the most information.
+     */
 
     dent->ino = sb.st_ino;
-
+    dent->mode = sb.st_mode;
+    dent->type = S_IFMT & sb.st_mode;
     if (S_ISDIR(sb.st_mode))
         dent->state |= DENTRY_ISDIRECTORY;
     else if (S_ISLNK(sb.st_mode))
         dent->state |= DENTRY_ISLINK;
 
 done:
-    debug("< nextfs_lookup\n");
+    RHO_TRACE_EXIT("return=%d", error);
     return (error);
 }
 
@@ -1305,96 +1261,46 @@ static int
 nextfs_mode(struct shim_dentry *dent, mode_t *mode)
 {
     int error = 0;
-    uint32_t bodylen = 0;
-    uint32_t status = 0;
-    struct nextfs_client *client = NULL;
-    struct rho_buf *buf = NULL;
+    struct rpc_agent *agent = nextfs_dentry_get_agent(dent);
     char path[NEXTFS_MAX_PATH_LENGTH] = { 0 };
 
-    debug("::nextfs_mode\n");
-
-    client = nextfs_dentry_get_client(dent);
-    buf = client->buf;
-
-    debug("> nextfs_mode(dent=*, mode=*)");
+    RHO_TRACE_ENTER();
     rho_shim_dentry_print(dent);
 
-    /* get path */
     rho_shim_dentry_relpath(dent, path, sizeof(path));
-    debug("relpath=%s\n", path);
+    error = nextfs_mode_get_rpc(agent, path, mode);
 
-    /* build request */
-    rho_buf_seek(buf, NEXTFS_HEADER_LENGTH, SEEK_SET); 
-    nextfs_marshal_str(buf, path);
-    bodylen = rho_buf_length(buf) - NEXTFS_HEADER_LENGTH;
-    rho_buf_rewind(buf);
-    nextfs_pmarshal_hdr(buf, NEXTFS_OP_MODE_GET, bodylen);
-
-    /* make request */
-    nextfs_client_request(client, &status, &bodylen);
-    if (error != 0) {
-        error = -ERPC;
-        goto done;
-    }
-
-    if (status != 0) {
-        error = -status;
-        goto done;
-    }
-
-    rho_buf_readu32be(buf, mode);
-    
-done:
-    rho_buf_clear(buf);
-    debug("< nextfs_mode (error=%d, mode=%08x)\n", error, *mode);
+    RHO_TRACE_EXIT("return=%d", error);
     return (error);
 }
 
-/* POSTPONE: */
-static int 
-nextfs_dput(struct shim_dentry *dent)
-{
-    debug("> nextfs_dput\n");
-    (void)dent;
-    debug("< nextfs_dput\n");
-    return (0);
-}
-
-/* TODO: */
+/* 
+ * TODO: 
+ *  - are we suppose to change anything in dir
+ *  - deal with error if chmod fails.
+ */
 static int
 nextfs_creat(struct shim_handle *hdl, struct shim_dentry *dir,
         struct shim_dentry *dent, int flags, mode_t mode)
 {
     int error = 0;
+    struct rpc_agent *agent = nextfs_dentry_get_agent(dent);
+    char path[NEXTFS_MAX_PATH_LENGTH] = { 0 };
 
-    debug("> nextfs_creat\n");
-
-    debug("> nextfs_creat print dir\n");
+    RHO_TRACE_ENTER("flags=0x%x, mode=0x%x", flags, mode);
+    rho_shim_handle_print(hdl);
     rho_shim_dentry_print(dir);
-
-    debug("> nextfs_creat print dent\n");
     rho_shim_dentry_print(dent);
-
-    /* 
-     * TODO: perhaps change the open RPC to also
-     * take a mode argument.
-     *
-     * TODO: are we suppose to change anything in dir?
-     */
 
     error = nextfs_open(hdl, dent, flags);
     if (error != 0)
         goto done;
     
-    error = nextfs_chmod(dent, mode);
-
-    /*
-     * TODO: deal with an error from chmod by
-     * closing the handle.
-     */
+    rho_shim_dentry_relpath(dent, path, sizeof(path));
+    error = nextfs_mode_set_rpc(agent, path, mode);
 
 done:
-    debug("< nextfs_creat returning %d\n", error);
+    RHO_TRACE_EXIT("return=%d", error);
     return (error);
 }
 
@@ -1402,46 +1308,22 @@ static int
 nextfs_unlink(struct shim_dentry *dir, struct shim_dentry *dent)
 {
     int error = 0;
-    uint32_t bodylen = 0;
-    uint32_t status = 0;
-    struct nextfs_client *client = NULL;
-    struct rho_buf *buf = NULL;
+    /* XXX: should we get the agent from dir or dent? */
+    struct rpc_agent *agent = nextfs_dentry_get_agent(dent);
     char path[NEXTFS_MAX_PATH_LENGTH] = { 0 };
 
-    debug("::nextfs_unlink\n");
-
-    client = nextfs_dentry_get_client(dent);
-    buf = client->buf;
-
-    debug("> nextfs_unlink(dir=*, dent=*)\n");
+    RHO_TRACE_ENTER();
     rho_shim_dentry_print(dir);
     rho_shim_dentry_print(dent);
 
-    /* get path */
     rho_shim_dentry_relpath(dent, path, sizeof(path));
 
-    /* build request */
-    rho_buf_seek(buf, NEXTFS_HEADER_LENGTH, SEEK_SET); 
-    nextfs_marshal_str(buf, path);
-    bodylen = rho_buf_length(buf) - NEXTFS_HEADER_LENGTH;
-    rho_buf_rewind(buf);
-    nextfs_pmarshal_hdr(buf, NEXTFS_OP_FILE_REMOVE, bodylen);
+    if (S_ISDIR(dent->mode))
+        error = nextfs_dir_rm_rpc(agent, path);
+    else
+        error = nextfs_file_remove_rpc(agent, path);
 
-    /* make request */
-    nextfs_client_request(client, &status, &bodylen);
-    if (error != 0) {
-        error = -ERPC;
-        goto done;
-    }
-
-    if (status != 0) {
-        error = -status;
-        goto done;
-    }
-    
-done:
-    rho_buf_clear(buf);
-    debug("< nextfs_unlink\n");
+    RHO_TRACE_EXIT("return=%d", error);
     return (error);
 }
 
@@ -1449,47 +1331,20 @@ static int
 nextfs_mkdir(struct shim_dentry *dir, struct shim_dentry *dent, mode_t mode)
 {
     int error = 0;
-    uint32_t bodylen = 0;
-    uint32_t status = 0;
-    struct nextfs_client *client = NULL;
-    struct rho_buf *buf = NULL;
+    /* XXX: should we get the agent from dir or dent? */
+    struct rpc_agent *agent = nextfs_dentry_get_agent(dent);
     char path[NEXTFS_MAX_PATH_LENGTH] = { 0 };
 
-    debug("::nextfs_mkdir\n");
+    RHO_TRACE_ENTER("mode=0x%x", mode);
+    rho_shim_dentry_print(dir);
+    rho_shim_dentry_print(dent);
 
-    client = nextfs_dentry_get_client(dent);
-    buf = client->buf;
+    __UNUSED(dir);
 
-    debug("> nextfs_mkdir\n");
-    (void)dir;
-
-    /* get path */
     rho_shim_dentry_relpath(dent, path, sizeof(path));
+    error = nextfs_dir_mk_rpc(agent, path, mode);
 
-    /* build request */
-    rho_buf_seek(buf, NEXTFS_HEADER_LENGTH, SEEK_SET); 
-    nextfs_marshal_str(buf, path);
-    rho_buf_writeu32be(buf, mode);
-
-    bodylen = rho_buf_length(buf) - NEXTFS_HEADER_LENGTH;
-    rho_buf_rewind(buf);
-    nextfs_pmarshal_hdr(buf, NEXTFS_OP_DIR_MK, bodylen);
-
-    /* make request */
-    error = nextfs_client_request(client, &status, &bodylen);
-    if (error != 0) {
-        error = -ERPC;
-        goto done;
-    }
-
-    if (status != 0) {
-        error = -status;
-        goto done;
-    }
-
-done:
-    rho_buf_clear(buf);
-    debug("< nextfs_mkdir\n");
+    RHO_TRACE_EXIT("return=%d", error);
     return (error);
 }
 
@@ -1497,142 +1352,33 @@ static int
 nextfs_stat(struct shim_dentry *dent, struct stat *stat)
 {
     int error = 0;
-    uint32_t bodylen = 0;
-    uint32_t status = 0;
-    struct nextfs_client *client = NULL;
-    struct rho_buf *buf = NULL;
+    struct rpc_agent *agent = nextfs_dentry_get_agent(dent);
     char path[NEXTFS_MAX_PATH_LENGTH] = { 0 };
-    uint32_t deletion_time = 0;
-    uint32_t flags = 0;
 
-    debug("::nextfs_stat\n");
+    RHO_TRACE_ENTER();
+    rho_shim_dentry_print(dent);
 
-    client = nextfs_dentry_get_client(dent);
-    buf = client->buf;
-
-    debug("> nextfs_stat\n");
-
-    /* get path */
     rho_shim_dentry_relpath(dent, path, sizeof(path));
+    error = nextfs_raw_inode_rpc(agent, path, stat);
 
-    /* build request */
-    rho_buf_seek(buf, NEXTFS_HEADER_LENGTH, SEEK_SET); 
-    nextfs_marshal_str(buf, path);
-
-    bodylen = rho_buf_length(buf) - NEXTFS_HEADER_LENGTH;
-    rho_buf_rewind(buf);
-    nextfs_pmarshal_hdr(buf, NEXTFS_OP_RAW_INODE, bodylen);
-
-    /* make request */
-    error = nextfs_client_request(client, &status, &bodylen);
-    if (error != 0) {
-        error = -ERPC;
-        goto done;
-    }
-
-    if (status != 0) {
-        error = -status;
-        goto done;
-    }
-
-    /* fill in stat buf */
-    rho_memzero(stat, sizeof(*stat));
-    /* TODO: need to fill in st_dev */
-    rho_buf_readu32be(buf, (uint32_t *)&stat->st_ino);   /* XXX is unsigned long */
-    rho_buf_readu16be(buf, (uint16_t *)&stat->st_mode);  /* XXX is unsigned int */
-    rho_buf_readu16be(buf, (uint16_t *)&stat->st_uid);   /* XXX is unsigned int */
-    rho_buf_readu32be(buf, (uint32_t *)&stat->st_size);  /* XXX is long int */
-    rho_buf_readu32be(buf, (uint32_t *)&stat->st_atime); /* XXX is unsigned long */
-    rho_buf_readu32be(buf, (uint32_t *)&stat->st_ctime); /* XXX is unsigned long */
-    rho_buf_readu32be(buf, (uint32_t *)&stat->st_mtime); /* XXX is unsigned long */
-
-    rho_buf_readu32be(buf, &deletion_time);
-
-    rho_buf_readu16be(buf, (uint16_t *)&stat->st_gid);   /* XXX is unsinged int */
-    rho_buf_readu16be(buf, (uint16_t *)&stat->st_nlink); /* XXX is unsigned long */
-    rho_buf_readu32be(buf, (uint32_t *)&stat->st_blocks);/* XXX is long int */
-
-    rho_buf_readu32be(buf, &flags);
-
-    /* XXX: st_dev can probably be anything, as long as it's unique */
-    stat->st_dev = 0x1234;
-    /* XXX: check with lwext4; 1024 seems like a reasonable guess, though */
-    stat->st_blksize = 1024;
-
-    debug("st_size=%ld\n", stat->st_size);
-
-done:
-    rho_buf_clear(buf);
-    debug("< nextfs_stat\n");
+    RHO_TRACE_EXIT("return=%d", error);
     return (error);
-}
-
-/* TODO:  (are these hardlinks or softlinks? */
-static int
-nextfs_follow_link(struct shim_dentry *dent, struct shim_qstr *link)
-{
-    debug("> nextfs_follow_link\n");
-    (void)dent;
-    (void)link;
-    debug("< nextfs_follow_link\n");
-    return (0);
-}
-
-/* TODO: (are these hard links or softlinks? */
-static int
-nextfs_set_link(struct shim_dentry *dent, const char *link)
-{
-    debug("> nextfs_set_link\n");
-    (void)dent;
-    (void)link;
-    debug("< nextfs_set_link\n");
-    return (0);
 }
 
 static int
 nextfs_chmod(struct shim_dentry *dent, mode_t mode)
 {
     int error = 0;
-    uint32_t bodylen = 0;
-    uint32_t status = 0;
-    struct nextfs_client *client = NULL;
-    struct rho_buf *buf = NULL;
+    struct rpc_agent *agent = nextfs_dentry_get_agent(dent);
     char path[NEXTFS_MAX_PATH_LENGTH] = { 0 };
 
-    debug("::nextfs_chmod\n");
+    RHO_TRACE_ENTER("mode=0x%x", mode);
+    rho_shim_dentry_print(dent);
 
-    client = nextfs_dentry_get_client(dent);
-    buf = client->buf;
-
-    debug("> nextfs_chmod\n");
-
-    /* get path */
     rho_shim_dentry_relpath(dent, path, sizeof(path));
+    error = nextfs_mode_set_rpc(agent, path, mode);
 
-    /* build request */
-    rho_buf_seek(buf, NEXTFS_HEADER_LENGTH, SEEK_SET); 
-    nextfs_marshal_str(buf, path);
-    rho_buf_writeu32be(buf, mode);
-
-    bodylen = rho_buf_length(buf) - NEXTFS_HEADER_LENGTH;
-    rho_buf_rewind(buf);
-    nextfs_pmarshal_hdr(buf, NEXTFS_OP_MODE_SET, bodylen);
-
-    /* make request */
-    error = nextfs_client_request(client, &status, &bodylen);
-    if (error != 0) {
-        error = -ERPC;
-        goto done;
-    }
-
-    if (status != 0) {
-        error = -status;
-        goto done;
-    }
-
-done:
-    rho_buf_clear(buf);
-    debug("< nextfs_chmod\n");
+    RHO_TRACE_EXIT("return=%d", error);
     return (error);
 }
 
@@ -1640,47 +1386,16 @@ static int
 nextfs_chown(struct shim_dentry *dent, int uid, int gid)
 {
     int error = 0;
-    uint32_t bodylen = 0;
-    uint32_t status = 0;
-    struct nextfs_client *client = NULL;
-    struct rho_buf *buf = NULL;
+    struct rpc_agent *agent = nextfs_dentry_get_agent(dent);
     char path[NEXTFS_MAX_PATH_LENGTH] = { 0 };
 
-    debug("::nextfs_chown\n");
+    RHO_TRACE_ENTER("uid=%d, gid=%d", uid, gid);
+    rho_shim_dentry_print(dent);
 
-    client = nextfs_dentry_get_client(dent);
-    buf = client->buf;
-
-    debug("> nextfs_chown\n");
-
-    /* get path */
     rho_shim_dentry_relpath(dent, path, sizeof(path));
+    error = nextfs_owner_set_rpc(agent, path, uid, gid);
 
-    /* build request */
-    rho_buf_seek(buf, NEXTFS_HEADER_LENGTH, SEEK_SET); 
-    nextfs_marshal_str(buf, path);
-    rho_buf_writeu32be(buf, uid);
-    rho_buf_writeu32be(buf, gid);
-
-    bodylen = rho_buf_length(buf) - NEXTFS_HEADER_LENGTH;
-    rho_buf_rewind(buf);
-    nextfs_pmarshal_hdr(buf, NEXTFS_OP_OWNER_SET, bodylen);
-
-    /* make request */
-    error = nextfs_client_request(client, &status, &bodylen);
-    if (error != 0) {
-        error = -ERPC;
-        goto done;
-    }
-
-    if (status != 0) {
-        error = -status;
-        goto done;
-    }
-
-done:
-    rho_buf_clear(buf);
-    debug("< nextfs_chown\n");
+    RHO_TRACE_EXIT("return=%d", error);
     return (error);
 } 
 
@@ -1688,44 +1403,20 @@ static int
 nextfs_rename(struct shim_dentry *old, struct shim_dentry *new)
 {
     int error = 0;
-    uint32_t bodylen = 0;
-    uint32_t status = 0;
-    struct nextfs_client *client = NULL;
-    struct rho_buf *buf = NULL;
-    char oldpath[NEXTFS_MAX_PATH_LENGTH] = { 0 };
-    char newpath[NEXTFS_MAX_PATH_LENGTH] = { 0 };
+    struct rpc_agent *agent = nextfs_dentry_get_agent(old);
+    char old_path[NEXTFS_MAX_PATH_LENGTH] = { 0 };
+    char new_path[NEXTFS_MAX_PATH_LENGTH] = { 0 };
 
-    debug("::nextfs_rename\n");
+    RHO_TRACE_ENTER();
+    rho_shim_dentry_print(old);
+    rho_shim_dentry_print(new);
 
-    client = nextfs_dentry_get_client(old);
-    buf = client->buf;
+    rho_shim_dentry_relpath(old, old_path, sizeof(old_path));
+    rho_shim_dentry_relpath(new, new_path, sizeof(new_path));
 
-    debug("> nextfs_rename\n");
-
-    /* get paths */
-    rho_shim_dentry_relpath(old, oldpath, sizeof(oldpath));
-    rho_shim_dentry_relpath(new, newpath, sizeof(newpath));
-
-    /* build request */
-    rho_buf_seek(buf, NEXTFS_HEADER_LENGTH, SEEK_SET); 
-    nextfs_marshal_str(buf, oldpath);
-    nextfs_marshal_str(buf, newpath);
-
-    bodylen = rho_buf_length(buf) - NEXTFS_HEADER_LENGTH;
-    rho_buf_rewind(buf);
-    nextfs_pmarshal_hdr(buf, NEXTFS_OP_FILE_RENAME, bodylen);
-
-    /* make request */
-    error = nextfs_client_request(client, &status, &bodylen);
-    if (error != 0) {
-        error = -ERPC;
+    error = nextfs_file_rename_rpc(agent, old_path, new_path);
+    if (error != 0)
         goto done;
-    }
-
-    if (status != 0) {
-        error = -status;
-        goto done;
-    }
 
     /* 
      * update old dentry name
@@ -1741,44 +1432,7 @@ nextfs_rename(struct shim_dentry *old, struct shim_dentry *new)
     qstrcopy(&old->name, &new->name);
 
 done:
-    rho_buf_clear(buf);
-    debug("< nextfs_rename\n");
-    return (error);
-}
-
-
-static int
-nextfs_rpc_dir_close(struct nextfs_client *client, uint32_t nextfs_fd)
-{
-    int error = 0;
-    uint32_t bodylen = 0;
-    uint32_t status = 0;
-    struct rho_buf *buf = client->buf;
-
-    debug("> nextfs_rpc_dir_close(fd=%u)\n", nextfs_fd);
-
-    /* build request */
-    rho_buf_seek(buf, NEXTFS_HEADER_LENGTH, SEEK_SET); 
-    rho_buf_writeu32be(buf, nextfs_fd);
-    bodylen = rho_buf_length(buf) - NEXTFS_HEADER_LENGTH;
-    rho_buf_rewind(buf);
-    nextfs_pmarshal_hdr(buf, NEXTFS_OP_DIR_CLOSE, bodylen);
-
-    /* make request */
-    error = nextfs_client_request(client, &status, &bodylen);
-    if (error != 0) {
-        error = -ERPC;
-        goto done;
-    }
-
-    if (status != 0) {
-        error = -status;
-        goto done;
-    }
-
-done:
-    rho_buf_clear(buf);
-    debug("< nextfs_rpc_dir_close -> %d\n", error);
+    RHO_TRACE_EXIT("return=%d", error);
     return (error);
 }
 
@@ -1809,216 +1463,53 @@ static int
 nextfs_readdir(struct shim_dentry *dent, struct shim_dirent **dirent)
 {
     int error = 0;
-    uint32_t bodylen = 0;
-    uint32_t status = 0;
-    struct nextfs_client *client = NULL;
-    struct rho_buf *buf = NULL;
+    struct rpc_agent *agent = nextfs_dentry_get_agent(dent);
     struct shim_handle hdl;
-    uint32_t nextfs_fd =-1;
-    struct shim_dirent *array = NULL;
-    struct shim_dirent *pd = NULL;
-    uint32_t namelen = 0;
-    uint32_t i = 0;
-    uint32_t n = 0;
 
-    debug("::nextfs_readdir\n");
+    RHO_TRACE_ENTER();
+    rho_shim_dentry_print(dent);
 
-    client = nextfs_dentry_get_client(dent);
-    buf = client->buf;
-
-    debug("> nextfs_readdir\n");
-
-    /* open directory */
     memset(&hdl, 0x00, sizeof(struct shim_handle));
-    error = nextfs_opendir(&hdl, dent, O_DIRECTORY);
+    error = nextfs_open(&hdl, dent, O_DIRECTORY);
     if (error != 0)
-        goto fail;
+        goto done;
 
-    nextfs_fd = hdl.info.nextfs.fd;
+    error = nextfs_dir_list_rpc(agent, hdl.info.nextfs.fd, dirent);
+    (void)nextfs_dir_close_rpc(agent, hdl.info.nextfs.fd);
 
-    /* build dir_list request */
-    rho_buf_seek(buf, NEXTFS_HEADER_LENGTH, SEEK_SET); 
-    rho_buf_writeu32be(buf, nextfs_fd);
-    bodylen = rho_buf_length(buf) - NEXTFS_HEADER_LENGTH;
-    rho_buf_rewind(buf);
-    nextfs_pmarshal_hdr(buf, NEXTFS_OP_DIR_LIST, bodylen);
-
-    /* make request */
-    error = nextfs_client_request(client, &status, &bodylen);
-    if (error != 0) {
-        error = -ERPC;
-        goto fail;
-    }
-
-    if (status != 0) {
-        error = -status;
-        goto fail;
-    }
-
-    /* 
-     * The RPC response is an array, where each entry is:
-     * First is a u32 of the number of entries.  Then, each entry:
-     *
-     * {u32 inode, u8 inode_type, u32 name length, name[255] (null terminated)}
-     *
-     * The current implementation is simple but fairly wasteful:
-     *  1. each pathname occupies 255 bytes
-     *  2. we double copy between the representation of the array in 
-     *     RPC response and the "return value" represenation.
-     */
-
-    error = rho_buf_readu32be(buf, &n);
-    if (error == -1) {
-        error = -ERPC;
-        goto fail;
-    }
-
-    debug("received %lu direntries\n", (unsigned long)n);
-
-    array = rhoL_mallocarray(n, (sizeof(struct shim_dirent) + 255), RHO_MEM_ZERO);
-
-    for (i = 0; i < n; i++) {
-        /* 
-         * XXX: flexible array members (aka, last member of struct is
-         * a zero-length array) are evil 
-         */
-        pd = (struct shim_dirent *)
-            (((uint8_t *)array) + (i * (sizeof(struct shim_dirent) + 255)));
-
-        /* XXX: &pd->ino is unsigned long */
-        error = rho_buf_readu32be(buf, (uint32_t *)(&pd->ino));
-        if (error == -1) {
-            error = -ERPC;
-            goto fail;
-        }
-
-        error = rho_buf_readu8(buf, &pd->type);
-        if (error == -1) {
-            error = -ERPC;
-            goto fail;
-        }
-
-        /* convert types from lwext4 to graphene */
-        switch (pd->type) {
-        case 0: /* EXT4_DE_UNKNOWN */
-            pd->type = LINUX_DT_UNKNOWN;
-            break;
-        case 1: /* EXT4_DE_REG_FILE */
-            pd->type = LINUX_DT_REG;
-            break;
-        case 2: /* EXT4_DE_DIR */
-            pd->type = LINUX_DT_DIR;
-            break;
-        case 3: /* EXT4_DE_CHRDEV */
-            pd->type = LINUX_DT_CHR;
-            break;
-        case 4: /* EXT4_DE_BLKDEV */
-            pd->type = LINUX_DT_BLK;
-            break;
-        case 5: /* EXT4_DE_FIFO */
-            pd->type = LINUX_DT_FIFO;
-            break;
-        case 6: /* EXT4_DE_SOCK */
-            pd->type = LINUX_DT_SOCK;
-            break;
-        case 7: /* EXT4_DE_SYMLINK */
-            pd->type = LINUX_DT_LNK;
-            break;
-        default:
-            pd->type = LINUX_DT_UNKNOWN;
-        }
-
-        error = rho_buf_readu32be(buf, &namelen);
-        if (error == -1) {
-            error = -ERPC;
-            goto fail;
-        }
-
-        error = rho_buf_read(buf, pd->name, 255);
-        if (error == -1) {
-            error = -ERPC;
-            goto fail;
-        }
-
-        debug("direntry: ino:%lu, name:\"%s\", type:%d\n",
-                (unsigned long)pd->ino, pd->name, pd->type);
-
-        if ((i + 1) < n) {
-            pd->next = (struct shim_dirent *)
-                (((uint8_t *)array) + ((i+1) * (sizeof(struct shim_dirent) + 255)));
-        } else {
-            pd->next = NULL;
-        }
-    }
-
-    *dirent = array;
-    error = 0;
-    goto succeed;
-
-fail:
-    if (array != NULL)
-        rhoL_free(array);
-succeed:
-    if (((int)nextfs_fd) != -1) {
-        //nextfs_close(&hdl);
-        rho_buf_clear(buf);
-        nextfs_rpc_dir_close(client, nextfs_fd);
-    }
-
-    rho_buf_clear(buf);
-    debug("< nextfs_readdir\n");
+done:
+    RHO_TRACE_EXIT("return=%d", error);
     return (error);
 }
 
 struct shim_fs_ops nextfs_fs_ops = {
-        .mount       = &nextfs_mount,      /**/
-        .unmount     = &nextfs_unmount,    /**/
-        .close       = &nextfs_close,      /**/
-        .read        = &nextfs_read,       /**/
-        .write       = &nextfs_write,      /**/
-        .mmap        = &nextfs_mmap,       /**/
-        .flush       = &nextfs_flush,      /**/
-        .seek        = &nextfs_seek,       /**/
-        .move        = &nextfs_move,
-        .copy        = &nextfs_copy,
-        .truncate    = &nextfs_truncate,   /**/
-        .hstat       = &nextfs_hstat,      /**/
+        .mount       = &nextfs_mount,
+        .close       = &nextfs_close,
+        .read        = &nextfs_read,
+        .write       = &nextfs_write,
+        .mmap        = &nextfs_mmap,
+        .flush       = &nextfs_flush,
+        .seek        = &nextfs_seek,
+        .truncate    = &nextfs_truncate,
+        .hstat       = &nextfs_hstat,
         .setflags    = &nextfs_setflags,
         .hput        = &nextfs_hput,
-        .lock        = &nextfs_lock,
-        .unlock      = &nextfs_unlock,
-        .lockfs      = &nextfs_lockfs,
-        .unlockfs    = &nextfs_unlockfs,
-        .checkout    = &nextfs_checkout,   /**/
+        .checkout    = &nextfs_checkout,
         .checkin     = &nextfs_checkin,
-        .poll        = &nextfs_poll,       /**/
-        .checkpoint  = &nextfs_checkpoint, /**/
-        .migrate     = &nextfs_migrate,    /**/
+        .checkpoint  = &nextfs_checkpoint,
+        .migrate     = &nextfs_migrate,
     };
 
 struct shim_d_ops nextfs_d_ops = {
-        .open       = &nextfs_open,        /**/
-        .lookup     = &nextfs_lookup,      /**/
-        .mode       = &nextfs_mode,        /**/
-        .dput       = &nextfs_dput,        /**/
-        .creat      = &nextfs_creat,       /**/
-        .unlink     = &nextfs_unlink,      /**/
-        .mkdir      = &nextfs_mkdir,       /**/
-        .stat       = &nextfs_stat,        /**/
-        .follow_link = &nextfs_follow_link,
-        .set_link = &nextfs_set_link,
-        .chmod      = &nextfs_chmod,       /**/
-        .chown      = &nextfs_chown,       /**/
-        .rename     = &nextfs_rename,      /**/
-        .readdir    = &nextfs_readdir,     /**/
+        .open       = &nextfs_open,
+        .lookup     = &nextfs_lookup,
+        .mode       = &nextfs_mode,
+        .creat      = &nextfs_creat,
+        .unlink     = &nextfs_unlink,
+        .mkdir      = &nextfs_mkdir,
+        .stat       = &nextfs_stat,
+        .chmod      = &nextfs_chmod,
+        .chown      = &nextfs_chown,
+        .rename     = &nextfs_rename,
+        .readdir    = &nextfs_readdir,
     };
-
-#if 0
-struct mount_data nextfs_data = { .root_uri_len = 5,
-                                  .root_uri = "file:", };
-
-struct shim_mount nextfs_builtin_fs = { .type   = "nextfs",
-                                        .fs_ops = &nextfs_fs_ops,
-                                        .d_ops  = &nextfs_d_ops,
-                                        .data   = &nextfs_data, };
-#endif

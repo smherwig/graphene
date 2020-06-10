@@ -51,29 +51,27 @@ rho_shim_handle_getfilesize(struct shim_handle *hdl)
 void
 rho_shim_handle_print(const struct shim_handle *hdl)
 {
-    debug("handle (addr=0x%p) = {\n", hdl);
-    debug("  ref_count: %ld\n", atomic_read(&hdl->ref_count));
-    debug("  type: %d\n", hdl->type);
-    debug("  fs_type: %s\n", hdl->fs_type);
-    debug("  path: %s\n", qstrgetstr(&hdl->path));
-    debug("  flags: %08x\n", hdl->flags);
-    debug("  acc_mode: %08x\n", hdl->acc_mode);
+    rho_debug("handle (addr=%p) {type: %d, ref_count: %ld, fs_type: \"%s\", "
+              "path: \"%s\", uri: \"%s\", flags: 0x%x, acc_mode: 0x%x, "
+              "owner: %u}",
+            hdl, hdl->type, atomic_read(&hdl->ref_count), hdl->fs_type,
+            qstrgetstr(&hdl->path), qstrgetstr(&hdl->uri), hdl->flags,
+            hdl->acc_mode, hdl->owner);
 
-#if 0
     switch (hdl->type) {
+    case TYPE_NEXTFS:
+        rho_debug("handle info (nextfs) {fd: %u}", hdl->info.nextfs.fd);
+        break;
     case TYPE_SMDISH:
-        debug("  info (smdish) {\n");
-        debug("    mf_idx: %d\n", hdl->info.smdish.mf_idx);
-        debug("  }\n");
+        rho_debug("handle info (smdish) {mf_idx: %d}", hdl->info.smdish.mf_idx);
         break;
     case TYPE_SMUF:
-        debug("  info (smuf) {\n");
-        debug("    mf_idx: %d\n", hdl->info.smuf.mf_idx);
-        debug("  }\n");
+        rho_debug("handle info (smuf) {mf_idx: %d}", hdl->info.smuf.mf_idx);
+        break;
+    case TYPE_SMC:
+        rho_debug("handle info (smc) {mf_idx: %d}", hdl->info.smc.mf_idx);
         break;
     default:
         break;
     } 
-#endif
-    debug("}\n");
 }

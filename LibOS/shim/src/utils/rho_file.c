@@ -25,7 +25,7 @@ rho_file_readall(const char *path, uint8_t **buf, size_t *len)
     *buf = rhoL_malloc(size);
     
     n = rho_shim_handle_read(hdl, *buf, size);
-    if (n != size) {
+    if ((n < 0) || (((unsigned)n) != size)) {
         debug("rho_shim_handle_read(%lu) returned %d\n",
                 (unsigned long)size, n);
         goto fail;

@@ -33,7 +33,7 @@ struct rpc_hdr {
 struct rpc_agent {
     int ra_state;
     struct rpc_hdr  ra_hdr;     /* parsed out header */
-    struct rho_buf *ra_hdrbuf;  /* buffer for recv/send of headr */
+    struct rho_buf *ra_hdrbuf;  /* buffer for recv/send of header */
     struct rho_buf *ra_bodybuf; /* holds body of req/resp */
     struct rho_sock *ra_sock;
 };

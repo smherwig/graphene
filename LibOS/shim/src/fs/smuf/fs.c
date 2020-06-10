@@ -35,6 +35,7 @@
 #include "rho_bitops.h"
 #include "rho_buf.h"
 #include "rho_endian.h"
+#define RHO_LOG_PREFIX "SMUF"
 #include "rho_log.h"
 #include "rho_mem.h"
 #include "rho_misc.h"
@@ -491,9 +492,9 @@ done:
     return (error);
 }
 
-/******************************************
- * RPC
- ******************************************/
+/**********************************************************
+ * RPC AGENT
+ **********************************************************/
 
 static struct rpc_agent *
 smuf_agent_open(const char *url, unsigned char *ca_der, size_t ca_der_len)
@@ -521,8 +522,15 @@ smuf_agent_open(const char *url, unsigned char *ca_der, size_t ca_der_len)
     return (agent);
 }
 
+/**********************************************************
+ * RPCs
+ *
+ * These functions return 0 on success; a negative errno
+ * on failure.
+ **********************************************************/
+
 static int
-smuf_rpc_new_fdtable(struct rpc_agent *agent)
+smuf_new_fdtable_rpc(struct rpc_agent *agent)
 {
     int error = 0;
 
@@ -531,12 +539,12 @@ smuf_rpc_new_fdtable(struct rpc_agent *agent)
     rpc_agent_new_msg(agent, SMUF_OP_NEW_FDTABLE);
     error = rpc_agent_request(agent);
 
-    RHO_TRACE_EXIT();
-    return (-error);
+    RHO_TRACE_EXIT("return=%d", error);
+    return (error);
 }
 
 static int
-smuf_rpc_fork(struct rpc_agent *agent, uint64_t *child_ident)
+smuf_fork_rpc(struct rpc_agent *agent, uint64_t *child_ident)
 {
     int error = 0;
     struct rho_buf *buf = agent->ra_bodybuf;
@@ -550,21 +558,25 @@ smuf_rpc_fork(struct rpc_agent *agent, uint64_t *child_ident)
         goto done;
 
     error = rho_buf_readu64be(buf, child_ident);
-	if (error != 0)
-		error = EPROTO;
+	if (error != 0) {
+		error = -EPROTO;
+        goto done;
+    }
+
+    rho_debug("child_ident=0x%lx", *child_ident);
 
 done:
-    RHO_TRACE_EXIT();
-    return (-error);
+    RHO_TRACE_EXIT("return=%d", error);
+    return (error);
 }
 
 static int
-smuf_rpc_child_attach(struct rpc_agent *agent, uint64_t child_ident)
+smuf_child_attach_rpc(struct rpc_agent *agent, uint64_t child_ident)
 {
     int error = 0;
     struct rho_buf *buf = agent->ra_bodybuf;
 
-    RHO_TRACE_ENTER();
+    RHO_TRACE_ENTER("child_ident=0x%lx", child_ident);
 
     rpc_agent_new_msg(agent, SMUF_OP_CHILD_ATTACH);
     rho_buf_writeu64be(buf, child_ident);
@@ -572,18 +584,18 @@ smuf_rpc_child_attach(struct rpc_agent *agent, uint64_t child_ident)
 
     error = rpc_agent_request(agent);
 
-    RHO_TRACE_EXIT();
-    return (-error);
+    RHO_TRACE_EXIT("return=%d", error);
+    return (error);
 }
 
 /* returns 0 on success; a negative errno value on failure */
 static int
-smuf_rpc_open(struct rpc_agent *agent, const char *name, uint32_t *remote_fd)
+smuf_open_rpc(struct rpc_agent *agent, const char *name, uint32_t *remote_fd)
 {
     int error = 0;
     struct rho_buf *buf = agent->ra_bodybuf;
 
-    RHO_TRACE_ENTER();
+    RHO_TRACE_ENTER("name=\"%s\"", name);
 
     rpc_agent_new_msg(agent, SMUF_OP_OPEN);
     rho_buf_write_u32size_str(buf, name);
@@ -594,21 +606,23 @@ smuf_rpc_open(struct rpc_agent *agent, const char *name, uint32_t *remote_fd)
         goto done;
 
     error = rho_buf_readu32be(buf, remote_fd);
-    if (error != 0)
-        error = EPROTO;
+    if (error != 0) {
+        error = -EPROTO;
+        goto done;
+    }
 
 done:
-    RHO_TRACE_EXIT();
-    return (-error);
+    RHO_TRACE_EXIT("return=%d", error);
+    return (error);
 }
 
 static int
-smuf_rpc_close(struct rpc_agent *agent, uint32_t remote_fd)
+smuf_close_rpc(struct rpc_agent *agent, uint32_t remote_fd)
 {
     int error = 0;
     struct rho_buf *buf = agent->ra_bodybuf;
 
-    RHO_TRACE_ENTER();
+    RHO_TRACE_ENTER("remote_fd=%u", remote_fd);
 
     rpc_agent_new_msg(agent, SMUF_OP_CLOSE);
     rho_buf_writeu32be(buf, remote_fd);
@@ -616,20 +630,20 @@ smuf_rpc_close(struct rpc_agent *agent, uint32_t remote_fd)
 
     error = rpc_agent_request(agent);
 
-    RHO_TRACE_EXIT();
-    return (-error);
+    RHO_TRACE_EXIT("return=%d", error);
+    return (error);
 }
 
 static int
-smuf_rpc_lock(struct rpc_agent *agent, uint32_t remote_fd, int turn, uint8_t my_type,
+smuf_lock_rpc(struct rpc_agent *agent, uint32_t remote_fd, int turn, uint8_t my_type,
         uint8_t *remote_type, void *iv, void *key, void *tag)
 {
     int error = 0;
     struct rho_buf *buf = agent->ra_bodybuf;
     uint32_t n = 0;
 
-    RHO_TRACE_ENTER("remote_fd=%lu, turn=%d, my_type=%u",
-            (unsigned long)remote_fd, turn, (unsigned)my_type);
+    RHO_TRACE_ENTER("remote_fd=%u, turn=%d, my_type=%u",
+            remote_fd, turn, my_type);
     
     rpc_agent_new_msg(agent, SMUF_OP_LOCK);
     rho_buf_writeu32be(buf, remote_fd);
@@ -643,7 +657,7 @@ smuf_rpc_lock(struct rpc_agent *agent, uint32_t remote_fd, int turn, uint8_t my_
 
     error = rho_buf_readu8(buf, remote_type);
     if (error != 0) {
-        error = EPROTO;
+        error = -EPROTO;
         goto done;
     }
 
@@ -654,53 +668,52 @@ smuf_rpc_lock(struct rpc_agent *agent, uint32_t remote_fd, int turn, uint8_t my_
     /* iv */
     error = rho_buf_readu32be(buf, &n);
     if ((error != 0) || (n != SMUF_IV_SIZE)) {
-        error  = EPROTO;
+        error  = -EPROTO;
         goto done;
     }
 
     if (rho_buf_read(buf, iv, SMUF_IV_SIZE) != SMUF_IV_SIZE) {
-        error = EPROTO;
+        error = -EPROTO;
         goto done;
     }
 
     /* key */
     error = rho_buf_readu32be(buf, &n);
     if ((error != 0) || (n != SMUF_KEY_SIZE)) {
-        error = EPROTO;
+        error = -EPROTO;
         goto done;
     }
 
     if (rho_buf_read(buf, key, SMUF_KEY_SIZE) != SMUF_KEY_SIZE) {
-        error = EPROTO;
+        error = -EPROTO;
         goto done;
     }
 
     /* tag */
     error = rho_buf_readu32be(buf, &n);
     if ((error != 0) || (n != SMUF_TAG_SIZE)) {
-        error = EPROTO;
+        error = -EPROTO;
         goto done;
     }
 
     if (rho_buf_read(buf, tag, SMUF_TAG_SIZE) != SMUF_TAG_SIZE) {
-        error = EPROTO;
+        error = -EPROTO;
         goto done;
     }
 
 done:
-    RHO_TRACE_EXIT("error=%d", error);
-    return (-error);
+    RHO_TRACE_EXIT("return=%d", error);
+    return (error);
 }
 
 static int
-smuf_rpc_unlock(struct rpc_agent *agent, uint32_t remote_fd, uint8_t my_type,
+smuf_unlock_rpc(struct rpc_agent *agent, uint32_t remote_fd, uint8_t my_type,
         uint8_t *iv, uint8_t *key, uint8_t *tag)
 {
     int error = 0;
     struct rho_buf *buf = agent->ra_bodybuf;
 
-    RHO_TRACE_ENTER("remote_fd=%lu, my_type=%u",
-            (unsigned long)remote_fd, (unsigned)my_type);
+    RHO_TRACE_ENTER("remote_fd=%u, my_type=%u", remote_fd, my_type);
 
     rpc_agent_new_msg(agent, SMUF_OP_UNLOCK);
     rho_buf_writeu32be(buf, remote_fd);
@@ -724,17 +737,17 @@ smuf_rpc_unlock(struct rpc_agent *agent, uint32_t remote_fd, uint8_t my_type,
 
     error = rpc_agent_request(agent);
 
-    RHO_TRACE_EXIT("error=%d\n", error);
-    return (-error);
+    RHO_TRACE_EXIT("return=%d\n", error);
+    return (error);
 }
 
 static int
-smuf_rpc_mmap(struct rpc_agent *agent, uint32_t remote_fd, uint32_t map_size)
+smuf_mmap_rpc(struct rpc_agent *agent, uint32_t remote_fd, uint32_t map_size)
 {
     int error = 0;
     struct rho_buf *buf = agent->ra_bodybuf;
 
-    RHO_TRACE_ENTER();
+    RHO_TRACE_ENTER("remote_fd=%u, map_size=%u", remote_fd, map_size);
 
     rpc_agent_new_msg(agent, SMUF_OP_MMAP);
     rho_buf_writeu32be(buf, remote_fd);
@@ -743,8 +756,8 @@ smuf_rpc_mmap(struct rpc_agent *agent, uint32_t remote_fd, uint32_t map_size)
 
     error = rpc_agent_request(agent);
 
-    RHO_TRACE_EXIT();
-    return (-error);
+    RHO_TRACE_EXIT("return=%d", error);
+    return (error);
 }
 
 /********************************* 
@@ -789,7 +802,7 @@ smuf_mount(const char *uri, void **mount_data)
 
     }
 
-    error = smuf_rpc_new_fdtable(agent);
+    error = smuf_new_fdtable_rpc(agent);
     if (error != 0)
         goto fail;
 
@@ -833,7 +846,7 @@ smuf_close(struct shim_handle *hdl)
 
     mf->f_fd_refcnt--;
     if (mf->f_fd_refcnt == 0 && mf->f_priv_seg == NULL) {
-        error = smuf_rpc_close(mdata->agent, mf->f_remote_fd);
+        error = smuf_close_rpc(mdata->agent, mf->f_remote_fd);
         smuf_mdata_remove_memfile_at_idx(mdata, smh->mf_idx);
     }
 
@@ -882,7 +895,7 @@ smuf_mmap(struct shim_handle *hdl, void **addr, size_t size,
                 mf->f_priv_seg, *((void **)mf->f_priv_seg));
         *addr = mf->f_priv_seg;
     } else {
-        error = smuf_rpc_mmap(mdata->agent, mf->f_remote_fd, size);
+        error = smuf_mmap_rpc(mdata->agent, mf->f_remote_fd, size);
         if (error != 0)
             goto done;
 
@@ -940,7 +953,7 @@ smuf_advlock_lock(struct shim_handle *hdl, struct flock *flock)
     tl = (struct rho_ticketlock *)mf->f_pub_lock;
 
     mf->f_turn = rho_ticketlock_lock(tl);
-    error = smuf_rpc_lock(mdata->agent, mf->f_remote_fd, mf->f_turn, mf->f_type,
+    error = smuf_lock_rpc(mdata->agent, mf->f_remote_fd, mf->f_turn, mf->f_type,
             &remote_type, iv, key, tag);
 
     if (error != 0)
@@ -982,7 +995,7 @@ smuf_advlock_unlock(struct shim_handle *hdl, struct flock *flock)
     if (mf->f_type == SMUF_TYPE_LOCK_WITH_SEGMENT)
         smuf_memfile_copyout_segment(mf);
 
-    error = smuf_rpc_unlock(mdata->agent, mf->f_remote_fd, mf->f_type,
+    error = smuf_unlock_rpc(mdata->agent, mf->f_remote_fd, mf->f_type,
                 mf->f_iv, mf->f_key, mf->f_tag);
 
     tl = (struct rho_ticketlock *)mf->f_pub_lock;
@@ -1096,7 +1109,7 @@ smuf_checkpoint(void **checkpoint, void *mount_data)
     RHO_TRACE_ENTER();
 
     /* TODO: check error */
-    (void)smuf_rpc_fork(mdata->agent, &ident);
+    (void)smuf_fork_rpc(mdata->agent, &ident);
     
     debug("smuf child ident = %llu\n", (unsigned long long)ident);
 
@@ -1131,7 +1144,7 @@ smuf_migrate(void *checkpoint, void **mount_data)
 
     mdata->agent = agent;
 
-    (void)smuf_rpc_child_attach(agent, mdata->ident);
+    (void)smuf_child_attach_rpc(agent, mdata->ident);
 
     *mount_data = mdata;
     g_smuf_mdata = mdata;
@@ -1157,7 +1170,7 @@ smuf_open_new(struct smuf_mdata *mdata, const char *name, int *mf_idx)
     if (error != 0)
         goto done;
 
-    error = smuf_rpc_open(mdata->agent, name, &mf->f_remote_fd);
+    error = smuf_open_rpc(mdata->agent, name, &mf->f_remote_fd);
     if (error != 0)
         smuf_mdata_remove_memfile_at_idx(mdata, *mf_idx);
 

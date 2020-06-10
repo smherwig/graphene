@@ -32,6 +32,7 @@
 #include "rho_binascii.h"
 #include "rho_bitops.h"
 #include "rho_buf.h"
+#define RHO_LOG_PREFIX "smdish"
 #include "rho_log.h"
 #include "rho_mem.h"
 #include "rho_queue.h"
@@ -142,7 +143,7 @@ smdish_memfile_init(struct smdish_memfile *mf, const char *name)
 static void
 smdish_memfile_print(const struct smdish_memfile *mf)
 {
-    debug("smdish_memfile: {name=\"%s\", fd_refcnt=%d, remote_fd=%lu, type=%u, addr=%p, size=%lu}\n",
+    rho_debug("smdish_memfile: {name=\"%s\", fd_refcnt=%d, remote_fd=%lu, type=%u, addr=%p, size=%lu}\n",
             mf->f_name, mf->f_fd_refcnt, (unsigned long)mf->f_remote_fd,
             mf->f_type, mf->f_addr, (unsigned long)mf->f_map_size);
 }
@@ -217,7 +218,7 @@ done:
     return ((struct smdish_memfile *)mf);
 }
 
-/* returns 0 on success; a negative ernro value on failure */
+/* returns 0 on success; a negative errno value on failure */
 static int
 smdish_mdata_new_memfile(struct smdish_mdata *mdata, const char *name,
         struct smdish_memfile **mf, int *mf_idx)
@@ -269,7 +270,7 @@ done:
 }
 
 /**********************************************************
- * RPC
+ * RPC AGENT
  *
  * These functions return 0 on success,
  * or a negative errno on failure.
@@ -292,7 +293,7 @@ smdish_agent_open(const char *url, unsigned char *ca_der, size_t ca_der_len)
     }
 
     if (ca_der != NULL) {
-        debug("smdish client using TLS\n");
+        rho_debug("smdish client using TLS\n");
         params = rho_ssl_params_create();
         rho_ssl_params_set_mode(params, RHO_SSL_MODE_CLIENT);
         rho_ssl_params_set_protocol(params, RHO_SSL_PROTOCOL_TLSv1_2);
@@ -309,8 +310,15 @@ done:
     return (agent);
 }
 
+/**********************************************************
+ * RPCs
+ *
+ * These functions return 0 on success; a negative errno
+ * on failure.
+ **********************************************************/
+
 static int
-smdish_rpc_new_fdtable(struct rpc_agent *agent)
+smdish_new_fdtable_rpc(struct rpc_agent *agent)
 {
     int error = 0;
 
@@ -319,12 +327,12 @@ smdish_rpc_new_fdtable(struct rpc_agent *agent)
     rpc_agent_new_msg(agent, SMDISH_OP_NEW_FDTABLE);
     error = rpc_agent_request(agent);
 
-    RHO_TRACE_EXIT();
-    return (-error);
+    RHO_TRACE_EXIT("return=%d", error);
+    return (error);
 }
 
 static int
-smdish_rpc_fork(struct rpc_agent *agent, uint64_t *child_ident)
+smdish_fork_rpc(struct rpc_agent *agent, uint64_t *child_ident)
 {
     int error = 0;
     struct rho_buf *buf = agent->ra_bodybuf;
@@ -332,27 +340,29 @@ smdish_rpc_fork(struct rpc_agent *agent, uint64_t *child_ident)
     RHO_TRACE_ENTER();
 
     rpc_agent_new_msg(agent, SMDISH_OP_FORK);
-
     error = rpc_agent_request(agent);
     if (error != 0)
         goto done;
 
     error = rho_buf_readu64be(buf, child_ident);
-	if (error != 0)
-		error = EPROTO;
+	if (error != 0) {
+		error = -EPROTO;
+    }
+
+    rho_debug("child_ident=0x%lx", *child_ident);
 
 done:
-    RHO_TRACE_EXIT();
-    return (-error);
+    RHO_TRACE_EXIT("return=%d", error);
+    return (error);
 }
 
 static int
-smdish_rpc_child_attach(struct rpc_agent *agent, uint64_t child_ident)
+smdish_child_attach_rpc(struct rpc_agent *agent, uint64_t child_ident)
 {
     int error = 0;
     struct rho_buf *buf = agent->ra_bodybuf;
 
-    RHO_TRACE_ENTER();
+    RHO_TRACE_ENTER("child_ident=0x%lx", child_ident);
 
     rpc_agent_new_msg(agent, SMDISH_OP_CHILD_ATTACH);
     rho_buf_writeu64be(buf, child_ident);
@@ -360,18 +370,18 @@ smdish_rpc_child_attach(struct rpc_agent *agent, uint64_t child_ident)
 
     error = rpc_agent_request(agent);
 
-    RHO_TRACE_EXIT();
-    return (-error);
+    RHO_TRACE_EXIT("return=%d", error);
+    return (error);
 }
 
 /* returns 0 on success; a negative errno value on failure */
 static int
-smdish_rpc_open(struct rpc_agent *agent, const char *name, uint32_t *remote_fd)
+smdish_open_rpc(struct rpc_agent *agent, const char *name, uint32_t *remote_fd)
 {
     int error = 0;
     struct rho_buf *buf = agent->ra_bodybuf;
 
-    RHO_TRACE_ENTER();
+    RHO_TRACE_ENTER("name=\"%s\"", name);
 
     rpc_agent_new_msg(agent, SMDISH_OP_OPEN);
     rho_buf_write_u32size_str(buf, name);
@@ -383,20 +393,20 @@ smdish_rpc_open(struct rpc_agent *agent, const char *name, uint32_t *remote_fd)
 
     error = rho_buf_readu32be(buf, remote_fd);
     if (error != 0)
-        error = EPROTO;
+        error = -EPROTO;
 
 done:
-    RHO_TRACE_EXIT();
-    return (-error);
+    RHO_TRACE_EXIT("return=%d", error);
+    return (error);
 }
 
 static int
-smdish_rpc_close(struct rpc_agent *agent, uint32_t remote_fd)
+smdish_close_rpc(struct rpc_agent *agent, uint32_t remote_fd)
 {
     int error = 0;
     struct rho_buf *buf = agent->ra_bodybuf;
 
-    RHO_TRACE_ENTER();
+    RHO_TRACE_ENTER("remote_fd=%u", remote_fd);
 
     rpc_agent_new_msg(agent, SMDISH_OP_CLOSE);
     rho_buf_writeu32be(buf, remote_fd);
@@ -404,12 +414,12 @@ smdish_rpc_close(struct rpc_agent *agent, uint32_t remote_fd)
 
     error = rpc_agent_request(agent);
 
-    RHO_TRACE_EXIT();
-    return (-error);
+    RHO_TRACE_EXIT("return=%d", error);
+    return (error);
 }
 
 static int
-smdish_rpc_lock(struct rpc_agent *agent, uint32_t remote_fd, uint8_t type,
+smdish_lock_rpc(struct rpc_agent *agent, uint32_t remote_fd, uint8_t type,
         uint8_t *mem, uint32_t memsize)
 {
     int error = 0;
@@ -418,8 +428,8 @@ smdish_rpc_lock(struct rpc_agent *agent, uint32_t remote_fd, uint8_t type,
     uint32_t size = 0;
     size_t n = 0;
 
-    RHO_TRACE_ENTER("remote_fd=%lu, mem=%p, memsize=%lu\n",
-            (unsigned long)remote_fd, mem, (unsigned long)memsize);
+    RHO_TRACE_ENTER("remote_fd=%u, mem=%p, memsize=%u\n",
+            remote_fd, mem, memsize);
     
     rpc_agent_new_msg(agent, SMDISH_OP_LOCK);
     rho_buf_writeu32be(buf, remote_fd);
@@ -432,7 +442,7 @@ smdish_rpc_lock(struct rpc_agent *agent, uint32_t remote_fd, uint8_t type,
 
     error = rho_buf_readu8(buf, &remote_type);
     if (error != 0) {
-        error = EPROTO;
+        error = -EPROTO;
         goto done;
     }
 
@@ -442,7 +452,7 @@ smdish_rpc_lock(struct rpc_agent *agent, uint32_t remote_fd, uint8_t type,
 
     error = rho_buf_readu32be(buf, &size);
     if (error == -1) {
-        error = EPROTO;
+        error = -EPROTO;
         goto done;
     }
 
@@ -463,19 +473,19 @@ smdish_rpc_lock(struct rpc_agent *agent, uint32_t remote_fd, uint8_t type,
     error = 0;
 
 done:
-    RHO_TRACE_EXIT("error=%d", error);
-    return (-error);
+    RHO_TRACE_EXIT("return=%d", error);
+    return (error);
 }
 
 static int
-smdish_rpc_unlock(struct rpc_agent *agent, uint32_t remote_fd, uint8_t type,
+smdish_unlock_rpc(struct rpc_agent *agent, uint32_t remote_fd, uint8_t type,
         uint8_t *mem, uint32_t memsize)
 {
     int error = 0;
     struct rho_buf *buf = agent->ra_bodybuf;
 
-    RHO_TRACE_ENTER("remote_fd=%lu, mem=%p, memsize=%lu",
-            (unsigned long)remote_fd, mem, (unsigned long)memsize);
+    RHO_TRACE_ENTER("remote_fd=%u, mem=%p, memsize=%u",
+            remote_fd, mem, memsize);
 
     rpc_agent_new_msg(agent, SMDISH_OP_UNLOCK);
     rho_buf_writeu32be(buf, remote_fd);
@@ -491,17 +501,17 @@ smdish_rpc_unlock(struct rpc_agent *agent, uint32_t remote_fd, uint8_t type,
 
     error = rpc_agent_request(agent);
 
-    RHO_TRACE_EXIT("error=%d\n", error);
-    return (-error);
+    RHO_TRACE_EXIT("return=%d\n", error);
+    return (error);
 }
 
 static int
-smdish_rpc_mmap(struct rpc_agent *agent, uint32_t remote_fd, uint32_t size)
+smdish_mmap_rpc(struct rpc_agent *agent, uint32_t remote_fd, uint32_t size)
 {
     int error = 0;
     struct rho_buf *buf = agent->ra_bodybuf;
 
-    RHO_TRACE_ENTER();
+    RHO_TRACE_ENTER("remote_fd=%u, size=%u", remote_fd, size);
 
     rpc_agent_new_msg(agent, SMDISH_OP_MMAP);
     rho_buf_writeu32be(buf, remote_fd);
@@ -510,8 +520,8 @@ smdish_rpc_mmap(struct rpc_agent *agent, uint32_t remote_fd, uint32_t size)
 
     error = rpc_agent_request(agent);
 
-    RHO_TRACE_EXIT();
-    return (-error);
+    RHO_TRACE_EXIT("return=%d\n", error);
+    return (error);
 }
 
 /********************************* 
@@ -539,7 +549,7 @@ smdish_mount(const char *uri, void **mount_data)
 
     len = get_config(root_config, "phoenix.ca_der", ca_hex, sizeof(ca_hex));
     if (len > 0) {
-        debug("READ phoenix.ca_der (size=%ld)\n", len);
+        rho_debug("READ phoenix.ca_der (size=%ld)\n", len);
         ca_der = rhoL_malloc(len / 2);
         rho_binascii_hex2bin(ca_der, ca_hex);
     }
@@ -551,7 +561,7 @@ smdish_mount(const char *uri, void **mount_data)
         goto fail;
     }
 
-    error = smdish_rpc_new_fdtable(agent);
+    error = smdish_new_fdtable_rpc(agent);
     if (error != 0)
         goto fail;
 
@@ -574,17 +584,6 @@ succeed:
     return (error);
 }
 
-static int 
-smdish_unmount(void *mount_data)
-{
-    RHO_TRACE_ENTER();
-
-    (void)mount_data;
-
-    RHO_TRACE_EXIT();
-    return (-ENOSYS);
-}
-
 static int
 smdish_close(struct shim_handle *hdl)
 {
@@ -605,7 +604,7 @@ smdish_close(struct shim_handle *hdl)
 
     mf->f_fd_refcnt--;
     if (mf->f_fd_refcnt == 0 && mf->f_addr == NULL) {
-        error = smdish_rpc_close(mdata->agent, mf->f_remote_fd);
+        error = smdish_close_rpc(mdata->agent, mf->f_remote_fd);
         smdish_mdata_remove_memfile_at_idx(mdata, smh->mf_idx);
     }
 
@@ -638,7 +637,7 @@ smdish_mmap(struct shim_handle *hdl, void **addr, size_t size,
     }
     smdish_memfile_print(mf);
 
-    error = smdish_rpc_mmap(mdata->agent, mf->f_remote_fd, size);
+    error = smdish_mmap_rpc(mdata->agent, mf->f_remote_fd, size);
     if (error != 0)
         goto done;
 
@@ -679,12 +678,12 @@ smdish_advlock_lock(struct shim_handle *hdl, struct flock *flock)
     }
     smdish_memfile_print(mf);
 
-    error = smdish_rpc_lock(mdata->agent, mf->f_remote_fd, mf->f_type,
+    error = smdish_lock_rpc(mdata->agent, mf->f_remote_fd, mf->f_type,
             mf->f_addr, mf->f_map_size);
     while (error == (-EAGAIN)) {
-        debug("********** waiting on lock\n");
+        rho_debug("********** waiting on lock\n");
         thread_sleep(100000);
-        error = smdish_rpc_lock(mdata->agent, mf->f_remote_fd, mf->f_type,
+        error = smdish_lock_rpc(mdata->agent, mf->f_remote_fd, mf->f_type,
                 mf->f_addr, mf->f_map_size);
     }
 
@@ -713,7 +712,7 @@ smdish_advlock_unlock(struct shim_handle *hdl, struct flock *flock)
     }
     smdish_memfile_print(mf);
 
-    error = smdish_rpc_unlock(mdata->agent, mf->f_remote_fd, mf->f_type,
+    error = smdish_unlock_rpc(mdata->agent, mf->f_remote_fd, mf->f_type,
             mf->f_addr, mf->f_map_size);
 
 done:
@@ -805,12 +804,11 @@ smdish_checkpoint(void **checkpoint, void *mount_data)
 
     RHO_TRACE_ENTER();
     
-    /* make request */
-    error = smdish_rpc_fork(mdata->agent, &child_ident);
+    error = smdish_fork_rpc(mdata->agent, &child_ident);
     if (error != 0)
         goto done;
 
-    debug("smdish child ident = %llu\n", (unsigned long long)child_ident);
+    rho_debug("smdish child ident = %lu\n", child_ident);
 
     mdata->ident = child_ident;
     *checkpoint = mdata;
@@ -840,7 +838,7 @@ smdish_migrate(void *checkpoint, void **mount_data)
     mdata->agent = agent;
     //buf = client->buf;
 
-    error = smdish_rpc_child_attach(agent, mdata->ident);
+    error = smdish_child_attach_rpc(agent, mdata->ident);
     *mount_data = mdata;
     g_smdish_mdata = mdata;
 
@@ -863,7 +861,7 @@ smdish_open_new(struct smdish_mdata *mdata, const char *name, int *mf_idx)
     if (error != 0)
         goto done;
 
-    error = smdish_rpc_open(mdata->agent, name, &mf->f_remote_fd);
+    error = smdish_open_rpc(mdata->agent, name, &mf->f_remote_fd);
     if (error != 0)
         smdish_mdata_remove_memfile_at_idx(mdata, *mf_idx);
 
@@ -911,10 +909,10 @@ done:
 static int
 smdish_lookup(struct shim_dentry *dent)
 {
-    debug("> smdish_lookup(dent=*)");
+    int error = 0;
 
-    debug("dent->fs=%p\n", dent->fs);
-    debug("dent->fs->data=%p\n", dent->fs->data);
+    RHO_TRACE_ENTER();
+    rho_shim_dentry_print(dent);
 
     /* XXX: I know fs/shim_namei.c:297 asserts this condition, but why? */
     if (qstrempty(&dent->rel_path)) {
@@ -925,38 +923,42 @@ smdish_lookup(struct shim_dentry *dent)
     /* TODO: set ino? */
 
 done:
-    debug("< smdish_lookup\n");
-    return (0);
+    RHO_TRACE_EXIT("return=%d", error);
+    return (error);
 }
 
 static int 
 smdish_mode(struct shim_dentry *dent, mode_t *mode)
 {
-    debug("> smdish_mode\n");
-    (void)mode;
+    int error = 0;
 
-    debug("dent->fs=%p\n", dent->fs);
-    debug("dent->fs->data=%p\n", dent->fs->data);
-    debug("mode=%p\n", mode);
+    RHO_TRACE_ENTER();
+    rho_shim_dentry_print(dent);
 
     *mode = 0777;
 
-    debug("< smdish_mode\n");
-    return (0);
+    RHO_TRACE_EXIT("return=%d", error);
+    return (error);
 }
 
 static int
 smdish_unlink(struct shim_dentry *dir, struct shim_dentry *dent)
 {
-    debug("> smdish_unlink(dir=*, dent=*)\n");
-    (void)dir; (void)dent;
-    debug("< smdish_unlink\n");
-    return (-ENOSYS);
+    int error = -ENOSYS;
+
+    RHO_TRACE_ENTER();
+    rho_shim_dentry_print(dir);
+    rho_shim_dentry_print(dent);
+
+    __UNUSED(dir);
+    __UNUSED(dent);
+
+    RHO_TRACE_EXIT("return=%d", error);
+    return (error);
 }
 
 struct shim_fs_ops smdish_fs_ops = {
         .mount       = &smdish_mount,      /**/
-        .unmount     = &smdish_unmount,    /**/
         .close       = &smdish_close,      /**/
         .mmap        = &smdish_mmap,       /**/
         .advlock     = &smdish_advlock,

@@ -35,6 +35,7 @@
 #include "rho_bitops.h"
 #include "rho_buf.h"
 #include "rho_endian.h"
+#define RHO_LOG_PREFIX "SMC"
 #include "rho_log.h"
 #include "rho_mem.h"
 #include "rho_misc.h"
@@ -46,8 +47,6 @@
 #include "rho_ssl.h"
 #include "rho_str.h"
 #include "rho_ticketlock.h"
-
-#include "rpc.h"
 
 #define SMC_OP_NEW_FDTABLE    0
 #define SMC_OP_FORK           1

@@ -243,7 +243,8 @@ rho_sock_stream_send(struct rho_sock *sock, const void *buf, size_t len)
     PAL_NUM n = 0;
 
 again:
-    n = DkStreamWrite(sock->pal_hdl, 0, len, buf, NULL);
+    /* unconst buf */
+    n = DkStreamWrite(sock->pal_hdl, 0, len, (void*)buf, NULL);
     if ((n == 0) && PAL_NATIVE_ERRNO  == PAL_ERROR_INTERRUPTED) {
         debug("rho_sock: DkStreamRead interrupted; trying again\n");
         goto again;

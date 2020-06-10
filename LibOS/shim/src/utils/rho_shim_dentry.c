@@ -2,22 +2,15 @@
 #include <shim_utils.h>
 #include <shim_fs.h>
 
+#include <rho_log.h>
 #include <rho_path.h>
 
 void
 rho_shim_dentry_print(const struct shim_dentry *dent)
 {
-    debug("dentry {\n");
-    debug("  state: %d,\n", dent->state);
-    debug("  rel_path: %s\n", qstrgetstr(&dent->rel_path));
-    debug("  len(rel_path): %lu\n", (unsigned long) dent->rel_path.len);
-    debug("  name: %s\n", qstrgetstr(&dent->name));
-    debug("  len(name): %lu\n", (unsigned long) dent->name.len);
-    debug("  nchildren: %d\n", dent->nchildren);
-    debug("  ino: %lu\n", dent->ino);
-    debug("  type: %lu\n", (unsigned long)dent->type);
-    debug("  mode: %lu\n", (unsigned long)dent->mode);
-    debug("}\n");
+    rho_debug("dentry{state:%d, rel_path: \"%s\", name: \"%s\", nchildren: %d, ino: %lu, type: %u, mode: %u",
+            dent->state, qstrgetstr(&dent->rel_path), qstrgetstr(&dent->name),
+            dent->nchildren, dent->ino, dent->type, dent->mode);
 }
 
 /*
