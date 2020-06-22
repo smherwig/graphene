@@ -32,7 +32,7 @@
 #include "rho_binascii.h"
 #include "rho_bitops.h"
 #include "rho_buf.h"
-#define RHO_LOG_PREFIX "smdish"
+#define RHO_LOG_PREFIX "SMDISH"
 #include "rho_log.h"
 #include "rho_mem.h"
 #include "rho_queue.h"
@@ -143,7 +143,7 @@ smdish_memfile_init(struct smdish_memfile *mf, const char *name)
 static void
 smdish_memfile_print(const struct smdish_memfile *mf)
 {
-    rho_debug("smdish_memfile: {name=\"%s\", fd_refcnt=%d, remote_fd=%lu, type=%u, addr=%p, size=%lu}\n",
+    rho_debug("smdish_memfile: {name=\"%s\", fd_refcnt=%d, remote_fd=%lu, type=%u, addr=%p, size=%lu}",
             mf->f_name, mf->f_fd_refcnt, (unsigned long)mf->f_remote_fd,
             mf->f_type, mf->f_addr, (unsigned long)mf->f_map_size);
 }
@@ -293,7 +293,7 @@ smdish_agent_open(const char *url, unsigned char *ca_der, size_t ca_der_len)
     }
 
     if (ca_der != NULL) {
-        rho_debug("smdish client using TLS\n");
+        rho_debug("smdish client using TLS");
         params = rho_ssl_params_create();
         rho_ssl_params_set_mode(params, RHO_SSL_MODE_CLIENT);
         rho_ssl_params_set_protocol(params, RHO_SSL_PROTOCOL_TLSv1_2);
@@ -549,7 +549,7 @@ smdish_mount(const char *uri, void **mount_data)
 
     len = get_config(root_config, "phoenix.ca_der", ca_hex, sizeof(ca_hex));
     if (len > 0) {
-        rho_debug("READ phoenix.ca_der (size=%ld)\n", len);
+        rho_debug("READ phoenix.ca_der (size=%ld)", len);
         ca_der = rhoL_malloc(len / 2);
         rho_binascii_hex2bin(ca_der, ca_hex);
     }
@@ -681,7 +681,7 @@ smdish_advlock_lock(struct shim_handle *hdl, struct flock *flock)
     error = smdish_lock_rpc(mdata->agent, mf->f_remote_fd, mf->f_type,
             mf->f_addr, mf->f_map_size);
     while (error == (-EAGAIN)) {
-        rho_debug("********** waiting on lock\n");
+        rho_debug("********** waiting on lock");
         thread_sleep(100000);
         error = smdish_lock_rpc(mdata->agent, mf->f_remote_fd, mf->f_type,
                 mf->f_addr, mf->f_map_size);
@@ -808,7 +808,7 @@ smdish_checkpoint(void **checkpoint, void *mount_data)
     if (error != 0)
         goto done;
 
-    rho_debug("smdish child ident = %lu\n", child_ident);
+    rho_debug("smdish child ident = %lu", child_ident);
 
     mdata->ident = child_ident;
     *checkpoint = mdata;
