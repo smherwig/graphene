@@ -1,18 +1,5 @@
-/* Copyright (C) 2014 Stony Brook University
-   This file is part of Graphene Library OS.
-
-   Graphene Library OS is free software: you can redistribute it and/or
-   modify it under the terms of the GNU Lesser General Public License
-   as published by the Free Software Foundation, either version 3 of the
-   License, or (at your option) any later version.
-
-   Graphene Library OS is distributed in the hope that it will be useful,
-   but WITHOUT ANY WARRANTY; without even the implied warranty of
-   MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-   GNU Lesser General Public License for more details.
-
-   You should have received a copy of the GNU Lesser General Public License
-   along with this program.  If not, see <http://www.gnu.org/licenses/>.  */
+/* SPDX-License-Identifier: LGPL-3.0-or-later */
+/* Copyright (C) 2014 Stony Brook University */
 
 /*
  * shim_sched.c
@@ -20,7 +7,7 @@
  * Implementation of system calls "sched_yield", "setpriority", "getpriority",
  * "sched_setparam", "sched_getparam", "sched_setscheduler", "sched_getscheduler",
  * "sched_get_priority_max", "sched_get_priority_min", "sched_rr_get_interval",
- * "sched_setaffinity", "sched_getaffinity".
+ * "sched_setaffinity", "sched_getaffinity", "getcpu".
  */
 
 #include <api.h>
@@ -196,4 +183,25 @@ int shim_do_sched_getaffinity(pid_t pid, size_t len, __kernel_cpu_set_t* user_ma
     /* imitate the Linux kernel implementation
      * See SYSCALL_DEFINE3(sched_getaffinity) */
     return bitmask_size_in_bytes;
+}
+
+/* dummy implementation: always return cpu0  */
+int shim_do_getcpu(unsigned* cpu, unsigned* node, struct getcpu_cache* unused) {
+    __UNUSED(unused);
+
+    if (cpu) {
+        if (test_user_memory(cpu, sizeof(*cpu), /*write=*/true)) {
+            return -EFAULT;
+        }
+        *cpu = 0;
+    }
+
+    if (node) {
+        if (test_user_memory(node, sizeof(*node), /*write=*/true)) {
+            return -EFAULT;
+        }
+        *node = 0;
+    }
+
+    return 0;
 }

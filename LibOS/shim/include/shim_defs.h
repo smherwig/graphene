@@ -1,22 +1,12 @@
 #ifndef _SHIM_DEFS_H_
 #define _SHIM_DEFS_H_
 
-/*
- * If enable CPSTORE_DERANDOMIZATION, the library OS will try to load the checkpoint (from the
- * parent) at the exact address it was created. Currently this option is disabled to prevent
- * internal fragmentation of virtual memory space.
- */
-
-#define CPSTORE_DERANDOMIZATION     1
-
 #define DEFAULT_HEAP_MIN_SIZE       (256 * 1024 * 1024) /* 256MB */
 #define DEFAULT_MEM_MAX_NPAGES      (1024 * 1024)       /* 4GB */
 #define DEFAULT_BRK_MAX_SIZE        (256 * 1024)        /* 256KB */
 #define DEFAULT_SYS_STACK_SIZE      (256 * 1024)        /* 256KB */
 
 #define CP_INIT_VMA_SIZE            (64 * 1024 * 1024)  /* 64MB */
-
-#define ENABLE_ASLR                 1
 
 /* debug message printout */
 #define DEBUGBUF_SIZE               256

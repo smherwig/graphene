@@ -1,18 +1,5 @@
-/* Copyright (C) 2014 Stony Brook University
-   This file is part of Graphene Library OS.
-
-   Graphene Library OS is free software: you can redistribute it and/or
-   modify it under the terms of the GNU Lesser General Public License
-   as published by the Free Software Foundation, either version 3 of the
-   License, or (at your option) any later version.
-
-   Graphene Library OS is distributed in the hope that it will be useful,
-   but WITHOUT ANY WARRANTY; without even the implied warranty of
-   MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-   GNU Lesser General Public License for more details.
-
-   You should have received a copy of the GNU Lesser General Public License
-   along with this program.  If not, see <http://www.gnu.org/licenses/>.  */
+/* SPDX-License-Identifier: LGPL-3.0-or-later */
+/* Copyright (C) 2014 Stony Brook University */
 
 /*
  * db_mutex.c
@@ -30,6 +17,7 @@
 #include <unistd.h>
 
 #include "api.h"
+#include "cpu.h"
 #include "pal.h"
 #include "pal_defs.h"
 #include "pal_error.h"
@@ -92,7 +80,9 @@ int _DkMutexLockTimeout(struct mutex_handle* m, int64_t timeout_us) {
     /* Spin and try to take lock.  Ignore any contribution this makes toward
      * the timeout.*/
     for (i = 0; i < iterations; i++) {
-        if (MUTEX_UNLOCKED == cmpxchg(&m->locked, MUTEX_UNLOCKED, MUTEX_LOCKED))
+        uint32_t t = MUTEX_UNLOCKED;
+        if (__atomic_compare_exchange_n(&m->locked, &t, MUTEX_LOCKED, /*weak=*/true,
+                                        __ATOMIC_ACQUIRE, __ATOMIC_RELAXED))
             goto success;
         CPU_RELAX();
     }
@@ -105,7 +95,12 @@ int _DkMutexLockTimeout(struct mutex_handle* m, int64_t timeout_us) {
     // Bump up the waiters count; we are probably going to block
     atomic_inc(&m->nwaiters);
 
-    while (MUTEX_LOCKED == cmpxchg(&m->locked, MUTEX_UNLOCKED, MUTEX_LOCKED)) {
+    while (true) {
+        uint32_t t = MUTEX_UNLOCKED;
+        if (__atomic_compare_exchange_n(&m->locked, &t, MUTEX_LOCKED, /*weak=*/true,
+                                        __ATOMIC_ACQUIRE, __ATOMIC_RELAXED))
+            break;
+
         struct timespec waittime, *waittimep = NULL;
         if (timeout_us >= 0) {
             int64_t sec      = timeout_us / 1000000;
@@ -168,10 +163,7 @@ int _DkMutexUnlock(struct mutex_handle* m) {
 #endif
 
     /* Unlock */
-    m->locked = 0;
-    /* We need to make sure the write to locked is visible to lock-ers
-     * before we read the waiter count. */
-    MB();
+    __atomic_store_n(&m->locked, 0, __ATOMIC_SEQ_CST);
 
     need_wake = atomic_read(&m->nwaiters);
 
@@ -187,8 +179,8 @@ void _DkMutexRelease(PAL_HANDLE handle) {
     return;
 }
 
-bool _DkMutexIsLocked(struct mutex_handle* m) {
-    if (!m->locked) {
+static bool _DkMutexIsLocked(struct mutex_handle* m) {
+    if (!__atomic_load_n(&m->locked, __ATOMIC_SEQ_CST)) {
         return false;
     }
 

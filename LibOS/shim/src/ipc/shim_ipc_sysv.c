@@ -1,18 +1,5 @@
-/* Copyright (C) 2014 Stony Brook University
-   This file is part of Graphene Library OS.
-
-   Graphene Library OS is free software: you can redistribute it and/or
-   modify it under the terms of the GNU Lesser General Public License
-   as published by the Free Software Foundation, either version 3 of the
-   License, or (at your option) any later version.
-
-   Graphene Library OS is distributed in the hope that it will be useful,
-   but WITHOUT ANY WARRANTY; without even the implied warranty of
-   MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-   GNU Lesser General Public License for more details.
-
-   You should have received a copy of the GNU Lesser General Public License
-   along with this program.  If not, see <http://www.gnu.org/licenses/>.  */
+/* SPDX-License-Identifier: LGPL-3.0-or-later */
+/* Copyright (C) 2014 Stony Brook University */
 
 /*
  * shim_ipc_pid.c
@@ -20,14 +7,17 @@
  * This file contains functions and callbacks to handle IPC of SYSV namespace.
  */
 
+#include "shim_ipc_sysv.h"
+
 #include <errno.h>
-#include <pal.h>
-#include <pal_error.h>
-#include <shim_checkpoint.h>
-#include <shim_internal.h>
-#include <shim_ipc.h>
-#include <shim_sysv.h>
-#include <shim_thread.h>
+
+#include "pal.h"
+#include "pal_error.h"
+#include "shim_checkpoint.h"
+#include "shim_internal.h"
+#include "shim_ipc.h"
+#include "shim_sysv.h"
+#include "shim_thread.h"
 
 #define SYSV_RANGE_SIZE 128
 #define SYSV_LEASE_TIME 1000

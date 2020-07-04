@@ -1,18 +1,5 @@
-/* Copyright (C) 2014 Stony Brook University
-   This file is part of Graphene Library OS.
-
-   Graphene Library OS is free software: you can redistribute it and/or
-   modify it under the terms of the GNU Lesser General Public License
-   as published by the Free Software Foundation, either version 3 of the
-   License, or (at your option) any later version.
-
-   Graphene Library OS is distributed in the hope that it will be useful,
-   but WITHOUT ANY WARRANTY; without even the implied warranty of
-   MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-   GNU Lesser General Public License for more details.
-
-   You should have received a copy of the GNU Lesser General Public License
-   along with this program.  If not, see <http://www.gnu.org/licenses/>.  */
+/* SPDX-License-Identifier: LGPL-3.0-or-later */
+/* Copyright (C) 2014 Stony Brook University */
 
 /*!
  * \file pal.h
@@ -27,6 +14,10 @@
 #include <stddef.h>
 #include <stdint.h>
 #include <stdnoreturn.h>
+
+#if defined(__i386__) || defined(__x86_64__)
+#include "cpu.h"
+#endif
 
 typedef uint64_t      PAL_NUM; /*!< a number */
 typedef const char *  PAL_STR; /*!< a pointer to a C-string */
@@ -127,17 +118,6 @@ enum {
 
 typedef struct PAL_PTR_RANGE_ { PAL_PTR start, end; } PAL_PTR_RANGE;
 
-typedef struct PAL_CPU_INFO_ {
-    PAL_NUM cpu_num;
-    PAL_STR cpu_vendor;
-    PAL_STR cpu_brand;
-    PAL_NUM cpu_family;
-    PAL_NUM cpu_model;
-    PAL_NUM cpu_stepping;
-    double  cpu_bogomips;
-    PAL_STR cpu_flags;
-} PAL_CPU_INFO;
-
 typedef struct PAL_MEM_INFO_ {
     PAL_NUM mem_total;
 } PAL_MEM_INFO;
@@ -160,6 +140,7 @@ typedef struct PAL_CONTROL_ {
     /*
      * Memory layout
      */
+    PAL_BOL disable_aslr; /*!< disable ASLR (may be necessary for restricted environments) */
     PAL_PTR_RANGE user_address; /*!< The range of user addresses */
 
     PAL_PTR_RANGE executable_range; /*!< address where executable is loaded */
@@ -580,10 +561,8 @@ enum PAL_EVENT {
     PAL_EVENT_RESUME           = 6,
     /*! failure within PAL calls */
     PAL_EVENT_FAILURE          = 7,
-    /*! pipe event */
-    PAL_EVENT_PIPE             = 8,
 
-    PAL_EVENT_NUM_BOUND        = 9,
+    PAL_EVENT_NUM_BOUND        = 8,
 };
 
 typedef void (*PAL_EVENT_HANDLER) (PAL_PTR event, PAL_NUM arg, PAL_CONTEXT*);
@@ -660,6 +639,11 @@ DkEventSet(PAL_HANDLE eventHandle);
  */
 void
 DkEventClear(PAL_HANDLE eventHandle);
+
+/*!
+ * \brief Wait for an event.
+ */
+void DkEventWait(PAL_HANDLE handle);
 
 /*! block until the handle's event is triggered */
 #define NO_TIMEOUT ((PAL_NUM)-1)
@@ -750,22 +734,6 @@ PAL_PTR DkSegmentRegister(PAL_FLG reg, PAL_PTR addr);
  */
 PAL_NUM DkMemoryAvailableQuota(void);
 
-enum PAL_CPUID_WORD {
-    PAL_CPUID_WORD_EAX = 0,
-    PAL_CPUID_WORD_EBX = 1,
-    PAL_CPUID_WORD_ECX = 2,
-    PAL_CPUID_WORD_EDX = 3,
-    PAL_CPUID_WORD_NUM = 4,
-};
-
-/*!
- * \brief Return CPUID information, based on the leaf/subleaf.
- *
- * \param[out] values the array of the results
- */
-PAL_BOL
-DkCpuIdRetrieve(PAL_IDX leaf, PAL_IDX subleaf, PAL_IDX values[PAL_CPUID_WORD_NUM]);
-
 /*!
  * \brief Obtain the attestation report (local) with `user_report_data` embedded into it.
  *
@@ -823,6 +791,15 @@ PAL_BOL DkAttestationQuote(PAL_PTR user_report_data, PAL_NUM user_report_data_si
     __asm__ (".symver " #real "," #name "@@" #version "\n")
 #else
 # define symbol_version_default(real, name, version)
+#endif
+
+#if defined(__i386__) || defined(__x86_64__)
+/*!
+ * \brief Return CPUID information, based on the leaf/subleaf.
+ *
+ * \param[out] values the array of the results
+ */
+PAL_BOL DkCpuIdRetrieve(PAL_IDX leaf, PAL_IDX subleaf, PAL_IDX values[PAL_CPUID_WORD_NUM]);
 #endif
 
 #endif /* PAL_H */

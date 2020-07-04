@@ -1,19 +1,7 @@
+/* SPDX-License-Identifier: LGPL-3.0-or-later */
 /* Copyright (C) 2014 Stony Brook University
-   Copyright (C) 2020 Invisible Things Lab
-   This file is part of Graphene Library OS.
-
-   Graphene Library OS is free software: you can redistribute it and/or
-   modify it under the terms of the GNU Lesser General Public License
-   as published by the Free Software Foundation, either version 3 of the
-   License, or (at your option) any later version.
-
-   Graphene Library OS is distributed in the hope that it will be useful,
-   but WITHOUT ANY WARRANTY; without even the implied warranty of
-   MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-   GNU Lesser General Public License for more details.
-
-   You should have received a copy of the GNU Lesser General Public License
-   along with this program.  If not, see <http://www.gnu.org/licenses/>.  */
+ * Copyright (C) 2020 Invisible Things Lab
+ */
 
 /*
  * shim_mmap.c
@@ -177,10 +165,10 @@ void* shim_do_mmap(void* addr, size_t length, int prot, int flags, int fd, off_t
 
     if (!hdl) {
         if (DkVirtualMemoryAlloc(addr, length, 0, LINUX_PROT_TO_PAL(prot, flags)) != addr) {
-            if (PAL_NATIVE_ERRNO == PAL_ERROR_DENIED) {
+            if (PAL_NATIVE_ERRNO() == PAL_ERROR_DENIED) {
                 ret = -EPERM;
             } else {
-                ret = -PAL_ERRNO;
+                ret = -PAL_ERRNO();
             }
         }
     } else {
@@ -238,7 +226,7 @@ int shim_do_mprotect(void* addr, size_t length, int prot) {
     }
 
     if (!DkVirtualMemoryProtect(addr, length, LINUX_PROT_TO_PAL(prot, /*map_flags=*/0)))
-        return -PAL_ERRNO;
+        return -PAL_ERRNO();
 
     return 0;
 }

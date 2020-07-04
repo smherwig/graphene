@@ -11,8 +11,7 @@ CFLAGS	+= \
 	-I../../../include/arch/$(ARCH)/Linux \
 	-I../../../include/host/Linux \
 	-I../../../include/host/Linux-common \
-	-I../../../include/lib \
-	-I../../../include/lib/$(ARCH)
+	-I../../../include/lib
 
 ASFLAGS += \
 	-I. \
@@ -37,6 +36,7 @@ objs = \
 	db_exception.o \
 	db_files.o \
 	db_main.o \
+	db_main-$(ARCH).o \
 	db_memory.o \
 	db_misc.o \
 	db_mutex.o \

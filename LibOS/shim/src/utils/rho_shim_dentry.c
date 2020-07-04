@@ -4,6 +4,7 @@
 
 #include <rho_log.h>
 #include <rho_path.h>
+#include <rho_shim_dentry.h>
 
 void
 rho_shim_dentry_print(const struct shim_dentry *dent)

@@ -1,18 +1,5 @@
-/* Copyright (C) 2014 Stony Brook University
-   This file is part of Graphene Library OS.
-
-   Graphene Library OS is free software: you can redistribute it and/or
-   modify it under the terms of the GNU Lesser General Public License
-   as published by the Free Software Foundation, either version 3 of the
-   License, or (at your option) any later version.
-
-   Graphene Library OS is distributed in the hope that it will be useful,
-   but WITHOUT ANY WARRANTY; without even the implied warranty of
-   MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-   GNU Lesser General Public License for more details.
-
-   You should have received a copy of the GNU Lesser General Public License
-   along with this program.  If not, see <http://www.gnu.org/licenses/>.  */
+/* SPDX-License-Identifier: LGPL-3.0-or-later */
+/* Copyright (C) 2014 Stony Brook University */
 
 /*
  * shim_syscalls.c
@@ -34,10 +21,6 @@
 #include <shim_tcb.h>
 #include <shim_unistd.h>
 #include <shim_utils.h>
-
-long int if_call_defined(long int sys_no) {
-    return shim_table[sys_no] != 0;
-}
 
 //////////////////////////////////////////////////
 //  Mappings from system calls to shim calls
@@ -594,7 +577,7 @@ void* shim_do_arch_prctl(int code, void* addr) {
             return NULL;
 
         case ARCH_GET_FS:
-            return (void*)DkSegmentRegister(PAL_SEGMENT_FS, NULL) ?: (void*)-PAL_ERRNO;
+            return (void*)DkSegmentRegister(PAL_SEGMENT_FS, NULL) ?: (void*)-PAL_ERRNO();
     }
 
     return (void*)-ENOSYS;
@@ -1044,8 +1027,8 @@ DEFINE_SHIM_SYSCALL(sendmmsg, 4, shim_do_sendmmsg, ssize_t, int, fd, struct mmsg
 
 SHIM_SYSCALL_RETURN_ENOSYS(setns, 2, int, int, fd, int, nstype)
 
-SHIM_SYSCALL_RETURN_ENOSYS(getcpu, 3, int, unsigned*, cpu, unsigned*, node, struct getcpu_cache*,
-                           cache)
+DEFINE_SHIM_SYSCALL(getcpu, 3, shim_do_getcpu, int, unsigned*, cpu, unsigned*, node,
+                    struct getcpu_cache*, cache)
 
 /* libos calls */
 

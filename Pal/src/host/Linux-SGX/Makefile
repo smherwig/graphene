@@ -12,7 +12,6 @@ CFLAGS += \
 	-I../../../include/host/Linux-SGX \
 	-I../../../include/host/Linux-common \
 	-I../../../include/lib \
-	-I../../../include/lib/$(ARCH) \
 	-I../../../lib/crypto/mbedtls/include \
 	-I../../../lib/crypto/mbedtls/crypto/include \
 	-Isgx-driver
@@ -38,6 +37,7 @@ enclave-objs = \
 	db_exception.o \
 	db_files.o \
 	db_main.o \
+	db_main-$(ARCH).o \
 	db_memory.o \
 	db_misc.o \
 	db_mutex.o \

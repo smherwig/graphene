@@ -1,18 +1,5 @@
-/* Copyright (C) 2014 Stony Brook University
-   This file is part of Graphene Library OS.
-
-   Graphene Library OS is free software: you can redistribute it and/or
-   modify it under the terms of the GNU Lesser General Public License
-   as published by the Free Software Foundation, either version 3 of the
-   License, or (at your option) any later version.
-
-   Graphene Library OS is distributed in the hope that it will be useful,
-   but WITHOUT ANY WARRANTY; without even the implied warranty of
-   MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-   GNU Lesser General Public License for more details.
-
-   You should have received a copy of the GNU Lesser General Public License
-   along with this program.  If not, see <http://www.gnu.org/licenses/>.  */
+/* SPDX-License-Identifier: LGPL-3.0-or-later */
+/* Copyright (C) 2014 Stony Brook University */
 
 /*
  * shim_alarm.c
@@ -20,32 +7,23 @@
  * Implementation of system call "alarm", "setitmer" and "getitimer".
  */
 
-#include <shim_internal.h>
-#include <shim_signal.h>
-#include <shim_table.h>
-#include <shim_thread.h>
-#include <shim_utils.h>
+#include <stdint.h>
 
-static void signal_alarm(IDTYPE target, void* arg) {
-    // Kept for API compatibility wtih signal_itimer
-    __UNUSED(arg);
+#include "shim_internal.h"
+#include "shim_signal.h"
+#include "shim_table.h"
+#include "shim_thread.h"
+#include "shim_utils.h"
 
-    debug("alarm goes off, signaling thread %u\n", target);
-
-    struct shim_thread* thread = lookup_thread(target);
-    if (!thread)
-        return;
-
-    lock(&thread->lock);
-    append_signal(thread, SIGALRM, NULL, true);
-    unlock(&thread->lock);
-    put_thread(thread);
+static void signal_alarm(IDTYPE caller, void* arg) {
+    (void)do_kill_proc(caller, (IDTYPE)(uintptr_t)arg, SIGALRM, /*use_ipc=*/false);
 }
 
 int shim_do_alarm(unsigned int seconds) {
     uint64_t usecs = 1000000ULL * seconds;
 
-    int64_t ret = install_async_event(NULL, usecs, &signal_alarm, NULL);
+    int64_t ret = install_async_event(NULL, usecs, &signal_alarm,
+                                      (void*)(uintptr_t)get_cur_thread()->tgid);
     if (ret < 0)
         return ret;
 
@@ -61,7 +39,7 @@ static struct {
     unsigned long reset;
 } real_itimer;
 
-void signal_itimer(IDTYPE target, void* arg) {
+static void signal_itimer(IDTYPE target, void* arg) {
     // XXX: Can we simplify this code or streamline with the other callback?
     __UNUSED(target);
 

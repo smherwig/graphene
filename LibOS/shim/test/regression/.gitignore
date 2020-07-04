@@ -7,6 +7,7 @@
 /.cache
 /abort
 /abort_multithread
+/argv_test_input
 /attestation
 /bootstrap
 /bootstrap_c++
@@ -17,6 +18,7 @@
 /epoll_wait_timeout
 /eventfd
 /exec
+/exec_fork
 /exec_invalid_args
 /exec_same
 /exec_victim
@@ -61,7 +63,8 @@
 /sigaltstack
 /sighandler_reset
 /sighandler_sigpipe
-/sigprocmask
+/signal_multithread
+/sigprocmask_pending
 /spinlock
 /stat_invalid_args
 /str_close_leak

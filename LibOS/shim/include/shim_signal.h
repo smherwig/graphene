@@ -6,6 +6,7 @@
 #include <ucontext.h>
 
 void sigaction_make_defaults(struct __kernel_sigaction* sig_action);
+void thread_sigaction_reset_on_execve(struct shim_thread* thread);
 
 # define BITS_PER_WORD (8 * sizeof(unsigned long))
 /* The standard def of this macro is dumb */
@@ -96,33 +97,7 @@ struct shim_signal {
     PAL_CONTEXT * pal_context;
 };
 
-struct shim_signal_log;
-struct shim_signal_log* signal_logs_alloc(void);
-void signal_logs_free(struct shim_signal_log* signal_log);
-bool signal_logs_pending(const struct shim_signal_log* signal_log, int sig);
-
-extern const char * const siglist[NUM_KNOWN_SIGS + 1];
-
-static_always_inline
-const char * signal_name (int sig)
-{
-    if (sig <= NUM_KNOWN_SIGS)
-        return siglist[sig];
-
-    if (sig >= NUM_SIGS)
-        return "BAD SIGNAL";
-
-    char * str = __alloca(6);
-
-    str[0] = 'S';
-    str[1] = 'I';
-    str[2] = 'G';
-    str[3] = '0' + sig / 10;
-    str[4] = '0' + sig % 10;
-    str[5] = 0;
-
-    return str;
-}
+void get_pending_signals(struct shim_thread* thread, __sigset_t* set);
 
 struct shim_thread;
 
@@ -131,8 +106,7 @@ int init_signal (void);
 void __store_context (shim_tcb_t * tcb, PAL_CONTEXT * pal_context,
                       struct shim_signal * signal);
 
-// Need to hold thread->lock when calling this function
-void append_signal(struct shim_thread* thread, int sig, siginfo_t* info, bool need_interrupt);
+int append_signal(struct shim_thread* thread, siginfo_t* info);
 
 void deliver_signal(siginfo_t* info, PAL_CONTEXT* context);
 
@@ -144,7 +118,5 @@ int do_kill_thread (IDTYPE sender, IDTYPE tgid, IDTYPE tid, int sig,
                     bool use_ipc);
 int do_kill_proc (IDTYPE sender, IDTYPE tgid, int sig, bool use_ipc);
 int do_kill_pgroup (IDTYPE sender, IDTYPE pgid, int sig, bool use_ipc);
-
-int kill_all_threads (struct shim_thread * cur, IDTYPE sender, int sig);
 
 #endif /* _SHIM_SIGNAL_H_ */

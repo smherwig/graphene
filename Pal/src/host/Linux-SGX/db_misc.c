@@ -1,18 +1,5 @@
-/* Copyright (C) 2014 Stony Brook University
-   This file is part of Graphene Library OS.
-
-   Graphene Library OS is free software: you can redistribute it and/or
-   modify it under the terms of the GNU Lesser General Public License
-   as published by the Free Software Foundation, either version 3 of the
-   License, or (at your option) any later version.
-
-   Graphene Library OS is distributed in the hope that it will be useful,
-   but WITHOUT ANY WARRANTY; without even the implied warranty of
-   MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-   GNU Lesser General Public License for more details.
-
-   You should have received a copy of the GNU Lesser General Public License
-   along with this program.  If not, see <http://www.gnu.org/licenses/>.  */
+/* SPDX-License-Identifier: LGPL-3.0-or-later */
+/* Copyright (C) 2014 Stony Brook University */
 
 /*
  * db_misc.c
@@ -93,7 +80,7 @@ static struct pal_cpuid {
 static int pal_cpuid_cache_top      = 0;
 static unsigned int pal_cpuid_clock = 0;
 
-int get_cpuid_from_cache(unsigned int leaf, unsigned int subleaf, unsigned int values[4]) {
+static int get_cpuid_from_cache(unsigned int leaf, unsigned int subleaf, unsigned int values[4]) {
     _DkInternalLock(&cpuid_cache_lock);
 
     for (int i = 0; i < pal_cpuid_cache_top; i++)
@@ -111,7 +98,7 @@ int get_cpuid_from_cache(unsigned int leaf, unsigned int subleaf, unsigned int v
     return -PAL_ERROR_DENIED;
 }
 
-void add_cpuid_to_cache(unsigned int leaf, unsigned int subleaf, unsigned int values[4]) {
+static void add_cpuid_to_cache(unsigned int leaf, unsigned int subleaf, unsigned int values[4]) {
     struct pal_cpuid* chosen;
     _DkInternalLock(&cpuid_cache_lock);
 

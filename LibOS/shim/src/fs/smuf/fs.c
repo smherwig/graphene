@@ -27,7 +27,6 @@
 #include <asm/prctl.h>
 
 #include <inttypes.h>
-#include <string.h>
 
 #include <bearssl.h>
 
@@ -203,13 +202,13 @@ smuf_map_fileuri(const char *fileuri, size_t size, void **addr)
     file = DkStreamOpen(fileuri, PAL_ACCESS_RDWR, 0, 0, 0);
     if (!file) {
         rho_warn("DkStreamOpen(\"%s\") failed", fileuri);
-        error = -PAL_ERRNO;
+        error = -PAL_ERRNO();
         goto done;
     }
 
     if (DkStreamAttributesQueryByHandle(file, &pal_attr) == PAL_FALSE) {
         rho_warn("DkStreamAttributesQueryByHandle(\"%s\") failed", fileuri);
-        error = -PAL_ERRNO;
+        error = -PAL_ERRNO();
         goto done;
     }
 

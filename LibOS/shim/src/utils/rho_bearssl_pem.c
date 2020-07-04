@@ -5,10 +5,12 @@
 
 #include <bearssl.h>
 
+#include <rho_bearssl_pem.h>
 #include <rho_log.h>
 #include <rho_mem.h>
 #include <rho_pem.h>
 #include <rho_vector.h>
+
 
 static void
 rho_bearssl_pem_vblob_append(void *cc, const void *data, size_t len)

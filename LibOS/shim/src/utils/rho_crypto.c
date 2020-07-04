@@ -13,7 +13,7 @@ struct rho_md {
     size_t saltlen;
 };
 
-const br_hash_class *
+static const br_hash_class *
 rho_md_type2class(enum rho_md_type type)
 {
     switch (type) {

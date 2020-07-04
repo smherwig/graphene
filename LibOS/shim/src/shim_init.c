@@ -1,18 +1,5 @@
-/* Copyright (C) 2014 Stony Brook University
-   This file is part of Graphene Library OS.
-
-   Graphene Library OS is free software: you can redistribute it and/or
-   modify it under the terms of the GNU Lesser General Public License
-   as published by the Free Software Foundation, either version 3 of the
-   License, or (at your option) any later version.
-
-   Graphene Library OS is distributed in the hope that it will be useful,
-   but WITHOUT ANY WARRANTY; without even the implied warranty of
-   MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-   GNU Lesser General Public License for more details.
-
-   You should have received a copy of the GNU Lesser General Public License
-   along with this program.  If not, see <http://www.gnu.org/licenses/>.  */
+/* SPDX-License-Identifier: LGPL-3.0-or-later */
+/* Copyright (C) 2014 Stony Brook University */
 
 /*!
  * \file shim_init.c
@@ -20,6 +7,7 @@
  * This file contains entry and exit functions of library OS.
  */
 
+#include <shim_context.h>
 #include <shim_defs.h>
 #include <shim_internal.h>
 #include <shim_table.h>
@@ -75,11 +63,6 @@ void warn (const char *format, ...)
     va_start (args, format);
     __SYS_VPRINTF(format, args);
     va_end (args);
-}
-
-
-void __stack_chk_fail (void)
-{
 }
 
 static int pal_errno_to_unix_errno [PAL_ERROR_NATIVE_COUNT + 1] = {
@@ -358,8 +341,7 @@ int init_stack (const char ** argv, const char ** envp,
     return 0;
 }
 
-int read_environs (const char ** envp)
-{
+static int read_environs(const char** envp) {
     for (const char ** e = envp ; *e ; e++) {
         if (strstartswith_static(*e, "LD_LIBRARY_PATH=")) {
             /* populate library_paths with entries from LD_LIBRARY_PATH envvar */
@@ -428,7 +410,7 @@ int init_manifest (PAL_HANDLE manifest_handle) {
     } else {
         PAL_STREAM_ATTR attr;
         if (!DkStreamAttributesQueryByHandle(manifest_handle, &attr))
-            return -PAL_ERRNO;
+            return -PAL_ERRNO();
 
         size = attr.pending_size;
         map_size = ALLOC_ALIGN_UP(size);
@@ -495,17 +477,6 @@ fail:
         (auxp) = _tmp + sizeof(char *);                             \
     } while (0)
 
-static int init_newproc (struct newproc_header * hdr)
-{
-    PAL_NUM bytes = DkStreamRead(PAL_CB(parent_process), 0,
-                                 sizeof(struct newproc_header), hdr,
-                                 NULL, 0);
-    if (bytes == PAL_STREAM_ERROR)
-        return -PAL_ERRNO;
-
-    return hdr->failure;
-}
-
 #define CALL_INIT(func, args ...)   func(args)
 
 #define RUN_INIT(func, ...)                                             \
@@ -553,8 +524,6 @@ noreturn void* shim_init(int argc, void* args)
     /* call to figure out where the arguments are */
     FIND_ARG_COMPONENTS(args, argc, argv, envp, auxp);
 
-    struct newproc_header hdr;
-    void * cpaddr = NULL;
 
     RUN_INIT(init_vma);
     RUN_INIT(init_slab);
@@ -568,17 +537,17 @@ noreturn void* shim_init(int argc, void* args)
 
     debug("shim loaded at %p, ready to initialize\n", &__load_address);
 
-    if (!cpaddr && PAL_CB(parent_process)) {
-        RUN_INIT(init_newproc, &hdr);
-        if (hdr.checkpoint.hdr.size)
-            RUN_INIT(do_migration, &hdr.checkpoint, &cpaddr);
-    }
+    if (PAL_CB(parent_process)) {
+        struct checkpoint_hdr hdr;
 
-    if (cpaddr) {
+        PAL_NUM ret = DkStreamRead(PAL_CB(parent_process), 0, sizeof(hdr), &hdr, NULL, 0);
+        if (ret == PAL_STREAM_ERROR || ret != sizeof(hdr))
+            shim_do_exit(-PAL_ERRNO());
+
         thread_start_event = DkNotificationEventCreate(PAL_FALSE);
-        RUN_INIT(restore_checkpoint,
-                 &hdr.checkpoint.hdr, &hdr.checkpoint.mem,
-                 (ptr_t) cpaddr, 0);
+
+        assert(hdr.size);
+        RUN_INIT(receive_checkpoint_and_restore, &hdr);
     }
 
     if (PAL_CB(manifest_handle))
@@ -597,23 +566,21 @@ noreturn void* shim_init(int argc, void* args)
 
     if (PAL_CB(parent_process)) {
         /* Notify the parent process */
-        struct newproc_response res;
-        res.child_vmid = cur_process.vmid;
-        res.failure = 0;
-        PAL_NUM ret = DkStreamWrite(PAL_CB(parent_process), 0,
-                                    sizeof(struct newproc_response),
-                                    &res, NULL);
-        if (ret == PAL_STREAM_ERROR)
-            shim_do_exit(-PAL_ERRNO);
+        IDTYPE child_vmid = cur_process.vmid;
+        PAL_NUM ret = DkStreamWrite(PAL_CB(parent_process), 0, sizeof(child_vmid), &child_vmid,
+                                    NULL);
+        if (ret == PAL_STREAM_ERROR || ret != sizeof(child_vmid))
+            shim_do_exit(-PAL_ERRNO());
 
+        /* FIXME: We shouldn't downgrade communication */
         /* Downgrade communication with parent to non-secure (only checkpoint recv is secure).
          * Currently only relevant to SGX PAL, other PALs ignore this. */
         PAL_STREAM_ATTR attr;
         if (!DkStreamAttributesQueryByHandle(PAL_CB(parent_process), &attr))
-            shim_do_exit(-PAL_ERRNO);
+            shim_do_exit(-PAL_ERRNO());
         attr.secure = PAL_FALSE;
         if (!DkStreamAttributesSetByHandle(PAL_CB(parent_process), &attr))
-            shim_do_exit(-PAL_ERRNO);
+            shim_do_exit(-PAL_ERRNO());
     }
 
     debug("shim process initialized\n");
@@ -709,7 +676,7 @@ static int open_pipe(const char* uri, void* obj) {
 
     PAL_HANDLE pipe = DkStreamOpen(uri, 0, 0, 0, 0);
     if (!pipe)
-        return PAL_NATIVE_ERRNO == PAL_ERROR_STREAMEXIST ? 1 : -PAL_ERRNO;
+        return PAL_NATIVE_ERRNO() == PAL_ERROR_STREAMEXIST ? 1 : -PAL_ERRNO();
 
     PAL_HANDLE* pal_hdl = (PAL_HANDLE*)obj;
     *pal_hdl = pipe;
@@ -812,10 +779,10 @@ static int open_pal_handle (const char * uri, void * obj)
                            0);
 
     if (!hdl) {
-        if (PAL_NATIVE_ERRNO == PAL_ERROR_STREAMEXIST)
+        if (PAL_NATIVE_ERRNO() == PAL_ERROR_STREAMEXIST)
             return 0;
         else
-            return -PAL_ERRNO;
+            return -PAL_ERRNO();
     }
 
     if (obj) {
@@ -888,23 +855,6 @@ int create_handle (const char * prefix, char * uri, size_t size,
                          id ? : &suffix, hdl, NULL);
 }
 
-void check_stack_hook (void)
-{
-    struct shim_thread * cur_thread = get_cur_thread();
-
-    void * rsp;
-    __asm__ volatile ("movq %%rsp, %0" : "=r"(rsp) :: "memory");
-
-    if (rsp <= cur_thread->stack_top && rsp > cur_thread->stack) {
-        if ((uintptr_t)rsp - (uintptr_t)cur_thread->stack < PAL_CB(alloc_align))
-            SYS_PRINTF("*** stack is almost drained (RSP = %p, stack = %p-%p) ***\n",
-                       rsp, cur_thread->stack, cur_thread->stack_top);
-    } else {
-        SYS_PRINTF("*** context dismatched with thread stack (RSP = %p, stack = %p-%p) ***\n",
-                   rsp, cur_thread->stack, cur_thread->stack_top);
-    }
-}
-
 noreturn void shim_clean_and_exit(int exit_code) {
     static int in_terminate = 0;
     if (__atomic_add_fetch(&in_terminate, 1, __ATOMIC_RELAXED) > 1) {
@@ -960,17 +910,17 @@ int message_confirm (const char * message, const char * options)
     PAL_NUM pal_ret;
     pal_ret = DkStreamWrite(hdl, 0, strlen(message), (void*)message, NULL);
     if (pal_ret == PAL_STREAM_ERROR) {
-        ret = -PAL_ERRNO;
+        ret = -PAL_ERRNO();
         goto out;
     }
     pal_ret = DkStreamWrite(hdl, 0, noptions * 2 + 3, option_str, NULL);
     if (pal_ret == PAL_STREAM_ERROR) {
-        ret = -PAL_ERRNO;
+        ret = -PAL_ERRNO();
         goto out;
     }
     pal_ret = DkStreamRead(hdl, 0, 1, &answer, NULL, 0);
     if (pal_ret == PAL_STREAM_ERROR) {
-        ret = -PAL_ERRNO;
+        ret = -PAL_ERRNO();
         goto out;
     }
 

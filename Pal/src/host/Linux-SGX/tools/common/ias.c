@@ -1,16 +1,9 @@
+/* SPDX-License-Identifier: LGPL-3.0-or-later */
 /* Copyright (C) 2018-2020 Invisible Things Lab
-                           Rafal Wojdyla <omeg@invisiblethingslab.com>
-   This file is part of Graphene Library OS.
-   Graphene Library OS is free software: you can redistribute it and/or
-   modify it under the terms of the GNU Lesser General Public License
-   as published by the Free Software Foundation, either version 3 of the
-   License, or (at your option) any later version.
-   Graphene Library OS is distributed in the hope that it will be useful,
-   but WITHOUT ANY WARRANTY; without even the implied warranty of
-   MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-   GNU Lesser General Public License for more details.
-   You should have received a copy of the GNU Lesser General Public License
-   along with this program.  If not, see <http://www.gnu.org/licenses/>.  */
+ *                         Rafal Wojdyla <omeg@invisiblethingslab.com>
+ */
+
+#include "ias.h"
 
 #include <assert.h>
 #include <ctype.h>
@@ -59,7 +52,7 @@ struct ias_request_resp {
  *  \param[in]  src NULL-terminated URL-encoded input.
  *  \param[out] dst Buffer to write decoded output to. Can be the same as \a src.
  */
-void urldecode(const char* src, char* dst) {
+static void urldecode(const char* src, char* dst) {
     char a, b;
     while (*src) {
         if (*src == '%' && (a = src[1]) && (b = src[2]) && isxdigit(a) && isxdigit(b)) {

@@ -221,7 +221,7 @@ rho_sock_stream_recv(struct rho_sock *sock, void *buf, size_t len)
     
 again:
     n = DkStreamRead(sock->pal_hdl, 0, len, buf, NULL, 0);
-    if ((n == 0) && PAL_NATIVE_ERRNO  == PAL_ERROR_INTERRUPTED) {
+    if ((n == 0) && PAL_NATIVE_ERRNO() == PAL_ERROR_INTERRUPTED) {
         debug("rho_sock: DkStreamRead interrupted; trying again\n");
         goto again;
     }
@@ -231,7 +231,7 @@ again:
      * on success.  We intervene by returning -1 on failure; the caller
      * can check PAL_ERRNO for the resultant UNIX errno value.
      */
-    if ((n == 0) && (PAL_NATIVE_ERRNO != PAL_ERROR_ENDOFSTREAM))
+    if ((n == 0) && (PAL_NATIVE_ERRNO() != PAL_ERROR_ENDOFSTREAM))
         n = -1;
 
     return (n);
@@ -245,7 +245,7 @@ rho_sock_stream_send(struct rho_sock *sock, const void *buf, size_t len)
 again:
     /* unconst buf */
     n = DkStreamWrite(sock->pal_hdl, 0, len, (void*)buf, NULL);
-    if ((n == 0) && PAL_NATIVE_ERRNO  == PAL_ERROR_INTERRUPTED) {
+    if ((n == 0) && PAL_NATIVE_ERRNO() == PAL_ERROR_INTERRUPTED) {
         debug("rho_sock: DkStreamRead interrupted; trying again\n");
         goto again;
     }

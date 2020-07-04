@@ -1,18 +1,5 @@
-/* Copyright (C) 2014 Stony Brook University
-   This file is part of Graphene Library OS.
-
-   Graphene Library OS is free software: you can redistribute it and/or
-   modify it under the terms of the GNU Lesser General Public License
-   as published by the Free Software Foundation, either version 3 of the
-   License, or (at your option) any later version.
-
-   Graphene Library OS is distributed in the hope that it will be useful,
-   but WITHOUT ANY WARRANTY; without even the implied warranty of
-   MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-   GNU Lesser General Public License for more details.
-
-   You should have received a copy of the GNU Lesser General Public License
-   along with this program.  If not, see <http://www.gnu.org/licenses/>.  */
+/* SPDX-License-Identifier: LGPL-3.0-or-later */
+/* Copyright (C) 2014 Stony Brook University */
 
 #ifndef PAL_LINUX_H
 #define PAL_LINUX_H
@@ -123,6 +110,12 @@ extern struct pal_linux_state {
 int clone (int (*__fn) (void * __arg), void * __child_stack,
            int __flags, const void * __arg, ...);
 
+/* PAL main function */
+void pal_linux_main(void* initial_rsp, void* fini_callback);
+
+struct link_map;
+void setup_pal_map(struct link_map* map);
+
 /* set/unset CLOEXEC flags of all fds in a handle */
 int handle_set_cloexec (PAL_HANDLE handle, bool enable);
 
@@ -139,9 +132,11 @@ bool stataccess (struct stat * stats, int acc);
 void init_child_process(int parent_pipe_fd, PAL_HANDLE* parent, PAL_HANDLE* exec,
                         PAL_HANDLE* manifest);
 
+int get_cpu_count(void);
+ssize_t read_file_buffer(const char* filename, char* buf, size_t buf_size);
+
 void cpuid (unsigned int leaf, unsigned int subleaf,
             unsigned int words[]);
-int block_signals (bool block, const int * sigs, int nsig);
 int block_async_signals (bool block);
 void signal_setup (void);
 
@@ -156,19 +151,14 @@ extern char __text_start, __text_end, __data_start, __data_end;
 #define ADDR_IN_PAL(addr) \
         ((void*)(addr) > TEXT_START && (void*)(addr) < TEXT_END)
 
-DEFINE_LIST(event_queue);
-struct event_queue {
-    LIST_TYPE(event_queue) list;
-    int event_num;
-};
+#define MAX_SIGNAL_LOG 32
 
-DEFINE_LISTP(event_queue);
 typedef struct pal_tcb_linux {
     PAL_TCB common;
     struct {
         /* private to Linux PAL */
-        int         pending_event;
-        LISTP_TYPE(event_queue) pending_queue;
+        int         pending_events[MAX_SIGNAL_LOG];
+        int         pending_events_num;
         PAL_HANDLE  handle;
         void *      alt_stack;
         int         (*callback) (void *);

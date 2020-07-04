@@ -26,8 +26,6 @@
 #include <asm/unistd.h>
 #include <asm/prctl.h>
 
-#include <string.h>
-
 #include "rho_binascii.h"
 #include "rho_buf.h"
 #define RHO_LOG_PREFIX "NEXTFS"
@@ -92,7 +90,7 @@ struct nextfs_mdata {
 #define NEXTFS_HDL_GET_FD(hdl) \
     (hdl)->info.nextfs.fd
 
-struct rpc_agent *
+static struct rpc_agent *
 nextfs_hdl_get_agent(struct shim_handle *hdl)
 {
     struct shim_mount *fs = NULL;
@@ -122,7 +120,7 @@ nextfs_hdl_get_agent(struct shim_handle *hdl)
     return (agent);
 }
 
-struct rpc_agent *
+static struct rpc_agent *
 nextfs_dentry_get_agent(struct shim_dentry *dentry)
 {
     struct shim_mount *fs = NULL;

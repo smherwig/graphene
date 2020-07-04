@@ -10,6 +10,8 @@
 
 #ifdef IN_SHIM
 
+void debug_unsupp(int num);
+
 typedef void (*shim_fp)(void);
 
 extern shim_fp shim_table[];
@@ -332,6 +334,8 @@ int shim_do_close(int fd);
 int shim_do_stat(const char* file, struct stat* statbuf);
 int shim_do_fstat(int fd, struct stat* statbuf);
 int shim_do_lstat(const char* file, struct stat* stat);
+int shim_do_statfs(const char* path, struct statfs* buf);
+int shim_do_fstatfs(int fd, struct statfs* buf);
 int shim_do_poll(struct pollfd* fds, nfds_t nfds, int timeout);
 off_t shim_do_lseek(int fd, off_t offset, int origin);
 void* shim_do_mmap(void* addr, size_t length, int prot, int flags, int fd, off_t offset);
@@ -420,6 +424,7 @@ int shim_do_fchown(int fd, uid_t user, gid_t group);
 mode_t shim_do_umask(mode_t mask);
 int shim_do_gettimeofday(struct __kernel_timeval* tv, struct __kernel_timezone* tz);
 int shim_do_getrlimit(int resource, struct __kernel_rlimit* rlim);
+int shim_do_getrusage(int who, struct __kernel_rusage* ru);
 uid_t shim_do_getuid(void);
 gid_t shim_do_getgid(void);
 int shim_do_setuid(uid_t uid);
@@ -500,6 +505,7 @@ int shim_do_prlimit64(pid_t pid, int resource, const struct __kernel_rlimit64* n
 ssize_t shim_do_sendmmsg(int sockfd, struct mmsghdr* msg, unsigned int vlen, int flags);
 int shim_do_eventfd2(unsigned int count, int flags);
 int shim_do_eventfd(unsigned int count);
+int shim_do_getcpu(unsigned* cpu, unsigned* node, struct getcpu_cache* unused);
 
 /* libos call implementation */
 int shim_do_msgpersist(int msqid, int cmd);
@@ -828,6 +834,7 @@ ssize_t shim_recvmmsg(int sockfd, struct mmsghdr* msg, unsigned int vlen, int fl
 int shim_prlimit64(pid_t pid, int resource, const struct __kernel_rlimit64* new_rlim,
                    struct __kernel_rlimit64* old_rlim);
 ssize_t shim_sendmmsg(int sockfd, struct mmsghdr* msg, unsigned int vlen, int flags);
+int shim_getcpu(unsigned* cpu, unsigned* node, struct getcpu_cache* unused);
 
 /* libos call wrappers */
 int shim_msgpersist(int msqid, int cmd);

@@ -1,18 +1,5 @@
-/* Copyright (C) 2014 Stony Brook University
-   This file is part of Graphene Library OS.
-
-   Graphene Library OS is free software: you can redistribute it and/or
-   modify it under the terms of the GNU Lesser General Public License
-   as published by the Free Software Foundation, either version 3 of the
-   License, or (at your option) any later version.
-
-   Graphene Library OS is distributed in the hope that it will be useful,
-   but WITHOUT ANY WARRANTY; without even the implied warranty of
-   MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-   GNU Lesser General Public License for more details.
-
-   You should have received a copy of the GNU Lesser General Public License
-   along with this program.  If not, see <http://www.gnu.org/licenses/>.  */
+/* SPDX-License-Identifier: LGPL-3.0-or-later */
+/* Copyright (C) 2014 Stony Brook University */
 
 /*
  * db_main.c
@@ -20,6 +7,8 @@
  * This file contains the main function of the PAL loader, which loads and
  * processes environment, arguments and manifest.
  */
+
+#include <stdbool.h>
 
 #include "pal_defs.h"
 #include "pal.h"
@@ -216,6 +205,7 @@ noreturn void pal_main(
         PAL_HANDLE first_thread,     /* first thread handle */
         PAL_STR*   arguments,        /* application arguments */
         PAL_STR*   environments      /* environment variables */) {
+    char cfgbuf[CONFIG_MAX];
     pal_state.instance_id = instance_id;
     pal_state.alloc_align = _DkGetAllocationAlignment();
     assert(IS_POWER_OF_2(pal_state.alloc_align));
@@ -261,8 +251,7 @@ noreturn void pal_main(
             ret = _DkStreamOpen(&manifest_handle, manifest_uri, PAL_ACCESS_RDONLY,
                                 0, 0, 0);
             if (ret) {
-                /* well, there is no manifest file, leave it alone */
-                printf("Can't find any manifest, will run without one.\n");
+                INIT_FAIL(PAL_ERROR_DENIED, "cannot find manifest file");
             }
         }
     }
@@ -331,7 +320,7 @@ noreturn void pal_main(
         if (success) {
             exec_uri = malloc(exec_strlen + 1);
             if (!exec_uri)
-                INIT_FAIL(-PAL_ERROR_NOMEM, "Cannot allocate URI buf");
+                INIT_FAIL(PAL_ERROR_NOMEM, "Cannot allocate URI buf");
             memcpy (exec_uri, manifest_uri, exec_strlen);
             exec_uri[exec_strlen] = '\0';
             ret = _DkStreamOpen(&exec_handle, exec_uri, PAL_ACCESS_RDONLY,
@@ -362,14 +351,89 @@ noreturn void pal_main(
     pal_state.exec            = exec_uri;
     pal_state.exec_handle     = exec_handle;
 
-    if (pal_state.root_config && *arguments
-        && (strendswith(*arguments, ".manifest") || strendswith(*arguments, ".manifest.sgx"))) {
-        /* Run as a manifest file,
-         * replace argv[0] with the contents of the manifest's loader.execname */
-        char cfgbuf[CONFIG_MAX];
-        ret = get_config(pal_state.root_config, "loader.execname", cfgbuf, sizeof(cfgbuf));
-        if (ret > 0)
-            *arguments = malloc_copy(cfgbuf, ret + 1);
+    bool disable_aslr = false;
+    if (pal_state.root_config) {
+        char aslr_cfg[2];
+        ssize_t len = get_config(pal_state.root_config, "loader.insecure__disable_aslr", aslr_cfg,
+                                 sizeof(aslr_cfg));
+        disable_aslr = len == 1 && aslr_cfg[0] == '1';
+    }
+
+    /* Load argv */
+    /* TODO: Add an option to specify argv inline in the manifest. This requires an upgrade to the
+     * manifest syntax. See https://github.com/oscarlab/graphene/issues/870 (Use YAML or TOML syntax
+     * for manifests). 'loader.argv0_override' won't be needed after implementing this feature and
+     * resolving https://github.com/oscarlab/graphene/issues/1053 (RFC: graphene invocation).
+     */
+    bool argv0_overridden = false;
+    if (pal_state.root_config) {
+        ret = get_config(pal_state.root_config, "loader.argv0_override", cfgbuf, sizeof(cfgbuf));
+        if (ret > 0) {
+            argv0_overridden = true;
+            if (!arguments[0]) {
+                arguments = malloc(sizeof(const char*) * 2);
+                if (!arguments)
+                    INIT_FAIL(PAL_ERROR_NOMEM, "malloc() failed");
+                arguments[1] = NULL;
+            }
+            arguments[0] = malloc_copy(cfgbuf, ret + 1);
+            if (!arguments[0])
+                INIT_FAIL(PAL_ERROR_NOMEM, "malloc() failed");
+        }
+    }
+
+    if (get_config(pal_state.root_config, "loader.insecure__use_cmdline_argv",
+                   cfgbuf, CONFIG_MAX) > 0) {
+        printf("WARNING: Using insecure argv source. Don't use this configuration in production!\n");
+    } else if (get_config(pal_state.root_config, "loader.argv_src_file", cfgbuf, CONFIG_MAX) > 0) {
+        /* Load argv from a file and discard cmdline argv. We trust the file contents (this can be
+         * achieved using protected or trusted files). */
+        if (arguments[0] && arguments[1])
+            printf("Discarding cmdline arguments (%s %s [...]) because loader.argv_src_file was "
+                   "specified in the manifest.\n", arguments[0], arguments[1]);
+
+        PAL_HANDLE argv_handle;
+        PAL_STREAM_ATTR attr;
+        ret = _DkStreamOpen(&argv_handle, cfgbuf, PAL_ACCESS_RDONLY, 0, 0, 0);
+        if (ret < 0)
+            INIT_FAIL(-ret, "can't open loader.argv_src_file");
+        ret = _DkStreamAttributesQueryByHandle(argv_handle, &attr);
+        if (ret < 0)
+            INIT_FAIL(-ret, "can't read attributes of loader.argv_src_file");
+        size_t argv_file_size = attr.pending_size;
+        char* buf = malloc(argv_file_size);
+        if (!buf)
+            INIT_FAIL(PAL_ERROR_NOMEM, "malloc failed");
+        ret = _DkStreamRead(argv_handle, 0, argv_file_size, buf, NULL, 0);
+        if (ret < 0)
+            INIT_FAIL(-ret, "can't read loader.argv_src_file");
+        if (argv_file_size == 0 || buf[argv_file_size - 1] != '\0')
+            INIT_FAIL(PAL_ERROR_INVAL, "loader.argv_src_file should contain a "
+                                       "list of C-strings");
+        ret = _DkObjectClose(argv_handle);
+        if (ret < 0)
+            INIT_FAIL(-ret, "closing loader.argv_src_file failed");
+
+        /* Create argv array from the file contents. */
+        size_t argc = 0;
+        for (size_t i = 0; i < argv_file_size; i++)
+            if (buf[i] == '\0')
+                argc++;
+        const char** argv = malloc(sizeof(const char*) * (argc + 1));
+        if (!argv)
+            INIT_FAIL(PAL_ERROR_NOMEM, "malloc() failed");
+        assert(argc > 0);
+        argv[argc] = NULL;
+        const char** argv_it = argv;
+        *(argv_it++) = buf;
+        assert(argv_file_size > 0);
+        for (size_t i = 0; i < argv_file_size - 1; i++)
+            if (buf[i] == '\0')
+                *(argv_it++) = buf + i + 1;
+        arguments = argv;
+    } else if (!argv0_overridden || (arguments[0] && arguments[1])) {
+        INIT_FAIL(PAL_ERROR_INVAL, "argv handling wasn't configured in the manifest, but cmdline "
+                  "arguments were specified.");
     }
 
     read_environments(&environments);
@@ -385,7 +449,7 @@ noreturn void pal_main(
         }
 
         if (ret < 0)
-            INIT_FAIL(ret, pal_strerror(ret));
+            INIT_FAIL(-ret, pal_strerror(ret));
     }
 
     set_debug_type();
@@ -397,6 +461,7 @@ noreturn void pal_main(
     __pal_control.executable         = exec_uri;
     __pal_control.parent_process     = parent_process;
     __pal_control.first_thread       = first_thread;
+    __pal_control.disable_aslr       = disable_aslr;
 
     _DkGetAvailableUserAddressRange(&__pal_control.user_address.start,
                                     &__pal_control.user_address.end,

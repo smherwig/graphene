@@ -1,16 +1,7 @@
+/* SPDX-License-Identifier: LGPL-3.0-or-later */
 /* Copyright (C) 2018-2020 Invisible Things Lab
-                           Rafal Wojdyla <omeg@invisiblethingslab.com>
-   This file is part of Graphene Library OS.
-   Graphene Library OS is free software: you can redistribute it and/or
-   modify it under the terms of the GNU Lesser General Public License
-   as published by the Free Software Foundation, either version 3 of the
-   License, or (at your option) any later version.
-   Graphene Library OS is distributed in the hope that it will be useful,
-   but WITHOUT ANY WARRANTY; without even the implied warranty of
-   MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-   GNU Lesser General Public License for more details.
-   You should have received a copy of the GNU Lesser General Public License
-   along with this program.  If not, see <http://www.gnu.org/licenses/>.  */
+ *                         Rafal Wojdyla <omeg@invisiblethingslab.com>
+ */
 
 #ifndef ATTESTATION_H
 #define ATTESTATION_H
@@ -68,6 +59,29 @@ int verify_ias_report(const uint8_t* ias_report, size_t ias_report_size, uint8_t
                       const char* mrsigner, const char* mrenclave, const char* isv_prod_id,
                       const char* isv_svn, const char* report_data, const char* ias_pub_key_pem,
                       bool expected_as_str);
+
+/*!
+ *  \brief Same as verify_ias_report() but instead of verifying the quote contained in IAS report,
+ *         this function allocates enough memory to hold the quote and passes it to the user.
+ *
+ *  \param[in] ias_report         IAS attestation verification report.
+ *  \param[in] ias_report_size    Size of \a ias_report in bytes.
+ *  \param[in] ias_sig_b64        IAS report signature (base64-encoded as returned by IAS).
+ *  \param[in] ias_sig_b64_size   Size of \a ias_sig_b64 in bytes.
+ *  \param[in] allow_outdated_tcb Treat IAS status GROUP_OUT_OF_DATE as OK.
+ *  \param[in] nonce              (Optional) Nonce that's expected in the report.
+ *  \param[in] ias_pub_key_pem    (Optional) IAS public RSA key (PEM format, NULL-terminated).
+ *                                If not specified, a hardcoded Intel's key is used.
+ *  \param[out] out_quote         Buffer with quote. User is responsible for freeing it.
+ *  \param[out] out_quote_size    Size of \a out_quote in bytes.
+ *
+ *  \return 0 on successful verification, negative value on error.
+ */
+int verify_ias_report_extract_quote(const uint8_t* ias_report, size_t ias_report_size,
+                                    uint8_t* ias_sig_b64, size_t ias_sig_b64_size,
+                                    bool allow_outdated_tcb, const char* nonce,
+                                    const char* ias_pub_key_pem, uint8_t** out_quote,
+                                    size_t* out_quote_size);
 
 /*!
  *  \brief Verify that the provided SGX quote contains expected values.

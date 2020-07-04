@@ -5,6 +5,7 @@
 #include <atomic.h>
 
 #include <rho_log.h>
+#include <rho_shim_handle.h>
 
 struct shim_handle *
 rho_shim_handle_open(const char *path, int flags, mode_t mode)

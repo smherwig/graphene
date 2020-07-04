@@ -27,7 +27,6 @@
 #include <asm/prctl.h>
 
 #include <inttypes.h>
-#include <string.h>
 
 #include <bearssl.h>
 
@@ -193,7 +192,7 @@ smc_create_fileuri(const char *uri, size_t file_size)
     pal_hdl = DkStreamOpen(uri, PAL_ACCESS_RDWR, 0660, PAL_CREATE_TRY, 0);
     if (!pal_hdl) {
         rho_warn("DkStreamOpen(\"%s\") failed", uri);
-        error = -PAL_ERRNO;
+        error = -PAL_ERRNO();
         goto done;
     }
 
@@ -226,7 +225,7 @@ smc_delete_fileuri(const char *uri)
     pal_hdl = DkStreamOpen(uri, 0, 0, 0, 0);
     if (!pal_hdl) {
         rho_warn("DkStreamOpen(\"%s\") failed", uri);
-        error = -PAL_ERRNO;
+        error = -PAL_ERRNO();
         goto done;
     }
 
@@ -255,13 +254,13 @@ smc_map_fileuri(const char *uri, size_t size, void **addr)
     pal_hdl = DkStreamOpen(uri, PAL_ACCESS_RDWR, 0, 0, 0);
     if (!pal_hdl) {
         rho_warn("DkStreamOpen(\"%s\") failed", uri);
-        error = -PAL_ERRNO;
+        error = -PAL_ERRNO();
         goto done;
     }
 
     if (DkStreamAttributesQueryByHandle(pal_hdl, &pal_attr) == PAL_FALSE) {
         rho_warn("DkStreamAttributesQueryByHandle(\"%s\") failed", uri);
-        error = -PAL_ERRNO;
+        error = -PAL_ERRNO();
         goto done;
     }
 

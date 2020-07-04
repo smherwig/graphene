@@ -6,7 +6,6 @@ CFLAGS	+= -Wp,-U_FORTIFY_SOURCE -fno-builtin -nostdlib \
 	  -I../include \
 	  -I../include/pal \
 	  -I../include/lib \
-	  -I../include/lib/$(ARCH) \
 	  -I../include/arch/$(ARCH) \
 	  -I../include/arch/$(ARCH)/$(PAL_HOST)
 
@@ -91,7 +90,6 @@ all: $(target) $(call expand_target_to_sig,$(target)) $(call expand_target_to_sg
 sgx-tokens: $(call expand_target_to_token,$(target))
 
 manifest_rules = \
-	-e 's:\$$(PAL):$(abspath ../../Runtime/pal_loader):g' \
 	-e 's:\$$(PWD):$(shell pwd)/:g' \
 	-e 's:\$$(RA_CLIENT_SPID):$(RA_CLIENT_SPID):g' \
 	-e 's:\$$(RA_CLIENT_LINKABLE):$(if $(RA_CLIENT_LINKABLE),$(RA_CLIENT_LINKABLE),0):g'

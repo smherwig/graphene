@@ -1,19 +1,5 @@
-/* Copyright (C) 2017 Fortanix, Inc.
-
-   This file is part of Graphene Library OS.
-
-   Graphene Library OS is free software: you can redistribute it and/or
-   modify it under the terms of the GNU Lesser General Public License
-   as published by the Free Software Foundation, either version 3 of the
-   License, or (at your option) any later version.
-
-   Graphene Library OS is distributed in the hope that it will be useful,
-   but WITHOUT ANY WARRANTY; without even the implied warranty of
-   MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-   GNU Lesser General Public License for more details.
-
-   You should have received a copy of the GNU Lesser General Public License
-   along with this program.  If not, see <http://www.gnu.org/licenses/>.  */
+/* SPDX-License-Identifier: LGPL-3.0-or-later */
+/* Copyright (C) 2017 Fortanix, Inc. */
 
 #include "mbedtls_adapter.h"
 
@@ -29,6 +15,7 @@
 #include "assert.h"
 #include "mbedtls/aes.h"
 #include "mbedtls/cmac.h"
+#include "mbedtls/entropy_poll.h"
 #include "mbedtls/error.h"
 #include "mbedtls/net_sockets.h"
 #include "mbedtls/rsa.h"
@@ -112,6 +99,9 @@ int mbedtls_to_pal_error(int error)
         case MBEDTLS_ERR_SSL_ASYNC_IN_PROGRESS:
         case MBEDTLS_ERR_SSL_CRYPTO_IN_PROGRESS:
             return -PAL_ERROR_TRYAGAIN;
+
+        case MBEDTLS_ERR_NET_CONN_RESET:
+            return -PAL_ERROR_CONNFAILED_PIPE;
 
         default:
             return -PAL_ERROR_DENIED;
@@ -358,6 +348,8 @@ static int recv_cb(void* ctx, uint8_t* buf, size_t len) {
     if (ret < 0) {
         if (ret == -EINTR || ret == -EAGAIN || ret == -EWOULDBLOCK)
             return MBEDTLS_ERR_SSL_WANT_READ;
+        if (ret == -EPIPE)
+            return MBEDTLS_ERR_NET_CONN_RESET;
         return MBEDTLS_ERR_NET_RECV_FAILED;
     }
 
@@ -378,6 +370,8 @@ static int send_cb(void* ctx, uint8_t const* buf, size_t len) {
     if (ret < 0) {
         if (ret == -EINTR || ret == -EAGAIN || ret == -EWOULDBLOCK)
             return MBEDTLS_ERR_SSL_WANT_WRITE;
+        if (ret == -EPIPE)
+            return MBEDTLS_ERR_NET_CONN_RESET;
         return MBEDTLS_ERR_NET_SEND_FAILED;
     }
 

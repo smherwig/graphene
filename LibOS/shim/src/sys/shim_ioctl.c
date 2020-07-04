@@ -1,18 +1,5 @@
-/* Copyright (C) 2014 Stony Brook University
-   This file is part of Graphene Library OS.
-
-   Graphene Library OS is free software: you can redistribute it and/or
-   modify it under the terms of the GNU Lesser General Public License
-   as published by the Free Software Foundation, either version 3 of the
-   License, or (at your option) any later version.
-
-   Graphene Library OS is distributed in the hope that it will be useful,
-   but WITHOUT ANY WARRANTY; without even the implied warranty of
-   MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-   GNU Lesser General Public License for more details.
-
-   You should have received a copy of the GNU Lesser General Public License
-   along with this program.  If not, see <http://www.gnu.org/licenses/>.  */
+/* SPDX-License-Identifier: LGPL-3.0-or-later */
+/* Copyright (C) 2014 Stony Brook University */
 
 /*
  * shim_ioctl.c
@@ -28,13 +15,15 @@
 #include <errno.h>
 #include <linux/fd.h>
 #include <linux/sockios.h>
-#include <pal.h>
-#include <pal_error.h>
-#include <shim_fs.h>
-#include <shim_handle.h>
-#include <shim_internal.h>
-#include <shim_table.h>
-#include <shim_thread.h>
+#include <stdint.h>
+
+#include "pal.h"
+#include "pal_error.h"
+#include "shim_fs.h"
+#include "shim_handle.h"
+#include "shim_internal.h"
+#include "shim_table.h"
+#include "shim_thread.h"
 
 #define TERM_DEFAULT_IFLAG (ICRNL | IUTF8)
 #define TERM_DEFAULT_OFLAG (OPOST | ONLCR)
@@ -287,20 +276,10 @@ passthrough:
     return -EAGAIN;
 }
 
-void signal_io(IDTYPE target, void* arg) {
-    // Kept for compatibility with signal_itimer
-    __UNUSED(arg);
-
-    debug("detecting input, signaling thread %u\n", target);
-
-    struct shim_thread* thread = lookup_thread(target);
-    if (!thread)
-        return;
-
-    lock(&thread->lock);
-    append_signal(thread, SIGIO, NULL, true);
-    unlock(&thread->lock);
-    put_thread(thread);
+static void signal_io(IDTYPE caller, void* arg) {
+    __UNUSED(caller);
+    /* This signal is originating from the kernel/LibOS, so we are setting the sender to `0`. */
+    (void)do_kill_proc(0, (IDTYPE)(uintptr_t)arg, SIGIO, /*use_ipc=*/false);
 }
 
 int shim_do_ioctl(int fd, unsigned long cmd, unsigned long arg) {
@@ -363,7 +342,8 @@ int shim_do_ioctl(int fd, unsigned long cmd, unsigned long arg) {
             ret = 0;
             break;
         case FIOASYNC:
-            ret = install_async_event(hdl->pal_handle, 0, &signal_io, NULL);
+            ret = install_async_event(hdl->pal_handle, 0, &signal_io,
+                                      (void*)(uintptr_t)get_cur_thread()->tgid);
             break;
         case TIOCSERCONFIG:
         case TIOCSERGWILD:
@@ -424,7 +404,7 @@ int shim_do_ioctl(int fd, unsigned long cmd, unsigned long arg) {
             } else if (hdl->pal_handle) {
                 PAL_STREAM_ATTR attr;
                 if (!DkStreamAttributesQueryByHandle(hdl->pal_handle, &attr)) {
-                    ret = -PAL_ERRNO;
+                    ret = -PAL_ERRNO();
                     break;
                 }
                 size = attr.pending_size;

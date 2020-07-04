@@ -1,18 +1,5 @@
-/* Copyright (C) 2014 Stony Brook University
-   This file is part of Graphene Library OS.
-
-   Graphene Library OS is free software: you can redistribute it and/or
-   modify it under the terms of the GNU Lesser General Public License
-   as published by the Free Software Foundation, either version 3 of the
-   License, or (at your option) any later version.
-
-   Graphene Library OS is distributed in the hope that it will be useful,
-   but WITHOUT ANY WARRANTY; without even the implied warranty of
-   MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-   GNU Lesser General Public License for more details.
-
-   You should have received a copy of the GNU Lesser General Public License
-   along with this program.  If not, see <http://www.gnu.org/licenses/>.  */
+/* SPDX-License-Identifier: LGPL-3.0-or-later */
+/* Copyright (C) 2014 Stony Brook University */
 
 /*
  * shim_msgget.c
@@ -32,6 +19,7 @@
 #include <shim_internal.h>
 #include <shim_ipc.h>
 #include <shim_sysv.h>
+#include <shim_table.h>
 #include <shim_unistd.h>
 #include <shim_utils.h>
 
@@ -745,7 +733,7 @@ static int __store_msg_persist(struct shim_msg_handle* msgq) {
 
     PAL_HANDLE file = DkStreamOpen(fileuri, PAL_ACCESS_RDWR, 0600, PAL_CREATE_TRY, 0);
     if (!file) {
-        ret = -PAL_ERRNO;
+        ret = -PAL_ERRNO();
         goto out;
     }
 
@@ -833,7 +821,7 @@ static int __load_msg_persist(struct shim_msg_handle* msgq, bool readmsg) {
     size_t bytes = DkStreamRead(file, 0, sizeof(struct msg_handle_backup), &mback, NULL, 0);
 
     if (bytes == PAL_STREAM_ERROR) {
-        ret = -PAL_ERRNO;
+        ret = -PAL_ERRNO();
         goto out;
     }
     if (bytes < sizeof(struct msg_handle_backup)) {
@@ -852,7 +840,7 @@ static int __load_msg_persist(struct shim_msg_handle* msgq, bool readmsg) {
     void* mem = (void*)DkStreamMap(file, NULL, PAL_PROT_READ, 0, ALLOC_ALIGN_UP(expected_size));
 
     if (!mem) {
-        ret = -PAL_ERRNO;
+        ret = -PAL_ERRNO();
         goto out;
     }
 

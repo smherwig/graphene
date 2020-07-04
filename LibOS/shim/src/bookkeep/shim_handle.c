@@ -1,18 +1,5 @@
-/* Copyright (C) 2014 Stony Brook University
-   This file is part of Graphene Library OS.
-
-   Graphene Library OS is free software: you can redistribute it and/or
-   modify it under the terms of the GNU Lesser General Public License
-   as published by the Free Software Foundation, either version 3 of the
-   License, or (at your option) any later version.
-
-   Graphene Library OS is distributed in the hope that it will be useful,
-   but WITHOUT ANY WARRANTY; without even the implied warranty of
-   MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-   GNU Lesser General Public License for more details.
-
-   You should have received a copy of the GNU Lesser General Public License
-   along with this program.  If not, see <http://www.gnu.org/licenses/>.  */
+/* SPDX-License-Identifier: LGPL-3.0-or-later */
+/* Copyright (C) 2014 Stony Brook University */
 
 /*
  * shim_handle.c
@@ -540,24 +527,6 @@ off_t get_file_size(struct shim_handle* hdl) {
     return 0;
 }
 
-void dup_fd_handle(struct shim_handle_map* map, const struct shim_fd_handle* old,
-                   struct shim_fd_handle* new) {
-    struct shim_handle* replaced = NULL;
-
-    lock(&map->lock);
-
-    if (old->vfd != FD_NULL) {
-        get_handle(old->handle);
-        replaced    = new->handle;
-        new->handle = old->handle;
-    }
-
-    unlock(&map->lock);
-
-    if (replaced)
-        put_handle(replaced);
-}
-
 static struct shim_handle_map* get_new_handle_map(FDTYPE size) {
     struct shim_handle_map* handle_map = calloc(1, sizeof(struct shim_handle_map));
 
@@ -734,7 +703,7 @@ BEGIN_CP_FUNC(handle) {
     struct shim_handle* hdl     = (struct shim_handle*)obj;
     struct shim_handle* new_hdl = NULL;
 
-    ptr_t off = GET_FROM_CP_MAP(obj);
+    size_t off = GET_FROM_CP_MAP(obj);
 
     if (!off) {
         off = ADD_CP_OFFSET(sizeof(struct shim_handle));
@@ -837,7 +806,7 @@ BEGIN_CP_FUNC(fd_handle) {
     struct shim_fd_handle* fdhdl     = (struct shim_fd_handle*)obj;
     struct shim_fd_handle* new_fdhdl = NULL;
 
-    ptr_t off = ADD_CP_OFFSET(sizeof(struct shim_fd_handle));
+    size_t off = ADD_CP_OFFSET(sizeof(struct shim_fd_handle));
     new_fdhdl = (struct shim_fd_handle*)(base + off);
     memcpy(new_fdhdl, fdhdl, sizeof(struct shim_fd_handle));
     DO_CP(handle, fdhdl->handle, &new_fdhdl->handle);
@@ -862,7 +831,7 @@ BEGIN_CP_FUNC(handle_map) {
 
     size = sizeof(struct shim_handle_map) + (sizeof(struct shim_fd_handle*) * fd_size);
 
-    ptr_t off = GET_FROM_CP_MAP(obj);
+    size_t off = GET_FROM_CP_MAP(obj);
 
     if (!off) {
         off            = ADD_CP_OFFSET(size);

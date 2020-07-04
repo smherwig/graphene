@@ -1,18 +1,5 @@
-/* Copyright (C) 2014 Stony Brook University
-   This file is part of Graphene Library OS.
-
-   Graphene Library OS is free software: you can redistribute it and/or
-   modify it under the terms of the GNU Lesser General Public License
-   as published by the Free Software Foundation, either version 3 of the
-   License, or (at your option) any later version.
-
-   Graphene Library OS is distributed in the hope that it will be useful,
-   but WITHOUT ANY WARRANTY; without even the implied warranty of
-   MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-   GNU Lesser General Public License for more details.
-
-   You should have received a copy of the GNU Lesser General Public License
-   along with this program.  If not, see <http://www.gnu.org/licenses/>.  */
+/* SPDX-License-Identifier: LGPL-3.0-or-later */
+/* Copyright (C) 2014 Stony Brook University */
 
 /*
  * shim_internal.h
@@ -38,8 +25,11 @@
 #include <assert.h>
 #include <atomic.h>
 #include <shim_defs.h>
+#include <shim_internal-arch.h>
 #include <shim_tcb.h>
 #include <shim_types.h>
+
+void* shim_init(int argc, void* args);
 
 noreturn void shim_clean_and_exit(int exit_code);
 
@@ -48,7 +38,7 @@ static inline unsigned int get_cur_tid(void) {
     return SHIM_TCB_GET(tid);
 }
 
-#define PAL_NATIVE_ERRNO        (SHIM_TCB_GET(pal_errno))
+#define PAL_NATIVE_ERRNO()      SHIM_TCB_GET(pal_errno)
 
 #define INTERNAL_TID_BASE       ((IDTYPE) 1 << (sizeof(IDTYPE) * 8 - 1))
 
@@ -162,16 +152,14 @@ static inline PAL_HANDLE __open_shim_stdio (void)
     do { debug("%s (" __FILE__ ":%d)\n", __func__, __LINE__); } while (0)
 
 /* definition for syscall table */
-void handle_signal (void);
-long convert_pal_errno (long err);
+void handle_signals(void);
+long convert_pal_errno(long err);
 void syscall_wrapper(void);
 void syscall_wrapper_after_syscalldb(void);
 
-#define PAL_ERRNO  convert_pal_errno(PAL_NATIVE_ERRNO)
+#define PAL_ERRNO() convert_pal_errno(PAL_NATIVE_ERRNO())
 
 #define SHIM_ARG_TYPE long
-
-void check_stack_hook (void);
 
 static inline int64_t get_cur_preempt (void) {
     shim_tcb_t* tcb = shim_get_tcb();
@@ -183,12 +171,10 @@ static inline int64_t get_cur_preempt (void) {
     SHIM_ARG_TYPE __shim_##name(args) {                     \
         SHIM_ARG_TYPE ret = 0;                              \
         int64_t preempt = get_cur_preempt();                \
-        __UNUSED(preempt);                                  \
-        /* handle_signal(); */                              \
-        /* check_stack_hook(); */
+        __UNUSED(preempt);
 
 #define END_SHIM(name)                                      \
-        handle_signal();                                    \
+        handle_signals();                                   \
         assert(preempt == get_cur_preempt());               \
         return ret;                                         \
     }
@@ -376,7 +362,29 @@ void parse_syscall_after (int sysno, const char * name, int nr, ...);
         __UNUSED(__arg6);                       \
     } while (0)
 
+#define SHIM_SYSCALL_PROTO_0(NAME, RTYPE) \
+    RTYPE shim_##NAME(void)
+
+#define SHIM_SYSCALL_PROTO_1(NAME, RTYPE, T1, P1) \
+    RTYPE shim_##NAME(T1 P1)
+
+#define SHIM_SYSCALL_PROTO_2(NAME, RTYPE, T1, P1, T2, P2) \
+    RTYPE shim_##NAME(T1 P1, T2 P2)
+
+#define SHIM_SYSCALL_PROTO_3(NAME, RTYPE, T1, P1, T2, P2, T3, P3) \
+    RTYPE shim_##NAME(T1 P1, T2 P2, T3 P3)
+
+#define SHIM_SYSCALL_PROTO_4(NAME, RTYPE, T1, P1, T2, P2, T3, P3, T4, P4) \
+    RTYPE shim_##NAME(T1 P1, T2 P2, T3 P3, T4 P4)
+
+#define SHIM_SYSCALL_PROTO_5(NAME, RTYPE, T1, P1, T2, P2, T3, P3, T4, P4, T5, P5) \
+    RTYPE shim_##NAME(T1 P1, T2 P2, T3 P3, T4 P4, T5 P5)
+
+#define SHIM_SYSCALL_PROTO_6(NAME, RTYPE, T1, P1, T2, P2, T3, P3, T4, P4, T5, P5, T6, P6) \
+    RTYPE shim_##NAME(T1 P1, T2 P2, T3 P3, T4 P4, T5 P5, T6 P6)
+
 #define SHIM_SYSCALL_RETURN_ENOSYS(name, n, ...)                                   \
+    SHIM_SYSCALL_PROTO_##n(name, __VA_ARGS__);                                     \
     BEGIN_SHIM(name, SHIM_PROTO_ARGS_##n)                                          \
         debug("WARNING: syscall " #name " not implemented. Returning -ENOSYS.\n"); \
         SHIM_UNUSED_ARGS_##n();                                                    \
@@ -441,7 +449,7 @@ static inline void __enable_preempt (shim_tcb_t * tcb)
     //debug("enable preempt: %d\n", preempt);
 }
 
-void __handle_signal (shim_tcb_t * tcb, int sig);
+void __handle_signals(shim_tcb_t* tcb);
 
 static inline void enable_preempt (shim_tcb_t * tcb)
 {
@@ -453,7 +461,7 @@ static inline void enable_preempt (shim_tcb_t * tcb)
         return;
 
     if (preempt == 1)
-        __handle_signal(tcb, 0);
+        __handle_signals(tcb);
 
     __enable_preempt(tcb);
 }
@@ -639,7 +647,7 @@ static inline int __ref_inc (REFTYPE * ref)
     do {
         _c = atomic_read(ref);
         assert(_c >= 0);
-    } while (atomic_cmpxchg(ref, _c, _c + 1) != _c);
+    } while (!atomic_cmpxchg(ref, _c, _c + 1));
     return _c + 1;
 }
 
@@ -655,7 +663,7 @@ static inline int __ref_dec (REFTYPE * ref)
             BUG();
             return 0;
         }
-    } while (atomic_cmpxchg(ref, _c, _c - 1) != _c);
+    } while (!atomic_cmpxchg(ref, _c, _c - 1));
     return _c - 1;
 }
 
@@ -717,30 +725,5 @@ int object_wait_with_retry(PAL_HANDLE handle);
 void release_clear_child_tid(int* clear_child_tid);
 
 void delete_from_epoll_handles(struct shim_handle* handle);
-
-#ifdef __x86_64__
-#define __SWITCH_STACK(stack_top, func, arg)                    \
-    do {                                                        \
-        /* 16 Bytes align of stack */                           \
-        uintptr_t __stack_top = (uintptr_t)(stack_top);         \
-        __stack_top &= ~0xf;                                    \
-        __stack_top -= 8;                                       \
-        __asm__ volatile (                                      \
-            "movq %0, %%rbp\n"                                  \
-            "movq %0, %%rsp\n"                                  \
-            "jmpq *%1\n"                                        \
-            ::"r"(__stack_top), "r"(func), "D"(arg): "memory"); \
-    } while (0)
-
-static_always_inline void * current_stack(void)
-{
-    void * _rsp;
-    __asm__ volatile ("movq %%rsp, %0" : "=r"(_rsp) :: "memory");
-    return _rsp;
-}
-
-#else
-# error "Unsupported architecture"
-#endif /* __x86_64__ */
 
 #endif /* _PAL_INTERNAL_H_ */

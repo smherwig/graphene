@@ -1,18 +1,5 @@
-/* Copyright (C) 2014 Stony Brook University
-   This file is part of Graphene Library OS.
-
-   Graphene Library OS is free software: you can redistribute it and/or
-   modify it under the terms of the GNU Lesser General Public License
-   as published by the Free Software Foundation, either version 3 of the
-   License, or (at your option) any later version.
-
-   Graphene Library OS is distributed in the hope that it will be useful,
-   but WITHOUT ANY WARRANTY; without even the implied warranty of
-   MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-   GNU Lesser General Public License for more details.
-
-   You should have received a copy of the GNU Lesser General Public License
-   along with this program.  If not, see <http://www.gnu.org/licenses/>.  */
+/* SPDX-License-Identifier: LGPL-3.0-or-later */
+/* Copyright (C) 2014 Stony Brook University */
 
 /*
  * shim_socket.c
@@ -540,7 +527,7 @@ int shim_do_bind(int sockfd, struct sockaddr* addr, int _addrlen) {
                                       hdl->flags & O_NONBLOCK ? PAL_OPTION_NONBLOCK : 0);
 
     if (!pal_hdl) {
-        ret = (PAL_NATIVE_ERRNO == PAL_ERROR_STREAMEXIST) ? -EADDRINUSE : -PAL_ERRNO;
+        ret = (PAL_NATIVE_ERRNO() == PAL_ERROR_STREAMEXIST) ? -EADDRINUSE : -PAL_ERRNO();
         debug("bind: invalid handle returned\n");
         goto out;
     }
@@ -558,7 +545,7 @@ int shim_do_bind(int sockfd, struct sockaddr* addr, int _addrlen) {
         char uri[SOCK_URI_SIZE];
 
         if (!DkStreamGetName(pal_hdl, uri, SOCK_URI_SIZE)) {
-            ret = -PAL_ERRNO;
+            ret = -PAL_ERRNO();
             goto out;
         }
 
@@ -816,7 +803,7 @@ int shim_do_connect(int sockfd, struct sockaddr* addr, int _addrlen) {
                                       hdl->flags & O_NONBLOCK ? PAL_OPTION_NONBLOCK : 0);
 
     if (!pal_hdl) {
-        ret = (PAL_NATIVE_ERRNO == PAL_ERROR_DENIED) ? -ECONNREFUSED : -PAL_ERRNO;
+        ret = (PAL_NATIVE_ERRNO() == PAL_ERROR_DENIED) ? -ECONNREFUSED : -PAL_ERRNO();
         goto out;
     }
 
@@ -836,7 +823,7 @@ int shim_do_connect(int sockfd, struct sockaddr* addr, int _addrlen) {
         char uri[SOCK_URI_SIZE];
 
         if (!DkStreamGetName(pal_hdl, uri, SOCK_URI_SIZE)) {
-            ret = -PAL_ERRNO;
+            ret = -PAL_ERRNO();
             goto out;
         }
 
@@ -868,7 +855,7 @@ out:
     return ret;
 }
 
-int __do_accept(struct shim_handle* hdl, int flags, struct sockaddr* addr, int* addrlen) {
+static int __do_accept(struct shim_handle* hdl, int flags, struct sockaddr* addr, int* addrlen) {
     if (hdl->type != TYPE_SOCK)
         return -ENOTSOCK;
 
@@ -902,7 +889,7 @@ int __do_accept(struct shim_handle* hdl, int flags, struct sockaddr* addr, int* 
 
     accepted = DkStreamWaitForClient(hdl->pal_handle);
     if (!accepted) {
-        ret = -PAL_ERRNO;
+        ret = -PAL_ERRNO();
         goto out;
     }
 
@@ -910,14 +897,14 @@ int __do_accept(struct shim_handle* hdl, int flags, struct sockaddr* addr, int* 
         PAL_STREAM_ATTR attr;
 
         if (!DkStreamAttributesQueryByHandle(accepted, &attr)) {
-            ret = -PAL_ERRNO;
+            ret = -PAL_ERRNO();
             goto out;
         }
 
         attr.nonblocking = PAL_TRUE;
 
         if (!DkStreamAttributesSetByHandle(accepted, &attr)) {
-            ret = -PAL_ERRNO;
+            ret = -PAL_ERRNO();
             goto out;
         }
     }
@@ -963,7 +950,7 @@ int __do_accept(struct shim_handle* hdl, int flags, struct sockaddr* addr, int* 
         int uri_len;
 
         if (!(uri_len = DkStreamGetName(cli->pal_handle, uri, SOCK_URI_SIZE))) {
-            ret = -PAL_ERRNO;
+            ret = -PAL_ERRNO();
             goto out_cli;
         }
 
@@ -1075,7 +1062,7 @@ static ssize_t do_sendmsg(int fd, struct iovec* bufs, int nbufs, int flags,
             pal_hdl = DkStreamOpen(URI_PREFIX_UDP, 0, 0, 0,
                                    hdl->flags & O_NONBLOCK ? PAL_OPTION_NONBLOCK : 0);
             if (!pal_hdl) {
-                ret = -PAL_ERRNO;
+                ret = -PAL_ERRNO();
                 goto out_locked;
             }
 
@@ -1116,7 +1103,13 @@ static ssize_t do_sendmsg(int fd, struct iovec* bufs, int nbufs, int flags,
         PAL_NUM pal_ret = DkStreamWrite(pal_hdl, 0, bufs[i].iov_len, bufs[i].iov_base, uri);
 
         if (pal_ret == PAL_STREAM_ERROR) {
-            ret = (PAL_NATIVE_ERRNO == PAL_ERROR_STREAMEXIST) ? -ECONNABORTED : -PAL_ERRNO;
+            if (PAL_ERRNO() == EPIPE) {
+                struct shim_thread* cur = get_cur_thread();
+                assert(cur);
+                (void)do_kill_proc(cur->tid, cur->tgid, SIGPIPE, /*use_ipc=*/false);
+            }
+
+            ret = (PAL_NATIVE_ERRNO() == PAL_ERROR_STREAMEXIST) ? -ECONNABORTED : -PAL_ERRNO();
             break;
         }
 
@@ -1292,7 +1285,9 @@ static ssize_t do_recvmsg(int fd, struct iovec* bufs, size_t nbufs, int flags,
                                            &peek_buffer->buf[peek_buffer->end],
                                            uri, uri ? SOCK_URI_SIZE : 0);
             if (pal_ret == PAL_STREAM_ERROR) {
-                ret = (PAL_NATIVE_ERRNO == PAL_ERROR_STREAMNOTEXIST) ? -ECONNABORTED : -PAL_ERRNO;
+                ret = PAL_NATIVE_ERRNO() == PAL_ERROR_STREAMNOTEXIST
+                      ? -ECONNABORTED
+                      : -PAL_ERRNO();
                 lock(&hdl->lock);
                 goto out_locked;
             }
@@ -1319,7 +1314,9 @@ static ssize_t do_recvmsg(int fd, struct iovec* bufs, size_t nbufs, int flags,
         } else {
             PAL_NUM pal_ret = DkStreamRead(pal_hdl, 0, bufs[i].iov_len, bufs[i].iov_base, uri, uri ? SOCK_URI_SIZE : 0);
             if (pal_ret == PAL_STREAM_ERROR) {
-                ret = (PAL_NATIVE_ERRNO == PAL_ERROR_STREAMNOTEXIST) ? -ECONNABORTED : -PAL_ERRNO;
+                ret = PAL_NATIVE_ERRNO() == PAL_ERROR_STREAMNOTEXIST
+                      ? -ECONNABORTED
+                      : -PAL_ERRNO();
                 break;
             }
             iov_bytes = pal_ret;
@@ -1716,13 +1713,13 @@ static int __do_setsockopt(struct shim_handle* hdl, int level, int optname, char
     if (!attr) {
         attr = &local_attr;
         if (!DkStreamAttributesQueryByHandle(hdl->pal_handle, attr))
-            return -PAL_ERRNO;
+            return -PAL_ERRNO();
     }
 
     bool need_set_attr = __update_attr(attr, level, optname, optval);
     if (need_set_attr) {
         if (!DkStreamAttributesSetByHandle(hdl->pal_handle, attr))
-            return -PAL_ERRNO;
+            return -PAL_ERRNO();
     }
 
     return 0;
@@ -1737,7 +1734,7 @@ static int __process_pending_options(struct shim_handle* hdl) {
     PAL_STREAM_ATTR attr;
 
     if (!DkStreamAttributesQueryByHandle(hdl->pal_handle, &attr))
-        return -PAL_ERRNO;
+        return -PAL_ERRNO();
 
     struct shim_sock_option* o = sock->pending_options;
 
@@ -1911,7 +1908,7 @@ int shim_do_getsockopt(int fd, int level, int optname, char* optval, int* optlen
     } else {
         /* query PAL to get current attributes */
         if (!DkStreamAttributesQueryByHandle(hdl->pal_handle, &attr)) {
-            ret = -PAL_ERRNO;
+            ret = -PAL_ERRNO();
             goto out;
         }
     }

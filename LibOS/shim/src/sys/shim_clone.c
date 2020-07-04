@@ -1,18 +1,5 @@
-/* Copyright (C) 2014 Stony Brook University
-   This file is part of Graphene Library OS.
-
-   Graphene Library OS is free software: you can redistribute it and/or
-   modify it under the terms of the GNU Lesser General Public License
-   as published by the Free Software Foundation, either version 3 of the
-   License, or (at your option) any later version.
-
-   Graphene Library OS is distributed in the hope that it will be useful,
-   but WITHOUT ANY WARRANTY; without even the implied warranty of
-   MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-   GNU Lesser General Public License for more details.
-
-   You should have received a copy of the GNU Lesser General Public License
-   along with this program.  If not, see <http://www.gnu.org/licenses/>.  */
+/* SPDX-License-Identifier: LGPL-3.0-or-later */
+/* Copyright (C) 2014 Stony Brook University */
 
 /*
  * shim_clone.c
@@ -21,15 +8,17 @@
  * implemented yet.)
  */
 
-#include <shim_types.h>
-#include <shim_internal.h>
-#include <shim_table.h>
-#include <shim_thread.h>
-#include <shim_utils.h>
-#include <shim_checkpoint.h>
+#include "shim_context.h"
+#include "shim_fork.h"
+#include "shim_types.h"
+#include "shim_internal.h"
+#include "shim_table.h"
+#include "shim_thread.h"
+#include "shim_utils.h"
+#include "shim_checkpoint.h"
 
-#include <pal.h>
-#include <pal_error.h>
+#include "pal.h"
+#include "pal_error.h"
 
 #include <errno.h>
 #include <sys/syscall.h>
@@ -43,26 +32,6 @@ void __attribute__((weak)) syscall_wrapper_after_syscalldb(void)
      * syscalldb.S is excluded for libsysdb_debug.so so it fails to link
      * due to missing syscall_wrapper_after_syscalldb.
      */
-}
-
-/*
- * See syscall_wrapper @ syscalldb.S and illegal_upcall() @ shim_signal.c
- * for details.
- * child thread can _not_ use parent stack. So return right after syscall
- * instruction as if syscall_wrapper is executed.
- */
-static void fixup_child_context(struct shim_regs * regs)
-{
-    if (regs->rip == (unsigned long)&syscall_wrapper_after_syscalldb) {
-        /*
-         * we don't need to emulate stack pointer change because %rsp is
-         * initialized to new child user stack passed to clone() system call.
-         * See the caller of fixup_child_context().
-         */
-        /* regs->rsp += RED_ZONE_SIZE; */
-        regs->rflags = regs->r11;
-        regs->rip = regs->rcx;
-    }
 }
 
 /* from **sysdeps/unix/sysv/linux/x86_64/clone.S:
@@ -173,10 +142,6 @@ static int clone_implementation_wrapper(struct shim_clone_args * arg)
     restore_context(&tcb->context);
     return 0;
 }
-
-int migrate_fork (struct shim_cp_store * cpstore,
-                  struct shim_thread * thread,
-                  struct shim_process * process, va_list ap);
 
 /*  long int __arg0 - flags
  *  long int __arg1 - 16 bytes ( 2 words ) offset into the child stack allocated
@@ -311,6 +276,8 @@ int shim_do_clone (int flags, void * user_stack_addr, int * parent_tidptr,
         set_parent_tid = parent_tidptr;
     }
 
+    disable_preempt(NULL);
+
     struct shim_thread * thread = get_new_thread(0);
     if (!thread) {
         ret = -ENOMEM;
@@ -390,7 +357,8 @@ int shim_do_clone (int flags, void * user_stack_addr, int * parent_tidptr,
         add_thread(thread);
         set_as_child(self, thread);
 
-        ret = do_migrate_process(&migrate_fork, NULL, NULL, thread);
+        ret = create_process_and_send_checkpoint(&migrate_fork, /*exec=*/NULL, /*argv=*/NULL,
+                                                 thread);
         thread->shim_tcb = NULL; /* cpu context of forked thread isn't
                                   * needed any more */
         if (parent_stack)
@@ -410,6 +378,7 @@ int shim_do_clone (int flags, void * user_stack_addr, int * parent_tidptr,
             *set_parent_tid = tid;
 
         put_thread(thread);
+        enable_preempt(NULL);
         return tid;
     }
 
@@ -420,13 +389,13 @@ int shim_do_clone (int flags, void * user_stack_addr, int * parent_tidptr,
 
     new_args.create_event = DkNotificationEventCreate(PAL_FALSE);
     if (!new_args.create_event) {
-        ret = -PAL_ERRNO;
+        ret = -PAL_ERRNO();
         goto clone_thread_failed;
     }
 
     new_args.initialize_event = DkNotificationEventCreate(PAL_FALSE);
     if (!new_args.initialize_event) {
-        ret = -PAL_ERRNO;
+        ret = -PAL_ERRNO();
         goto clone_thread_failed;
     }
 
@@ -447,7 +416,7 @@ int shim_do_clone (int flags, void * user_stack_addr, int * parent_tidptr,
     PAL_HANDLE pal_handle = thread_create(clone_implementation_wrapper,
                                           &new_args);
     if (!pal_handle) {
-        ret = -PAL_ERRNO;
+        ret = -PAL_ERRNO();
         put_thread(new_args.thread);
         goto clone_thread_failed;
     }
@@ -462,6 +431,7 @@ int shim_do_clone (int flags, void * user_stack_addr, int * parent_tidptr,
     object_wait_with_retry(new_args.initialize_event);
     DkObjectClose(new_args.initialize_event);
     put_thread(thread);
+    enable_preempt(NULL);
     return tid;
 
 clone_thread_failed:
@@ -472,5 +442,6 @@ clone_thread_failed:
 failed:
     if (thread)
         put_thread(thread);
+    enable_preempt(NULL);
     return ret;
 }

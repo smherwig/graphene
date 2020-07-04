@@ -52,13 +52,35 @@ Executable Name
 
 ::
 
-   loader.execname=[STRING]
+   loader.argv0_override=[STRING]
 
 This syntax specifies an arbitrary string (typically the executable name) that
-will be passed as the first argument (``argv[0]``) to the executable only if it
-is run via the manifest (e.g. ``./app.manifest arg1 arg2 ...``). If the string
-is not specified in the manifest, the PAL will use the path to the manifest
-itself (standard UNIX convention).
+will be passed as the first argument (``argv[0]``) to the executable.
+
+If the string is not specified in the manifest, the application will get
+``argv[0]`` from :program:`pal_loader` invocation.
+
+Command-Line Arguments
+^^^^^^^^^^^^^^^^^^^^^^
+
+::
+
+   loader.insecure__use_cmdline_argv = 1
+
+or
+
+::
+
+   loader.argv_src_file = file:file_with_serialized_argv
+
+If you want your application to use commandline arguments you need to either set
+``loader.insecure__use_cmdline_argv`` (insecure in almost all cases) or point
+``loader.argv_src_file`` to a file containing output of :file:`Tools/argv_serializer`.
+
+``loader.argv_src_file`` is intended to point to either a trusted file or a
+protected file. The former allows to securely hardcode arguments (current
+manifest syntax doesn't allow to include them inline), the latter allows the
+arguments to be provided at runtime from an external (trusted) source.
 
 Environment Variables
 ^^^^^^^^^^^^^^^^^^^^^
@@ -68,10 +90,10 @@ Environment Variables
    loader.env.[ENVIRON]=[VALUE]
 
 By default, the environment variables on the host will be passed to the library
-OS. Specifying an environment variable using this syntax adds/overwrites it and
-passes to the library OS. This syntax can be used multiple times to specify more
-than one environment variable. An environment variable can be deleted by giving
-it an empty value.
+OS (this is insecure and will be fixed in the future). Specifying an environment
+variable using this syntax adds/overwrites it and passes to the library OS. This
+syntax can be used multiple times to specify more than one environment variable.
+An environment variable can be deleted by giving it an empty value.
 
 Debug Type
 ^^^^^^^^^^
@@ -85,6 +107,18 @@ This specifies the debug option while running the library OS. If the debug type
 is ``none``, no debug output will be printed to standard output. If the debug
 type is ``inline``, a dmesg-like debug output will be printed inlined with
 standard output.
+
+Disabling ASLR
+^^^^^^^^^^^^^^
+
+::
+
+    loader.insecure__disable_aslr=[1|0]
+    (Default: 0)
+
+This specifies whether to disable Address Space Layout Randomization (ASLR).
+Since disabling ASLR worsens security of the application, ASLR is enabled by
+default.
 
 
 System-related (Required by LibOS)
@@ -121,7 +155,7 @@ Allowing eventfd
 
 ::
 
-    sys.allow_insecure_eventfd=[1|0]
+    sys.insecure__allow_eventfd=[1|0]
     (Default: 0)
 
 This specifies whether to allow system calls `eventfd()` and `eventfd2()`. Since

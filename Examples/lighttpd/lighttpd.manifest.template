@@ -8,12 +8,15 @@
 
 # The executable to load in Graphene.
 loader.exec = file:$(INSTALL_DIR)/sbin/lighttpd
-loader.execname = lighttpd
+loader.argv0_override = lighttpd
 
 # Graphene environment, including the path of the library OS and the debug
 # option (inline/none).
 loader.preload = file:$(GRAPHENEDIR)/Runtime/libsysdb.so
 loader.debug_type = $(GRAPHENEDEBUG)
+
+# Read application arguments directly from the command line. Don't use this on production!
+loader.insecure__use_cmdline_argv = 1
 
 # Environment variables for lighttpd
 loader.env.LD_LIBRARY_PATH = /lib:$(ARCH_LIBDIR):$(INSTALL_DIR)/lib

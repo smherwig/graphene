@@ -202,9 +202,9 @@ rpc_agent_recv_hdr(struct rpc_agent *agent)
     got = rho_sock_recv_buf(sock, buf, need);
 
     if (got == -1) {
-        if (PAL_ERRNO != EAGAIN) {
+        if (PAL_ERRNO() != EAGAIN) {
             agent->ra_state = RPC_STATE_ERROR;
-            rho_errno_warn(PAL_ERRNO, "rho_sock_recv_buf failed");
+            rho_errno_warn(PAL_ERRNO(), "rho_sock_recv_buf failed");
         }
     } else if (got == 0) {
         agent->ra_state = RPC_STATE_CLOSED;
@@ -240,9 +240,9 @@ rpc_agent_recv_body(struct rpc_agent *agent)
 
     got = rho_sock_recv_buf(sock, buf, need);
     if (got == -1) {
-        if (PAL_ERRNO != EAGAIN) {
+        if (PAL_ERRNO() != EAGAIN) {
             agent->ra_state = RPC_STATE_ERROR;
-            rho_errno_warn(PAL_ERRNO, "rho_sock_recv_buf failed");
+            rho_errno_warn(PAL_ERRNO(), "rho_sock_recv_buf failed");
         }
     } else if (got == 0) {
         agent->ra_state = RPC_STATE_CLOSED;
@@ -271,9 +271,9 @@ rpc_agent_send_hdr(struct rpc_agent *agent)
     nput = rho_sock_send_buf(sock, buf, left);
 
     if (nput == -1) {
-        if (PAL_ERRNO != EAGAIN) {
+        if (PAL_ERRNO() != EAGAIN) {
             agent->ra_state = RPC_STATE_ERROR;
-            rho_errno_warn(PAL_ERRNO, "rho_sock_send_hdr() failed");
+            rho_errno_warn(PAL_ERRNO(), "rho_sock_send_hdr() failed");
         }
     } else if ((size_t)nput == left) {
         if (agent->ra_hdr.rh_bodylen > 0)
@@ -304,9 +304,9 @@ rpc_agent_send_body(struct rpc_agent *agent)
     nput = rho_sock_send_buf(sock, buf, left);
 
     if (nput == -1) {
-        if (PAL_ERRNO != EAGAIN) {
+        if (PAL_ERRNO() != EAGAIN) {
             agent->ra_state = RPC_STATE_ERROR;
-            rho_errno_warn(PAL_ERRNO, "rho_sock_send_body() failed");
+            rho_errno_warn(PAL_ERRNO(), "rho_sock_send_body() failed");
         }
     } else if ((size_t)nput == left) {
         agent->ra_state = RPC_STATE_RECV_HDR;
@@ -367,7 +367,7 @@ rpc_agent_transport(struct rpc_agent *agent)
     rho_debug("recv hdr");
     n = rho_sock_precvn_buf(sock, hdrbuf, RPC_HDR_LENGTH);
     if (n == -1) {
-        rho_warn("rpc_agent_transport: recv hdr failed: %ld", PAL_ERRNO);
+        rho_warn("rpc_agent_transport: recv hdr failed: %ld", PAL_ERRNO());
         error = -1;
         goto fail;
     }
@@ -408,7 +408,7 @@ rpc_agent_request(struct rpc_agent *agent)
     error = rpc_agent_transport(agent);
     if (error != 0) {
         /* XXX: funnel all socket errors into a single errno */
-        rho_errno_warn(PAL_ERRNO, "rpc socket error");
+        rho_errno_warn(PAL_ERRNO(), "rpc socket error");
         error = -EREMOTEIO;
     } else {
         error = (int)hdr->rh_code;

@@ -152,6 +152,27 @@ static inline void pal_context_to_ucontext(ucontext_t* uc, PAL_CONTEXT* context)
     uc->uc_mcontext.fpregs = (struct _libc_fpstate*)context->fpregs;
 }
 
+static inline uint64_t pal_ucontext_get_ip(ucontext_t* uc) {
+    return uc->uc_mcontext.gregs[REG_RIP];
+}
+
+static inline void pal_ucontext_set_function_parameters(ucontext_t* uc, void* func,
+                                                        size_t count, ...) {
+    const unsigned int param_regs[] = { REG_RDI, REG_RSI, REG_RDX, REG_RCX };
+    va_list ap;
+
+    assert(count <= ARRAY_SIZE(param_regs));
+
+    uc->uc_mcontext.gregs[REG_RIP] = (greg_t)func;
+
+    va_start(ap, count);
+
+    for (size_t i = 0; i < count; i++)
+        uc->uc_mcontext.gregs[param_regs[i]] = va_arg(ap, greg_t);
+
+    va_end(ap);
+}
+
 #else /* __WORDSIZE == 32 */
 
 /* Type for general register.  */

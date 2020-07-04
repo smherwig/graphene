@@ -1,16 +1,7 @@
+/* SPDX-License-Identifier: LGPL-3.0-or-later */
 /* Copyright (C) 2020 Invisible Things Lab
-                      Rafal Wojdyla <omeg@invisiblethingslab.com>
-   This file is part of Graphene Library OS.
-   Graphene Library OS is free software: you can redistribute it and/or
-   modify it under the terms of the GNU Lesser General Public License
-   as published by the Free Software Foundation, either version 3 of the
-   License, or (at your option) any later version.
-   Graphene Library OS is distributed in the hope that it will be useful,
-   but WITHOUT ANY WARRANTY; without even the implied warranty of
-   MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-   GNU Lesser General Public License for more details.
-   You should have received a copy of the GNU Lesser General Public License
-   along with this program.  If not, see <http://www.gnu.org/licenses/>.  */
+ *                    Rafal Wojdyla <omeg@invisiblethingslab.com>
+ */
 
 #include <errno.h>
 #include <getopt.h>
@@ -49,7 +40,7 @@ struct option g_options[] = {
     { 0, 0, 0, 0 }
 };
 
-void usage(const char* exec) {
+static void usage(const char* exec) {
     INFO("Usage: %s <request> [options]\n", exec);
     INFO("Available requests:\n");
     INFO("  sigrl                     Retrieve signature revocation list for a given EPID group\n");
@@ -75,9 +66,9 @@ void usage(const char* exec) {
          "                            %s)\n", IAS_URL_REPORT);
 }
 
-int report(struct ias_context_t* ias, const char* quote_path, const char* nonce,
-           const char* report_path, const char* sig_path, const char* cert_path,
-           const char* advisory_path) {
+static int report(struct ias_context_t* ias, const char* quote_path, const char* nonce,
+                  const char* report_path, const char* sig_path, const char* cert_path,
+                  const char* advisory_path) {
     int ret = -1;
     void* quote_data = NULL;
 
@@ -118,7 +109,7 @@ out:
     return ret;
 }
 
-int sigrl(struct ias_context_t* ias, const char* gid_str, const char* sigrl_path) {
+static int sigrl(struct ias_context_t* ias, const char* gid_str, const char* sigrl_path) {
     uint8_t gid[4];
 
     if (parse_hex(gid_str, gid, sizeof(gid)) != 0) {

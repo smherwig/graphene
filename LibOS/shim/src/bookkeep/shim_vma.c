@@ -1,19 +1,7 @@
+/* SPDX-License-Identifier: LGPL-3.0-or-later */
 /* Copyright (C) 2014 Stony Brook University
-   Copyright (C) 2020 Invisible Things Lab
-   This file is part of Graphene Library OS.
-
-   Graphene Library OS is free software: you can redistribute it and/or
-   modify it under the terms of the GNU Lesser General Public License
-   as published by the Free Software Foundation, either version 3 of the
-   License, or (at your option) any later version.
-
-   Graphene Library OS is distributed in the hope that it will be useful,
-   but WITHOUT ANY WARRANTY; without even the implied warranty of
-   MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-   GNU Lesser General Public License for more details.
-
-   You should have received a copy of the GNU Lesser General Public License
-   along with this program.  If not, see <http://www.gnu.org/licenses/>.  */
+ * Copyright (C) 2020 Invisible Things Lab
+ */
 
 #include <linux/fcntl.h>
 #include <linux/mman.h>
@@ -579,27 +567,27 @@ int init_vma(void) {
 
     g_aslr_addr_top = PAL_CB(user_address.end);
 
-#if ENABLE_ASLR == 1
-    /* Inspired by: https://elixir.bootlin.com/linux/v5.6.3/source/arch/x86/mm/mmap.c#L80 */
-    size_t gap_max_size = (PAL_CB(user_address.end) - PAL_CB(user_address.start)) / 6 * 5;
-    /* We do address space randomization only if we have at least ASLR_BITS to randomize. */
-    if (gap_max_size / ALLOC_ALIGNMENT >= (1ul << ASLR_BITS)) {
-        size_t gap = 0;
+    if (!PAL_CB(disable_aslr)) {
+        /* Inspired by: https://elixir.bootlin.com/linux/v5.6.3/source/arch/x86/mm/mmap.c#L80 */
+        size_t gap_max_size = (PAL_CB(user_address.end) - PAL_CB(user_address.start)) / 6 * 5;
+        /* We do address space randomization only if we have at least ASLR_BITS to randomize. */
+        if (gap_max_size / ALLOC_ALIGNMENT >= (1ul << ASLR_BITS)) {
+            size_t gap = 0;
 
-        int ret = DkRandomBitsRead(&gap, sizeof(gap));
-        if (ret < 0) {
-            return -convert_pal_errno(-ret);
+            int ret = DkRandomBitsRead(&gap, sizeof(gap));
+            if (ret < 0) {
+                return -convert_pal_errno(-ret);
+            }
+
+            /* Resulting distribution is not ideal, but it should not be an issue here. */
+            gap = ALLOC_ALIGN_DOWN(gap % gap_max_size);
+            g_aslr_addr_top = (char*)g_aslr_addr_top - gap;
+
+            debug("ASLR top address adjusted to %p\n", g_aslr_addr_top);
+        } else {
+            debug("Not enough space to make meaningful address space randomization.\n");
         }
-
-        /* Resulting distribution is not ideal, but it should not be an issue here. */
-        gap = ALLOC_ALIGN_DOWN(gap % gap_max_size);
-        g_aslr_addr_top = (char*)g_aslr_addr_top - gap;
-
-        debug("ASLR top address adjusted to %p\n", g_aslr_addr_top);
-    } else {
-        debug("Not enough space to make meaningful address space randomization.\n");
     }
-#endif
 
     /* We need 1 vma to create the memmgr. */
     if (!add_to_thread_vma_cache(&init_vmas[0])) {
@@ -1149,7 +1137,7 @@ BEGIN_CP_FUNC(vma)
     struct shim_vma_info* vma = (struct shim_vma_info*) obj;
     struct shim_vma_info* new_vma = NULL;
 
-    ptr_t off = GET_FROM_CP_MAP(obj);
+    size_t off = GET_FROM_CP_MAP(obj);
 
     if (!off) {
         off = ADD_CP_OFFSET(sizeof(*vma));
@@ -1295,8 +1283,11 @@ BEGIN_CP_FUNC(all_vmas)
         return ret;
     }
 
-    for (struct shim_vma_info* vma = &vmas[count - 1] ; vma >= vmas ; vma--)
+    for (struct shim_vma_info* vma = &vmas[count - 1];; vma--) {
         DO_CP(vma, vma, NULL);
+        if (vma == vmas)
+            break;
+    }
 
     free_vma_info_array(vmas, count);
 }

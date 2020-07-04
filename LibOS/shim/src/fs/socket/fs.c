@@ -1,18 +1,5 @@
-/* Copyright (C) 2014 Stony Brook University
-   This file is part of Graphene Library OS.
-
-   Graphene Library OS is free software: you can redistribute it and/or
-   modify it under the terms of the GNU Lesser General Public License
-   as published by the Free Software Foundation, either version 3 of the
-   License, or (at your option) any later version.
-
-   Graphene Library OS is distributed in the hope that it will be useful,
-   but WITHOUT ANY WARRANTY; without even the implied warranty of
-   MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-   GNU Lesser General Public License for more details.
-
-   You should have received a copy of the GNU Lesser General Public License
-   along with this program.  If not, see <http://www.gnu.org/licenses/>.  */
+/* SPDX-License-Identifier: LGPL-3.0-or-later */
+/* Copyright (C) 2014 Stony Brook University */
 
 /*
  * fs.c
@@ -29,10 +16,12 @@
 #include <linux/fcntl.h>
 #include <linux/stat.h>
 
-#include <pal.h>
-#include <pal_error.h>
-#include <shim_fs.h>
-#include <shim_internal.h>
+#include "pal.h"
+#include "pal_error.h"
+
+#include "shim_fs.h"
+#include "shim_internal.h"
+#include "shim_thread.h"
 
 static int socket_close(struct shim_handle* hdl) {
     /* XXX: Shouldn't this do something? */
@@ -64,11 +53,11 @@ static ssize_t socket_read(struct shim_handle* hdl, void* buf, size_t count) {
     PAL_NUM bytes = DkStreamRead(hdl->pal_handle, 0, count, buf, NULL, 0);
 
     if (bytes == PAL_STREAM_ERROR)
-        switch (PAL_NATIVE_ERRNO) {
+        switch (PAL_NATIVE_ERRNO()) {
             case PAL_ERROR_ENDOFSTREAM:
                 return 0;
             default: {
-                int err = PAL_ERRNO;
+                int err = PAL_ERRNO();
                 lock(&hdl->lock);
                 sock->error = err;
                 unlock(&hdl->lock);
@@ -103,7 +92,12 @@ static ssize_t socket_write(struct shim_handle* hdl, const void* buf, size_t cou
     PAL_NUM bytes = DkStreamWrite(hdl->pal_handle, 0, count, (void*)buf, NULL);
 
     if (bytes == PAL_STREAM_ERROR) {
-        int err = PAL_ERRNO;
+        int err = PAL_ERRNO();
+        if (err == EPIPE) {
+            struct shim_thread* cur = get_cur_thread();
+            assert(cur);
+            (void)do_kill_proc(cur->tid, cur->tgid, SIGPIPE, /*use_ipc=*/false);
+        }
 
         lock(&hdl->lock);
         sock->error = err;
@@ -121,7 +115,7 @@ static int socket_hstat(struct shim_handle* hdl, struct stat* stat) {
     PAL_STREAM_ATTR attr;
 
     if (!DkStreamAttributesQueryByHandle(hdl->pal_handle, &attr))
-        return -PAL_ERRNO;
+        return -PAL_ERRNO();
 
     memset(stat, 0, sizeof(struct stat));
 
@@ -180,7 +174,7 @@ static off_t socket_poll(struct shim_handle* hdl, int poll_type) {
 
     PAL_STREAM_ATTR attr;
     if (!DkStreamAttributesQueryByHandle(hdl->pal_handle, &attr)) {
-        ret = -PAL_ERRNO;
+        ret = -PAL_ERRNO();
         goto out;
     }
 
@@ -214,7 +208,7 @@ static int socket_setflags(struct shim_handle* hdl, int flags) {
     PAL_STREAM_ATTR attr;
 
     if (!DkStreamAttributesQueryByHandle(hdl->pal_handle, &attr))
-        return -PAL_ERRNO;
+        return -PAL_ERRNO();
 
     if (attr.nonblocking) {
         if (flags & O_NONBLOCK)
@@ -229,7 +223,7 @@ static int socket_setflags(struct shim_handle* hdl, int flags) {
     }
 
     if (!DkStreamAttributesSetByHandle(hdl->pal_handle, &attr))
-        return -PAL_ERRNO;
+        return -PAL_ERRNO();
 
     return 0;
 }

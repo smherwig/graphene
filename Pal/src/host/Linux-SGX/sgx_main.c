@@ -233,8 +233,7 @@ int load_enclave_binary (sgx_arch_secs_t * secs, int fd,
     return 0;
 }
 
-int initialize_enclave (struct pal_enclave * enclave)
-{
+static int initialize_enclave(struct pal_enclave* enclave) {
     int ret = 0;
     int                    enclave_image = -1;
     char*                  enclave_uri = NULL;
@@ -402,7 +401,7 @@ int initialize_enclave (struct pal_enclave * enclave)
     areas[area_num] = (struct mem_area) {
         .desc = "tcs", .skip_eextend = false, .fd = -1,
         .is_binary = false, .addr = 0, .size = enclave->thread_num * g_page_size,
-        .prot = 0, .type = SGX_PAGE_TCS
+        .prot = PROT_READ | PROT_WRITE, .type = SGX_PAGE_TCS
     };
     struct mem_area* tcs_area = &areas[area_num++];
 
@@ -624,8 +623,9 @@ int initialize_enclave (struct pal_enclave * enclave)
         dbg->pid = INLINE_SYSCALL(getpid, 0);
         dbg->base = enclave->baseaddr;
         dbg->size = enclave->size;
-        dbg->ssaframesize = enclave->ssaframesize;
-        dbg->aep  = async_exit_pointer;
+        dbg->ssaframesize   = enclave->ssaframesize;
+        dbg->aep            = async_exit_pointer;
+        dbg->eresume        = eresume_pointer;
         dbg->thread_tids[0] = dbg->pid;
         for (int i = 0 ; i < MAX_DBG_THREADS ; i++)
             dbg->tcs_addrs[i] = tcs_addrs[i];

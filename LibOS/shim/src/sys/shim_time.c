@@ -1,18 +1,5 @@
-/* Copyright (C) 2014 Stony Brook University
-   This file is part of Graphene Library OS.
-
-   Graphene Library OS is free software: you can redistribute it and/or
-   modify it under the terms of the GNU Lesser General Public License
-   as published by the Free Software Foundation, either version 3 of the
-   License, or (at your option) any later version.
-
-   Graphene Library OS is distributed in the hope that it will be useful,
-   but WITHOUT ANY WARRANTY; without even the implied warranty of
-   MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-   GNU Lesser General Public License for more details.
-
-   You should have received a copy of the GNU Lesser General Public License
-   along with this program.  If not, see <http://www.gnu.org/licenses/>.  */
+/* SPDX-License-Identifier: LGPL-3.0-or-later */
+/* Copyright (C) 2014 Stony Brook University */
 
 /*
  * shim_time.c
@@ -406,7 +393,7 @@ int shim_do_gettimeofday(struct __kernel_timeval* tv, struct __kernel_timezone* 
     long time = get_time_usec();
 
     if (time == -1)
-        return -PAL_ERRNO;
+        return -PAL_ERRNO();
 
     tv->tv_sec  = time / 1000000;
     tv->tv_usec = time % 1000000;
@@ -418,7 +405,7 @@ time_t shim_do_time(time_t* tloc) {
     long time = get_time_usec();
 
     if (time == -1)
-        return -PAL_ERRNO;
+        return -PAL_ERRNO();
 
     if (tloc && test_user_memory(tloc, sizeof(*tloc), true))
         return -EFAULT;
@@ -445,7 +432,7 @@ int shim_do_clock_gettime(clockid_t which_clock, struct timespec* tp) {
     long time = get_time_usec();
 
     if (time == -1)
-        return -PAL_ERRNO;
+        return -PAL_ERRNO();
 
     tp->tv_sec  = time / 1000000;
     tp->tv_nsec = (time % 1000000) * 1000;

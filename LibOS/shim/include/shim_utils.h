@@ -1,18 +1,5 @@
-/* Copyright (C) 2014 Stony Brook University
-   This file is part of Graphene Library OS.
-
-   Graphene Library OS is free software: you can redistribute it and/or
-   modify it under the terms of the GNU Lesser General Public License
-   as published by the Free Software Foundation, either version 3 of the
-   License, or (at your option) any later version.
-
-   Graphene Library OS is distributed in the hope that it will be useful,
-   but WITHOUT ANY WARRANTY; without even the implied warranty of
-   MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-   GNU Lesser General Public License for more details.
-
-   You should have received a copy of the GNU Lesser General Public License
-   along with this program.  If not, see <http://www.gnu.org/licenses/>.  */
+/* SPDX-License-Identifier: LGPL-3.0-or-later */
+/* Copyright (C) 2014 Stony Brook University */
 
 /*
  * shim_utils.h
@@ -30,6 +17,18 @@
 struct shim_handle;
 
 void sysparser_printf(const char* fmt, ...);
+
+/* quick hash function based on Robert Jenkins' hash algorithm */
+static inline uint64_t hash64(uint64_t key) {
+    key = (~key) + (key << 21);
+    key = key ^ (key >> 24);
+    key = (key + (key << 3)) + (key << 8);
+    key = key ^ (key >> 14);
+    key = (key + (key << 2)) + (key << 4);
+    key = key ^ (key >> 28);
+    key = key + (key << 31);
+    return key;
+}
 
 /* string object */
 struct shim_str* get_str_obj(void);

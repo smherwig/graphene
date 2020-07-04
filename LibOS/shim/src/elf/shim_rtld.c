@@ -1,18 +1,5 @@
-/* Copyright (C) 2014 Stony Brook University
-   This file is part of Graphene Library OS.
-
-   Graphene Library OS is free software: you can redistribute it and/or
-   modify it under the terms of the GNU Lesser General Public License
-   as published by the Free Software Foundation, either version 3 of the
-   License, or (at your option) any later version.
-
-   Graphene Library OS is distributed in the hope that it will be useful,
-   but WITHOUT ANY WARRANTY; without even the implied warranty of
-   MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-   GNU Lesser General Public License for more details.
-
-   You should have received a copy of the GNU Lesser General Public License
-   along with this program.  If not, see <http://www.gnu.org/licenses/>.  */
+/* SPDX-License-Identifier: LGPL-3.0-or-later */
+/* Copyright (C) 2014 Stony Brook University */
 
 /*
  * shim_rtld.c
@@ -28,6 +15,7 @@
 
 #include "elf.h"
 #include "elf/ldsodefs.h"
+#include "glibc-version.h"
 #include "shim_checkpoint.h"
 #include "shim_flags_conv.h"
 #include "shim_fs.h"
@@ -204,7 +192,7 @@ static int protect_page(struct link_map* l, void* addr, size_t size) {
 
     if (!DkVirtualMemoryProtect(start, end - start,
             PAL_PROT_READ | PAL_PROT_WRITE | LINUX_PROT_TO_PAL(prot, /*map_flags=*/0)))
-        return -PAL_ERRNO;
+        return -PAL_ERRNO();
 
     if (!c)
         return 0;
@@ -243,7 +231,7 @@ static int reprotect_map(struct link_map* l) {
 
         if (c && !DkVirtualMemoryProtect((void*)start, end - start,
                                          LINUX_PROT_TO_PAL(prot, /*map_flags=*/0))) {
-            ret = -PAL_ERRNO;
+            ret = -PAL_ERRNO();
             break;
         }
     }
@@ -257,7 +245,7 @@ static int reprotect_map(struct link_map* l) {
 
 #include "rel.h"
 
-struct link_map* new_elf_object(const char* realname, int type) {
+static struct link_map* new_elf_object(const char* realname, int type) {
     struct link_map* new;
 
     new = (struct link_map*)malloc(sizeof(struct link_map));
@@ -289,7 +277,7 @@ struct link_map* new_elf_object(const char* realname, int type) {
 #endif
 
 /* Cache the location of MAP's hash table.  */
-void setup_elf_hash(struct link_map* map) {
+static void setup_elf_hash(struct link_map* map) {
     Elf_Symndx* hash;
 
     if (map->l_info[DT_ADDRTAGIDX(DT_GNU_HASH) + DT_NUM + DT_THISPROCNUM +
@@ -823,16 +811,6 @@ static int __free_elf_object(struct link_map* l) {
     return 0;
 }
 
-int free_elf_object(struct shim_handle* file) {
-    struct link_map* l = __search_map_by_handle(file);
-    if (!l)
-        return -ENOENT;
-
-    __free_elf_object(l);
-    put_handle(file);
-    return 0;
-}
-
 static int __check_elf_header(void* fbp, size_t len) {
     const char* errstring __attribute__((unused));
 
@@ -1035,24 +1013,6 @@ static int __load_elf_object(struct shim_handle* file, void* addr, int type,
 
 out:
     return ret;
-}
-
-int reload_elf_object(struct shim_handle* file) {
-    struct link_map* map = loaded_libraries;
-
-    while (map) {
-        if (map->l_file == file)
-            break;
-        map = map->l_next;
-    }
-
-    if (!map)
-        return -ENOENT;
-
-    debug("reloading %s as runtime object loaded at 0x%08lx-0x%08lx\n", qstrgetstr(&file->uri),
-          map->l_map_start, map->l_map_end);
-
-    return __load_elf_object(file, NULL, OBJECT_REMAP, map);
 }
 
 struct sym_val {
@@ -1454,7 +1414,7 @@ static int vdso_map_init(void) {
     void* ret_addr = (void*)DkVirtualMemoryAlloc(addr, ALLOC_ALIGN_UP(vdso_so_size),
                                                  /*alloc_type=*/0, PAL_PROT_READ | PAL_PROT_WRITE);
     if (!ret_addr)
-        return -PAL_ERRNO;
+        return -PAL_ERRNO();
     assert(addr == ret_addr);
 
     memcpy(addr, &vdso_so, vdso_so_size);
@@ -1473,7 +1433,7 @@ static int vdso_map_init(void) {
     }
 
     if (!DkVirtualMemoryProtect(addr, ALLOC_ALIGN_UP(vdso_so_size), PAL_PROT_READ | PAL_PROT_EXEC))
-        return -PAL_ERRNO;
+        return -PAL_ERRNO();
 
     vdso_addr = addr;
     return 0;
@@ -1485,7 +1445,7 @@ int vdso_map_migrate(void) {
 
     if (!DkVirtualMemoryProtect(vdso_addr, ALLOC_ALIGN_UP(vdso_so_size),
                                 PAL_PROT_READ | PAL_PROT_WRITE))
-        return -PAL_ERRNO;
+        return -PAL_ERRNO();
 
     /* adjust funcs to loaded address for newly loaded libsysdb */
     for (size_t i = 0; i < ARRAY_SIZE(vsyms); i++) {
@@ -1494,7 +1454,7 @@ int vdso_map_migrate(void) {
 
     if (!DkVirtualMemoryProtect(vdso_addr, ALLOC_ALIGN_UP(vdso_so_size),
                                 PAL_PROT_READ | PAL_PROT_EXEC))
-        return -PAL_ERRNO;
+        return -PAL_ERRNO();
     return 0;
 }
 
@@ -1622,6 +1582,7 @@ noreturn void execute_elf_object(struct shim_handle* exec, int* argcp, const cha
     if (ret < 0) {
         debug("execute_elf_object: DkRandomBitsRead failed.\n");
         DkThreadExit(/*clear_child_tid=*/NULL);
+        /* UNREACHABLE */
     }
     auxp[5].a_un.a_val = random;
 
@@ -1631,18 +1592,8 @@ noreturn void execute_elf_object(struct shim_handle* exec, int* argcp, const cha
     shim_tcb_t* tcb = shim_get_tcb();
     __enable_preempt(tcb);
 
-#if defined(__x86_64__)
-    __asm__ volatile(
-        "pushq $0\r\n"
-        "popfq\r\n"
-        "movq %%rbx, %%rsp\r\n"
-        "jmp *%%rax\r\n"
-        :
-        : "a"(entry), "b"(argcp), "d"(0)
-        : "memory", "cc");
-#else
-#error "architecture not supported"
-#endif
+    CALL_ELF_ENTRY(entry, argcp);
+
     while (true)
         /* nothing */;
 }
@@ -1654,7 +1605,7 @@ BEGIN_CP_FUNC(library) {
     struct link_map* map = (struct link_map*)obj;
     struct link_map* new_map;
 
-    ptr_t off = GET_FROM_CP_MAP(obj);
+    size_t off = GET_FROM_CP_MAP(obj);
 
     if (!off) {
         off = ADD_CP_OFFSET(sizeof(struct link_map));
@@ -1757,7 +1708,7 @@ BEGIN_CP_FUNC(loaded_libraries) {
         map = map->l_next;
     }
 
-    ADD_CP_FUNC_ENTRY((ptr_t)new_interp_map);
+    ADD_CP_FUNC_ENTRY((uintptr_t)new_interp_map);
 }
 END_CP_FUNC(loaded_libraries)
 

@@ -1,19 +1,7 @@
+/* SPDX-License-Identifier: LGPL-3.0-or-later */
 /* Copyright (C) 2014 Stony Brook University
-   Copyright (C) 2020 Invisible Things Lab
-   This file is part of Graphene Library OS.
-
-   Graphene Library OS is free software: you can redistribute it and/or
-   modify it under the terms of the GNU Lesser General Public License
-   as published by the Free Software Foundation, either version 3 of the
-   License, or (at your option) any later version.
-
-   Graphene Library OS is distributed in the hope that it will be useful,
-   but WITHOUT ANY WARRANTY; without even the implied warranty of
-   MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-   GNU Lesser General Public License for more details.
-
-   You should have received a copy of the GNU Lesser General Public License
-   along with this program.  If not, see <http://www.gnu.org/licenses/>.  */
+ * Copyright (C) 2020 Invisible Things Lab
+ */
 
 /*
  * shim_brk.c
@@ -72,18 +60,21 @@ int init_brk_region(void* brk_start, size_t data_segment_size) {
     if (brk_start && brk_start <= PAL_CB(user_address.end)
             && brk_max_size <= (uintptr_t)PAL_CB(user_address.end)
             && (uintptr_t)brk_start < (uintptr_t)PAL_CB(user_address.end) - brk_max_size) {
+        int ret;
         size_t offset = 0;
-#if ENABLE_ASLR == 1
-        int ret = DkRandomBitsRead(&offset, sizeof(offset));
-        if (ret < 0) {
-            return -convert_pal_errno(-ret);
+
+        if (!PAL_CB(disable_aslr)) {
+            ret = DkRandomBitsRead(&offset, sizeof(offset));
+            if (ret < 0) {
+                return -convert_pal_errno(-ret);
+            }
+            /* Linux randomizes brk at offset from 0 to 0x2000000 from main executable data section
+             * https://elixir.bootlin.com/linux/v5.6.3/source/arch/x86/kernel/process.c#L914 */
+            offset %= MIN((size_t)0x2000000, (size_t)((char*)PAL_CB(user_address.end) -
+                                             brk_max_size - (char*)brk_start));
+            offset = ALLOC_ALIGN_DOWN(offset);
         }
-        /* Linux randomizes brk at offset from 0 to 0x2000000 from main executable data section
-         * https://elixir.bootlin.com/linux/v5.6.3/source/arch/x86/kernel/process.c#L914 */
-        offset %= MIN((size_t)0x2000000,
-                      (size_t)((char*)PAL_CB(user_address.end) - brk_max_size - (char*)brk_start));
-        offset = ALLOC_ALIGN_DOWN(offset);
-#endif
+
         brk_start = (char*)brk_start + offset;
 
         ret = bkeep_mmap_fixed(brk_start, brk_max_size, PROT_NONE,
@@ -103,12 +94,8 @@ int init_brk_region(void* brk_start, size_t data_segment_size) {
 
     if (!brk_start) {
         int ret;
-#if ENABLE_ASLR == 1
-        ret = bkeep_mmap_any_aslr
-#else
-        ret = bkeep_mmap_any
-#endif
-                            (brk_max_size, PROT_NONE, VMA_UNMAPPED, NULL, 0, "heap", &brk_start);
+        ret = bkeep_mmap_any_aslr(brk_max_size, PROT_NONE, VMA_UNMAPPED, NULL, 0, "heap",
+                                  &brk_start);
         if (ret < 0) {
             return ret;
         }
@@ -213,7 +200,7 @@ BEGIN_CP_FUNC(brk) {
     __UNUSED(obj);
     __UNUSED(size);
     __UNUSED(objp);
-    ADD_CP_FUNC_ENTRY((ptr_t)brk_region.brk_start);
+    ADD_CP_FUNC_ENTRY((uintptr_t)brk_region.brk_start);
     ADD_CP_ENTRY(SIZE, brk_region.brk_current - brk_region.brk_start);
     ADD_CP_ENTRY(SIZE, brk_region.brk_end - brk_region.brk_start);
     ADD_CP_ENTRY(SIZE, brk_region.data_segment_size);

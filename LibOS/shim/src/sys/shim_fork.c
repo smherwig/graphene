@@ -1,18 +1,5 @@
-/* Copyright (C) 2014 Stony Brook University
-   This file is part of Graphene Library OS.
-
-   Graphene Library OS is free software: you can redistribute it and/or
-   modify it under the terms of the GNU Lesser General Public License
-   as published by the Free Software Foundation, either version 3 of the
-   License, or (at your option) any later version.
-
-   Graphene Library OS is distributed in the hope that it will be useful,
-   but WITHOUT ANY WARRANTY; without even the implied warranty of
-   MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-   GNU Lesser General Public License for more details.
-
-   You should have received a copy of the GNU Lesser General Public License
-   along with this program.  If not, see <http://www.gnu.org/licenses/>.  */
+/* SPDX-License-Identifier: LGPL-3.0-or-later */
+/* Copyright (C) 2014 Stony Brook University */
 
 /*
  * shim_fork.c
@@ -20,18 +7,20 @@
  * Implementation of system calls "fork" and "vfork".
  */
 
+#include "shim_fork.h"
+
 #include <errno.h>
 #include <linux/futex.h>
 #include <sys/mman.h>
 #include <sys/syscall.h>
 
-#include <pal.h>
-#include <pal_error.h>
-#include <shim_checkpoint.h>
-#include <shim_internal.h>
-#include <shim_ipc.h>
-#include <shim_table.h>
-#include <shim_thread.h>
+#include "pal.h"
+#include "pal_error.h"
+#include "shim_checkpoint.h"
+#include "shim_internal.h"
+#include "shim_ipc.h"
+#include "shim_table.h"
+#include "shim_thread.h"
 
 static BEGIN_MIGRATION_DEF(fork, struct shim_thread* thread, struct shim_process* process) {
     DEFINE_MIGRATE(process, process, sizeof(struct shim_process));
@@ -82,7 +71,9 @@ int shim_do_fork(void) {
     add_thread(new_thread);
     set_as_child(cur_thread, new_thread);
 
-    if ((ret = do_migrate_process(&migrate_fork, NULL, NULL, new_thread)) < 0) {
+    ret = create_process_and_send_checkpoint(&migrate_fork, /*exec=*/NULL, /*argv=*/NULL,
+                                             new_thread);
+    if (ret < 0) {
         put_thread(new_thread);
         return ret;
     }

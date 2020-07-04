@@ -1,18 +1,5 @@
-/* Copyright (C) 2014 Stony Brook University
-   This file is part of Graphene Library OS.
-
-   Graphene Library OS is free software: you can redistribute it and/or
-   modify it under the terms of the GNU Lesser General Public License
-   as published by the Free Software Foundation, either version 3 of the
-   License, or (at your option) any later version.
-
-   Graphene Library OS is distributed in the hope that it will be useful,
-   but WITHOUT ANY WARRANTY; without even the implied warranty of
-   MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-   GNU Lesser General Public License for more details.
-
-   You should have received a copy of the GNU Lesser General Public License
-   along with this program.  If not, see <http://www.gnu.org/licenses/>.  */
+/* SPDX-License-Identifier: LGPL-3.0-or-later */
+/* Copyright (C) 2014 Stony Brook University */
 
 /*
  * db_exception.c
@@ -31,33 +18,10 @@
 #include "pal_error.h"
 #include "pal_internal.h"
 
-#define INIT_EVENT_HANDLER { .lock = LOCK_INIT, .upcall = NULL }
-
-struct pal_event_handler {
-    PAL_LOCK lock;
-    PAL_EVENT_HANDLER upcall;
-};
-
-struct pal_event_handler handlers[] = {
-    [0]                          = INIT_EVENT_HANDLER,
-    [PAL_EVENT_ARITHMETIC_ERROR] = INIT_EVENT_HANDLER,
-    [PAL_EVENT_MEMFAULT]         = INIT_EVENT_HANDLER,
-    [PAL_EVENT_ILLEGAL]          = INIT_EVENT_HANDLER,
-    [PAL_EVENT_QUIT]             = INIT_EVENT_HANDLER,
-    [PAL_EVENT_SUSPEND]          = INIT_EVENT_HANDLER,
-    [PAL_EVENT_RESUME]           = INIT_EVENT_HANDLER,
-    [PAL_EVENT_FAILURE]          = INIT_EVENT_HANDLER,
-    [PAL_EVENT_PIPE]             = INIT_EVENT_HANDLER,
-};
+PAL_EVENT_HANDLER handlers[PAL_EVENT_NUM_BOUND] = { 0 };
 
 PAL_EVENT_HANDLER _DkGetExceptionHandler(PAL_NUM event) {
-    struct pal_event_handler* eh = &handlers[event];
-
-    _DkInternalLock(&eh->lock);
-    PAL_EVENT_HANDLER upcall = eh->upcall;
-    _DkInternalUnlock(&eh->lock);
-
-    return upcall;
+    return __atomic_load_n(&handlers[event], __ATOMIC_ACQUIRE);
 }
 
 PAL_BOL
@@ -69,12 +33,7 @@ DkSetExceptionHandler(PAL_EVENT_HANDLER handler, PAL_NUM event) {
         LEAVE_PAL_CALL_RETURN(PAL_FALSE);
     }
 
-    struct pal_event_handler* eh = &handlers[event];
-
-    _DkInternalLock(&eh->lock);
-    eh->upcall = handler;
-    _DkInternalUnlock(&eh->lock);
-
+    __atomic_store_n(&handlers[event], handler, __ATOMIC_RELEASE);
     LEAVE_PAL_CALL_RETURN(PAL_TRUE);
 }
 

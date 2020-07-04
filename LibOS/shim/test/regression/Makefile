@@ -10,6 +10,7 @@ c_executables = \
 	epoll_wait_timeout \
 	eventfd \
 	exec \
+	exec_fork \
 	exec_invalid_args \
 	exec_same \
 	exec_victim \
@@ -53,7 +54,8 @@ c_executables = \
 	sigaltstack \
 	sighandler_reset \
 	sighandler_sigpipe \
-	sigprocmask \
+	signal_multithread \
+	sigprocmask_pending \
 	spinlock \
 	stat_invalid_args \
 	str_close_leak \
@@ -69,6 +71,7 @@ cxx_executables = bootstrap_c++
 
 manifests = \
 	manifest \
+	argv_from_file.manifest \
 	attestation.manifest \
 	echo.manifest \
 	eventfd.manifest \
@@ -94,6 +97,7 @@ manifests = \
 exec_target = \
 	$(c_executables) \
 	$(cxx_executables) \
+	argv_from_file.manifest \
 	echo.manifest \
 	file_check_policy_allow_all_but_log.manifest \
 	file_check_policy_strict.manifest \
@@ -116,6 +120,7 @@ include ../../../../Scripts/Makefile.Test
 
 CFLAGS-bootstrap_static = -static
 CFLAGS-bootstrap_pie = -fPIC -pie
+CFLAGS-exec_same = -pthread
 CFLAGS-shared_object = -fPIC -pie
 CFLAGS-syscall += -I$(PALDIR)/../include -I$(PALDIR)/host/$(PAL_HOST) -I$(PALDIR)/../include/arch/$(ARCH)/Linux
 CFLAGS-openmp = -fopenmp
@@ -129,7 +134,7 @@ CFLAGS-futex_wake_op = -pthread
 CFLAGS-proc_common = -pthread
 CFLAGS-spinlock += -I$(PALDIR)/../include/lib -I$(PALDIR)/../include/arch/$(ARCH) -pthread
 CFLAGS-sigaction_per_process += -pthread
-CFLAGS-sigprocmask += -pthread
+CFLAGS-signal_multithread += -pthread
 
 CFLAGS-attestation += -I$(PALDIR)/../lib/crypto/mbedtls/crypto/include \
                       -I$(PALDIR)/host/Linux-SGX \

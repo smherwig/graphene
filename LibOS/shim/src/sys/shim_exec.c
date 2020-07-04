@@ -1,18 +1,5 @@
-/* Copyright (C) 2014 Stony Brook University
-   This file is part of Graphene Library OS.
-
-   Graphene Library OS is free software: you can redistribute it and/or
-   modify it under the terms of the GNU Lesser General Public License
-   as published by the Free Software Foundation, either version 3 of the
-   License, or (at your option) any later version.
-
-   Graphene Library OS is distributed in the hope that it will be useful,
-   but WITHOUT ANY WARRANTY; without even the implied warranty of
-   MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-   GNU Lesser General Public License for more details.
-
-   You should have received a copy of the GNU Lesser General Public License
-   along with this program.  If not, see <http://www.gnu.org/licenses/>.  */
+/* SPDX-License-Identifier: LGPL-3.0-or-later */
+/* Copyright (C) 2014 Stony Brook University */
 
 /*
  * shim_exec.c
@@ -90,6 +77,8 @@ noreturn static void __shim_do_execve_rtld(struct execve_rtld_arg* __arg) {
     unsigned long fs_base = 0;
     update_fs_base(fs_base);
     debug("set fs_base to 0x%lx\n", fs_base);
+
+    thread_sigaction_reset_on_execve(cur_thread);
 
     remove_loaded_libraries();
     clean_link_map_list();
@@ -181,6 +170,7 @@ static BEGIN_MIGRATION_DEF(execve, struct shim_thread* thread, struct shim_proce
     DEFINE_MIGRATE(process, proc, sizeof(struct shim_process));
     DEFINE_MIGRATE(all_mounts, NULL, 0);
     DEFINE_MIGRATE(running_thread, thread, sizeof(struct shim_thread));
+    DEFINE_MIGRATE(pending_signals, NULL, 0);
     DEFINE_MIGRATE(handle_map, thread->handle_map, sizeof(struct shim_handle_map));
     DEFINE_MIGRATE(migratable, NULL, 0);
     DEFINE_MIGRATE(environ, envp, 0);
@@ -364,8 +354,20 @@ reopen:
         }
     }
 
-    bool use_same_process = check_last_thread(cur_thread) == 0;
-    if (use_same_process && !strcmp_static(PAL_CB(host_type), "Linux-SGX")) {
+    /* If `execve` is invoked concurrently by multiple threads, let only one succeed. */
+    static unsigned int first = 0;
+    if (__atomic_exchange_n(&first, 1, __ATOMIC_RELAXED) != 0) {
+        /* Just exit current thread. */
+        thread_exit(/*error_code=*/0, /*term_signal=*/0);
+    }
+    bool threads_killed = kill_other_threads();
+
+    /* All other threads are dead. Restoring initial value in case we stay inside same process
+     * instance and call execve again. */
+    __atomic_store_n(&first, 0, __ATOMIC_RELAXED);
+
+    bool use_same_process = true;
+    if (!strcmp_static(PAL_CB(host_type), "Linux-SGX")) {
         /* for SGX PALs, can use same process only if it is the same executable (because a different
          * executable has a different measurement and thus requires a new enclave); this special
          * case is to correctly handle e.g. Bash process replacing itself */
@@ -378,7 +380,13 @@ reopen:
 
     if (use_same_process) {
         debug("execve() in the same process\n");
-        return shim_do_execve_rtld(exec, argv, envp);
+        ret = shim_do_execve_rtld(exec, argv, envp);
+        if (threads_killed) {
+            /* We have killed some threads and execve failed internally. User app might now be in
+             * undefined state, we would better blow everything up. */
+            process_exit(ENOTRECOVERABLE, 0);
+        }
+        return ret;
     }
     debug("execve() in a new process\n");
 
@@ -418,7 +426,7 @@ reopen:
     cur_thread->in_vm     = false;
     unlock(&cur_thread->lock);
 
-    ret = do_migrate_process(&migrate_execve, exec, argv, cur_thread, envp);
+    ret = create_process_and_send_checkpoint(&migrate_execve, exec, argv, cur_thread, envp);
 
     lock(&cur_thread->lock);
     cur_thread->stack     = stack;
@@ -430,6 +438,11 @@ reopen:
         /* execve failed, so reanimate this thread as if nothing happened */
         cur_thread->in_vm = true;
         unlock(&cur_thread->lock);
+        if (threads_killed) {
+            /* We have killed some threads and execve failed internally. User app might now be in
+             * undefined state, we would better blow everything up. */
+            process_exit(ENOTRECOVERABLE, 0);
+        }
         return ret;
     }
 

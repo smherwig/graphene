@@ -1,25 +1,12 @@
-/* Copyright (C) 2019 Intel Corporation
-   This file is part of Graphene Library OS.
-
-   Graphene Library OS is free software: you can redistribute it and/or
-   modify it under the terms of the GNU Lesser General Public License
-   as published by the Free Software Foundation, either version 3 of the
-   License, or (at your option) any later version.
-
-   Graphene Library OS is distributed in the hope that it will be useful,
-   but WITHOUT ANY WARRANTY; without even the implied warranty of
-   MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-   GNU Lesser General Public License for more details.
-
-   You should have received a copy of the GNU Lesser General Public License
-   along with this program.  If not, see <http://www.gnu.org/licenses/>.  */
+/* SPDX-License-Identifier: LGPL-3.0-or-later */
+/* Copyright (C) 2019 Intel Corporation */
 
 /*
  * shim_eventfd.c
  *
  * Implementation of system calls "eventfd" and "eventfd2". Since eventfd emulation currently relies
  * on the host, these system calls are disallowed by default due to security concerns. To use them,
- * they must be explicitly allowed through the "sys.allow_insecure_eventfd" manifest key.
+ * they must be explicitly allowed through the "sys.insecure__allow_eventfd" manifest key.
  */
 
 #include <asm/fcntl.h>
@@ -41,7 +28,7 @@ static int create_eventfd(PAL_HANDLE* efd, unsigned count, int flags) {
 
     char eventfd_cfg[2];
     ssize_t len =
-        get_config(root_config, "sys.allow_insecure_eventfd", eventfd_cfg, sizeof(eventfd_cfg));
+        get_config(root_config, "sys.insecure__allow_eventfd", eventfd_cfg, sizeof(eventfd_cfg));
     if (len != 1 || eventfd_cfg[0] != '1') {
         /* eventfd is not explicitly allowed in manifest */
         return -ENOSYS;
@@ -58,7 +45,7 @@ static int create_eventfd(PAL_HANDLE* efd, unsigned count, int flags) {
      * argument. Using create arg as a work-around (note: initval is uint32 but create is int32). */
     if (!(hdl = DkStreamOpen(URI_PREFIX_EVENTFD, 0, 0, count, pal_flags))) {
         debug("eventfd open failure\n");
-        return -PAL_ERRNO;
+        return -PAL_ERRNO();
     }
 
     *efd = hdl;

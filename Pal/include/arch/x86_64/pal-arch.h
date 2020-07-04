@@ -1,18 +1,5 @@
-/* Copyright (C) 2014 Stony Brook University
-   This file is part of Graphene Library OS.
-
-   Graphene Library OS is free software: you can redistribute it and/or
-   modify it under the terms of the GNU Lesser General Public License
-   as published by the Free Software Foundation, either version 3 of the
-   License, or (at your option) any later version.
-
-   Graphene Library OS is distributed in the hope that it will be useful,
-   but WITHOUT ANY WARRANTY; without even the implied warranty of
-   MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-   GNU Lesser General Public License for more details.
-
-   You should have received a copy of the GNU Lesser General Public License
-   along with this program.  If not, see <http://www.gnu.org/licenses/>.  */
+/* SPDX-License-Identifier: LGPL-3.0-or-later */
+/* Copyright (C) 2014 Stony Brook University */
 
 /*!
  * \file pal-arch.h
@@ -24,6 +11,8 @@
 #define PAL_ARCH_H
 
 #include <stdint.h>
+
+#include "cpu.h"
 
 #define PAGE_SIZE       (1 << 12)
 #define PRESET_PAGESIZE PAGE_SIZE
@@ -187,8 +176,24 @@ static inline void pal_context_set_ip(PAL_CONTEXT* context, PAL_NUM insnptr) {
     context->rip = insnptr;
 }
 
-static inline PAL_NUM pal_context_get_ip(PAL_CONTEXT *context) {
+static inline PAL_NUM pal_context_get_ip(PAL_CONTEXT* context) {
     return context->rip;
 }
+
+static inline bool pal_context_has_user_pagefault(PAL_CONTEXT* context) {
+    return !!(context->err & 4);
+}
+
+/* PAL_CPU_INFO holds /proc/cpuinfo data */
+typedef struct PAL_CPU_INFO_ {
+    PAL_NUM cpu_num;
+    PAL_STR cpu_vendor;
+    PAL_STR cpu_brand;
+    PAL_NUM cpu_family;
+    PAL_NUM cpu_model;
+    PAL_NUM cpu_stepping;
+    double  cpu_bogomips;
+    PAL_STR cpu_flags;
+} PAL_CPU_INFO;
 
 #endif /* PAL_ARCH_H */

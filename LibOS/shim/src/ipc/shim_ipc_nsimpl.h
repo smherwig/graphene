@@ -1,18 +1,5 @@
-/* Copyright (C) 2014 Stony Brook University
-   This file is part of Graphene Library OS.
-
-   Graphene Library OS is free software: you can redistribute it and/or
-   modify it under the terms of the GNU Lesser General Public License
-   as published by the Free Software Foundation, either version 3 of the
-   License, or (at your option) any later version.
-
-   Graphene Library OS is distributed in the hope that it will be useful,
-   but WITHOUT ANY WARRANTY; without even the implied warranty of
-   MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-   GNU Lesser General Public License for more details.
-
-   You should have received a copy of the GNU Lesser General Public License
-   along with this program.  If not, see <http://www.gnu.org/licenses/>.  */
+/* SPDX-License-Identifier: LGPL-3.0-or-later */
+/* Copyright (C) 2014 Stony Brook University */
 
 /*
  * shim_ipc_nsimpl.h
@@ -578,7 +565,7 @@ failed:
     return ret;
 }
 
-int CONCAT3(renew, NS, range)(IDTYPE idx, LEASETYPE* lease) {
+static int CONCAT3(renew, NS, range)(IDTYPE idx, LEASETYPE* lease) {
     IDTYPE off = (idx - 1) / RANGE_SIZE;
 
     lock(&range_map_lock);
@@ -596,7 +583,7 @@ int CONCAT3(renew, NS, range)(IDTYPE idx, LEASETYPE* lease) {
     return 0;
 }
 
-int CONCAT3(renew, NS, subrange)(IDTYPE idx, LEASETYPE* lease) {
+static int CONCAT3(renew, NS, subrange)(IDTYPE idx, LEASETYPE* lease) {
     IDTYPE off  = (idx - 1) / RANGE_SIZE;
     IDTYPE base = off * RANGE_SIZE + 1;
 
@@ -844,7 +831,7 @@ static int connect_ns(IDTYPE* vmid, struct shim_ipc_port** portptr) {
 
         if (!pal_handle) {
             unlock(&cur_process.lock);
-            return -PAL_ERRNO;
+            return -PAL_ERRNO();
         }
 
         add_ipc_port_by_id(NS_LEADER->vmid, pal_handle, IPC_PORT_LDR | IPC_PORT_LISTEN,
@@ -920,7 +907,7 @@ static int connect_owner(IDTYPE idx, struct shim_ipc_port** portptr, IDTYPE* own
         PAL_HANDLE pal_handle = DkStreamOpen(qstrgetstr(&range.uri), 0, 0, 0, 0);
 
         if (!pal_handle) {
-            ret = -PAL_ERRNO ?: -EACCES;
+            ret = -PAL_ERRNO() ?: -EACCES;
             goto out;
         }
 
